@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Trophy } from "lucide-react";
 
 interface Standing {
-  id: number;
+  id: string;
   team: string;
   league_name: string;
   season: string;
@@ -24,24 +24,31 @@ interface Standing {
   goal_difference: number;
 }
 
+interface LeagueOption {
+  slug: string;
+  name: string;
+}
+
 export default function Standings() {
-  const [leagueName, setLeagueName] = useState<string>("all");
+  const [leagueSlug, setLeagueSlug] = useState<string>("all");
   const [season, setSeason] = useState<string>("");
   const [search, setSearch] = useState<string>("");
 
-  const { data: leagues } = useListAvailableLeagues();
-  const { data: standings, isLoading } = useListStandings(
-    leagueName === "all" && !season
+  const { data: leaguesRaw } = useListAvailableLeagues();
+  const leagues = leaguesRaw as LeagueOption[] | undefined;
+  const { data: standingsRaw, isLoading } = useListStandings(
+    leagueSlug === "all" && !season
       ? undefined
       : {
-          league_name: leagueName === "all" ? undefined : leagueName,
+          league_slug: leagueSlug === "all" ? undefined : leagueSlug,
           season: season || undefined,
         }
   );
+  const standings = standingsRaw as Standing[] | undefined;
 
-  const safeTeam = (s: Standing) => s.team || s.team_name || "Unknown";
+  const safeTeam = (s: Standing) => s.team || "Unknown";
 
-  const filtered = standings?.filter((s: Standing) =>
+  const filtered = standings?.filter((s) =>
     safeTeam(s).toLowerCase().includes(search.toLowerCase())
   );
 
@@ -59,14 +66,14 @@ export default function Standings() {
             onChange={(e) => setSearch(e.target.value)}
             className="w-full sm:w-48"
           />
-          <Select value={leagueName} onValueChange={setLeagueName}>
+          <Select value={leagueSlug} onValueChange={setLeagueSlug}>
             <SelectTrigger className="w-full sm:w-52">
               <SelectValue placeholder="All Leagues" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Leagues</SelectItem>
               {leagues?.map((l) => (
-                <SelectItem key={l.slug} value={l.name}>{l.name}</SelectItem>
+                <SelectItem key={l.slug} value={l.slug}>{l.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>

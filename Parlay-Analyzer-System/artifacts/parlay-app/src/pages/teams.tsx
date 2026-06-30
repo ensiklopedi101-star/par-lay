@@ -6,8 +6,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { TrendingUp, TrendingDown, Minus, Circle } from "lucide-react";
-
 /* 11 stat indicator keys as defined in backend */
 const STAT_KEYS = [
   { key: "stats_xg", label: "xG", desc: "Expected Goals" },
@@ -32,6 +30,19 @@ function StatIndicator({ value }: { value: unknown }) {
   );
 }
 
+interface TeamStat {
+  id: string;
+  team_name: string;
+  season: string;
+  league_slug: string;
+  [key: string]: unknown;
+}
+
+interface LeagueOption {
+  slug: string;
+  name: string;
+}
+
 function TeamStatBadges({ team }: { team: Record<string, unknown> }) {
   return (
     <div className="flex flex-wrap gap-1">
@@ -45,37 +56,14 @@ function TeamStatBadges({ team }: { team: Record<string, unknown> }) {
   );
 }
 
-function XgVsActualIndicator({ value }: { value: number | null | undefined }) {
-  if (value == null) return <span className="text-muted-foreground">—</span>;
-  if (value > 0.05) return (
-    <span className="flex items-center gap-1 text-emerald-400 font-mono tabular-nums">
-      <TrendingUp className="w-3 h-3" />+{value.toFixed(2)}
-    </span>
-  );
-  if (value < -0.05) return (
-    <span className="flex items-center gap-1 text-red-400 font-mono tabular-nums">
-      <TrendingDown className="w-3 h-3" />{value.toFixed(2)}
-    </span>
-  );
-  return (
-    <span className="flex items-center gap-1 text-muted-foreground font-mono tabular-nums">
-      <Minus className="w-3 h-3" />{value.toFixed(2)}
-    </span>
-  );
-}
-
-function fmt(v: number | null | undefined) {
-  if (v == null) return <span className="text-muted-foreground">—</span>;
-  return <span className="font-mono tabular-nums">{v.toFixed(2)}</span>;
-}
-
 export default function Teams() {
   const [leagueSlug, setLeagueSlug] = useState<string>("all");
   const [season, setSeason] = useState<string>("");
   const [search, setSearch] = useState<string>("");
 
-  const { data: leagues } = useListAvailableLeagues();
-  const { data: teams, isLoading } = useListTeamStats(
+  const { data: leaguesRaw } = useListAvailableLeagues();
+  const leagues = leaguesRaw as LeagueOption[] | undefined;
+  const { data: teamsRaw, isLoading } = useListTeamStats(
     leagueSlug === "all" && !season
       ? undefined
       : {
@@ -83,13 +71,14 @@ export default function Teams() {
           season: season || undefined,
         }
   );
+  const teams = teamsRaw as TeamStat[] | undefined;
 
   const filtered = teams?.filter((t) =>
     (t.team_name ?? "").toLowerCase().includes(search.toLowerCase())
   );
 
   /* Group by league */
-  const grouped = filtered?.reduce<Record<string, typeof filtered>>((acc, team) => {
+  const grouped = filtered?.reduce<Record<string, TeamStat[]>>((acc, team) => {
     const lg = (team.league_slug as string) ?? "Unknown";
     if (!acc[lg]) acc[lg] = [];
     acc[lg]!.push(team);
@@ -101,7 +90,7 @@ export default function Teams() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Team Stats</h1>
-          <p className="text-muted-foreground text-sm">xG / xGA data from FootyStats CSV uploads.</p>
+          <p className="text-muted-foreground text-sm">11 indicator coverage from FootyStats CSV uploads.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
           <Input
@@ -139,22 +128,15 @@ export default function Teams() {
           <Table>
             <TableHeader className="bg-secondary/50">
               <TableRow className="border-border">
-                <TableHead>Team</TableHead>
-                <TableHead>League</TableHead>
-                <TableHead>Season</TableHead>
-                <TableHead className="text-right">xG</TableHead>
-                <TableHead className="text-right">xGA</TableHead>
-                <TableHead className="text-right">xGD</TableHead>
-                <TableHead className="text-right">GF</TableHead>
-                <TableHead className="text-right">GA</TableHead>
-                <TableHead className="text-right">xG vs Actual</TableHead>
-                <TableHead>11 Stats</TableHead>
+                <TableHead className="w-40">Team</TableHead>
+                <TableHead className="w-24">Season</TableHead>
+                <TableHead>11 Indicators</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {Array.from({ length: 6 }).map((_, i) => (
                 <TableRow key={i} className="border-border">
-                  {Array.from({ length: 11 }).map((__, j) => (
+                  {Array.from({ length: 3 }).map((__, j) => (
                     <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                   ))}
                 </TableRow>
@@ -179,15 +161,9 @@ export default function Teams() {
                   <Table>
                     <TableHeader className="bg-secondary/50">
                       <TableRow className="border-border">
-                        <TableHead className="w-32">Team</TableHead>
-                        <TableHead className="text-xs">Season</TableHead>
-                        <TableHead className="text-right text-xs">xG</TableHead>
-                        <TableHead className="text-right text-xs">xGA</TableHead>
-                        <TableHead className="text-right text-xs">xGD</TableHead>
-                        <TableHead className="text-right text-xs">GF</TableHead>
-                        <TableHead className="text-right text-xs">GA</TableHead>
-                        <TableHead className="text-right text-xs">xG vs Act</TableHead>
-                        <TableHead className="w-72">11 Indicators</TableHead>
+                        <TableHead className="w-40">Team</TableHead>
+                        <TableHead className="w-24">Season</TableHead>
+                        <TableHead className="w-auto">11 Indicators</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -195,14 +171,6 @@ export default function Teams() {
                         <TableRow key={team.id} className="border-border hover:bg-secondary/20 transition-colors" data-testid={`row-team-${team.id}`}>
                           <TableCell className="font-semibold text-sm">{team.team_name}</TableCell>
                           <TableCell className="text-muted-foreground text-xs">{team.season}</TableCell>
-                          <TableCell className="text-right text-xs">{fmt(team.xg_per_match)}</TableCell>
-                          <TableCell className="text-right text-xs">{fmt(team.xga_per_match)}</TableCell>
-                          <TableCell className="text-right text-xs">{fmt(team.xgd_per_match)}</TableCell>
-                          <TableCell className="text-right text-xs">{fmt(team.gf_per_match)}</TableCell>
-                          <TableCell className="text-right text-xs">{fmt(team.ga_per_match)}</TableCell>
-                          <TableCell className="text-right">
-                            <XgVsActualIndicator value={team.xg_vs_actual} />
-                          </TableCell>
                           <TableCell>
                             <TeamStatBadges team={team as Record<string, unknown>} />
                           </TableCell>

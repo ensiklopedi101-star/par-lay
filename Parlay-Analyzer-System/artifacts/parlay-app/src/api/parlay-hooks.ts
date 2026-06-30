@@ -106,11 +106,11 @@ export function useListTeamStats(params?: { leagueSlug?: string; season?: string
 }
 
 /* ─── Standings ─── */
-export const getListStandingsQueryKey = (params?: { league_name?: string; season?: string }) => [
+export const getListStandingsQueryKey = (params?: { league_slug?: string; season?: string }) => [
   "supabase/standings",
   params,
 ];
-export function useListStandings(params?: { league_name?: string; season?: string }) {
+export function useListStandings(params?: { league_slug?: string; season?: string }) {
   return useQuery({
     queryKey: getListStandingsQueryKey(params),
     queryFn: () => {

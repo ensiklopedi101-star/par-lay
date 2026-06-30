@@ -51,16 +51,58 @@ router.get("/supabase/parlays", async (req, res) => {
   }
 });
 
-/* ─── Team Standings ─── */
+/* ─── Team Standings (derived from team_season_stats) ─── */
 router.get("/supabase/standings", async (req, res) => {
   try {
-    const { league_name, season, limit } = req.query;
-    let q = supabase.from("team_standings").select("*");
-    if (league_name) q = q.eq("league_name", league_name as string);
+    const { league_slug, season } = req.query;
+
+    let q = supabase
+      .from("team_season_stats")
+      .select("id, team_name, league_slug, season, stats_team_form");
+    if (league_slug) q = q.eq("league_slug", league_slug as string);
     if (season) q = q.eq("season", season as string);
-    const { data, error } = await q.order("position", { ascending: true }).limit(Number(limit ?? 50));
+
+    const { data, error } = await q.limit(500);
     if (error) { logger.error({ error }, "Supabase standings error"); res.status(500).json({ error: error.message }); return; }
-    res.json(data ?? []);
+
+    const rows = (data ?? []).map((row) => {
+      const form = (row.stats_team_form as Record<string, number | string>) ?? {};
+      const toNum = (v: unknown) => {
+        const n = typeof v === "string" ? Number(v) : Number(v ?? 0);
+        return Number.isFinite(n) ? n : 0;
+      };
+      const points = toNum(form.Pts);
+      const gd = toNum(form.GD);
+
+      return {
+        id: row.id,
+        team: row.team_name,
+        league_name: row.league_slug,
+        season: row.season,
+        position: 0,
+        points,
+        played: toNum(form.MP),
+        won: toNum(form.W),
+        drawn: toNum(form.D),
+        lost: toNum(form.L),
+        goals_for: toNum(form.GF),
+        goals_against: toNum(form.GA),
+        goal_difference: gd,
+        _sortKey: { points, gd },
+      };
+    });
+
+    rows.sort((a, b) => {
+      if (b._sortKey.points !== a._sortKey.points) return b._sortKey.points - a._sortKey.points;
+      return b._sortKey.gd - a._sortKey.gd;
+    });
+
+    rows.forEach((row, idx) => {
+      row.position = idx + 1;
+      delete (row as { _sortKey?: unknown })._sortKey;
+    });
+
+    res.json(rows);
   } catch (err) {
     logger.error({ err }, "Supabase standings exception");
     res.status(500).json({ error: "Internal error" });
