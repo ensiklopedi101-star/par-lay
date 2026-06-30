@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { useListStandings, useListAvailableLeagues } from "@/api/parlay-hooks";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useListStandings, useListAvailableLeagues, type Standing } from "@/api/parlay-hooks";
+import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Trophy } from "lucide-react";
+import { formatLeagueName } from "@/utils/format-league";
 
 function getUpcomingSeason(): string {
   const now = new Date();
@@ -21,25 +21,28 @@ function getUpcomingSeason(): string {
   return `${year - 1}-${String(year).slice(2)}`;
 }
 
-interface Standing {
-  id: string;
-  team: string;
-  league_name: string;
-  season: string;
-  position: number;
-  points: number;
-  played: number;
-  won: number;
-  drawn: number;
-  lost: number;
-  goals_for: number;
-  goals_against: number;
-  goal_difference: number;
-}
-
-interface LeagueOption {
-  slug: string;
-  name: string;
+function FormPills({ form }: { form: string }) {
+  if (!form) return <span className="text-xs text-muted-foreground">-</span>;
+  return (
+    <div className="flex items-center gap-0.5">
+      {form.slice(0, 6).split("").map((char, i) => {
+        const result = char.toUpperCase();
+        let color = "bg-slate-500/20 text-slate-400";
+        if (result === "W") color = "bg-emerald-500/20 text-emerald-400";
+        if (result === "D") color = "bg-amber-500/20 text-amber-400";
+        if (result === "L") color = "bg-red-500/20 text-red-400";
+        return (
+          <span
+            key={i}
+            className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold ${color}`}
+            title={result === "W" ? "Win" : result === "D" ? "Draw" : result === "L" ? "Loss" : result}
+          >
+            {result}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function Standings() {
@@ -47,9 +50,8 @@ export default function Standings() {
   const [season, setSeason] = useState<string>(getUpcomingSeason());
   const [search, setSearch] = useState<string>("");
 
-  const { data: leaguesRaw } = useListAvailableLeagues();
-  const leagues = leaguesRaw as LeagueOption[] | undefined;
-  const { data: standingsRaw, isLoading } = useListStandings(
+  const { data: leagues } = useListAvailableLeagues();
+  const { data: standings, isLoading } = useListStandings(
     leagueSlug === "all" && !season
       ? undefined
       : {
@@ -57,7 +59,6 @@ export default function Standings() {
           season: season || undefined,
         }
   );
-  const standings = standingsRaw as Standing[] | undefined;
 
   const safeTeam = (s: Standing) => s.team || "Unknown";
 
@@ -79,6 +80,7 @@ export default function Standings() {
         <TableRow className="border-border">
           <TableHead className="w-12 text-center">#</TableHead>
           <TableHead>Team</TableHead>
+          <TableHead className="text-center">Form</TableHead>
           <TableHead className="text-right">P</TableHead>
           <TableHead className="text-right">W</TableHead>
           <TableHead className="text-right">D</TableHead>
@@ -103,6 +105,9 @@ export default function Standings() {
               </span>
             </TableCell>
             <TableCell className="font-semibold">{safeTeam(s)}</TableCell>
+            <TableCell className="text-center">
+              <FormPills form={s.last_6} />
+            </TableCell>
             <TableCell className="text-right tabular-nums">{s.played}</TableCell>
             <TableCell className="text-right tabular-nums text-emerald-400">{s.won}</TableCell>
             <TableCell className="text-right tabular-nums text-amber-400">{s.drawn}</TableCell>
@@ -169,6 +174,7 @@ export default function Standings() {
             goals_for: 0,
             goals_against: 0,
             goal_difference: 0,
+            last_6: "",
           })))}
         </Card>
       ) : Object.keys(grouped).length === 0 ? (
@@ -181,7 +187,7 @@ export default function Standings() {
         Object.entries(grouped).map(([league, rows]) => (
           <div key={league} className="space-y-3">
             <div className="flex items-center gap-2">
-              <Badge variant="secondary" className="font-mono text-sm">{league}</Badge>
+              <Badge variant="secondary" className="text-sm">{formatLeagueName(league)}</Badge>
               <span className="text-xs text-muted-foreground">{rows.length} teams</span>
             </div>
             <Card className="bg-card border-border overflow-hidden">

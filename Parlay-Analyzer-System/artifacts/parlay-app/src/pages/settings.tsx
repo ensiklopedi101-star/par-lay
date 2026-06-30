@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { RefreshCw, Save, Plus, X, Bot, Gavel, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { formatLeagueName } from "@/utils/format-league";
 
 function TagList({
   label,
@@ -368,7 +369,7 @@ export default function SettingsPage() {
                     onToggle={toggleLeague}
                     getId={(l) => l.slug!}
                     getLabel={(l) => `${l.name} · ${l.country}`}
-                    getMeta={(l) => l.slug}
+                    getMeta={(l) => formatLeagueName(l.slug ?? "")}
                   />
 
                   <CheckboxGrid

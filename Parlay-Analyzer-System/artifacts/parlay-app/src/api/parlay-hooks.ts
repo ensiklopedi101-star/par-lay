@@ -8,6 +8,102 @@ async function apiGet<T>(url: string): Promise<T> {
   return res.json();
 }
 
+/* ─── Shared Types ─── */
+export interface SyncStatus {
+  isRunning: boolean;
+  totalEvents: number;
+  lastSyncAt?: string;
+  leagueBreakdown?: { leagueSlug: string; eventCount: number }[];
+}
+
+export interface Health {
+  supabase?: { status?: string; latencyMs?: number; [key: string]: unknown };
+  gemini?: { status?: string; model?: string; [key: string]: unknown };
+  aiPipeline?: { status?: string; [key: string]: unknown };
+  aiLearning?: { status?: string; hitRate?: number | null; [key: string]: unknown };
+  oddsApi?: { status?: string; [key: string]: unknown };
+  timestamp?: string;
+}
+
+export interface LeagueAvailable {
+  slug: string;
+  name: string;
+  country?: string;
+  eventsCount?: number;
+}
+
+export interface FixtureEvent {
+  id: number;
+  home: string;
+  away: string;
+  date: string;
+  leagueSlug?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+export interface EventDetail {
+  id: number;
+  bookmakers?: Record<string, Market[]>;
+  [key: string]: unknown;
+}
+
+export interface Market {
+  name: string;
+  odds: Record<string, unknown>[];
+}
+
+export interface Config {
+  leagues?: string[];
+  bookmakers?: string[];
+  markets?: string[];
+  cronExpression?: string;
+  aiPersona?: string | null;
+  agentInstructions?: string | null;
+  [key: string]: unknown;
+}
+
+export interface Standing {
+  id: string;
+  team: string;
+  league_name: string;
+  season: string;
+  position: number;
+  points: number;
+  played: number;
+  won: number;
+  drawn: number;
+  lost: number;
+  goals_for: number;
+  goals_against: number;
+  goal_difference: number;
+  last_6: string;
+}
+
+export interface ParlayLeg {
+  fixture_id: number;
+  home: string;
+  away: string;
+  league: string;
+  date: string;
+  market: string;
+  selection: string;
+  odds: number;
+  probability: number;
+}
+
+export interface Parlay {
+  parlay_id: string;
+  parlay_name: string;
+  legs_count: number;
+  combined_odds: number;
+  expected_value: number;
+  win_probability: number;
+  status: string;
+  created_at: string;
+  legs?: ParlayLeg[];
+}
+
 async function apiPost<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
@@ -21,18 +117,18 @@ async function apiPost<T>(url: string, body?: unknown): Promise<T> {
 /* ─── Sync Status ─── */
 export const getGetSyncStatusQueryKey = () => ["sync/status"];
 export function useGetSyncStatus() {
-  return useQuery({
+  return useQuery<SyncStatus>({
     queryKey: getGetSyncStatusQueryKey(),
-    queryFn: () => apiGet(`${API_BASE}/sync/status`),
+    queryFn: () => apiGet<SyncStatus>(`${API_BASE}/sync/status`),
   });
 }
 
 /* ─── Available Leagues ─── */
 export const getListAvailableLeaguesQueryKey = () => ["odds/available-leagues"];
 export function useListAvailableLeagues() {
-  return useQuery({
+  return useQuery<LeagueAvailable[]>({
     queryKey: getListAvailableLeaguesQueryKey(),
-    queryFn: () => apiGet(`${API_BASE}/odds/available-leagues`),
+    queryFn: () => apiGet<LeagueAvailable[]>(`${API_BASE}/odds/available-leagues`),
   });
 }
 
@@ -42,11 +138,11 @@ export const getListSupabaseParlaysQueryKey = (params?: { status?: string }) => 
   params,
 ];
 export function useListSupabaseParlays(params?: { status?: string }) {
-  return useQuery({
+  return useQuery<Parlay[]>({
     queryKey: getListSupabaseParlaysQueryKey(params),
     queryFn: () => {
       const qs = params?.status ? `?status=${encodeURIComponent(params.status)}` : "";
-      return apiGet(`${API_BASE}/supabase/parlays${qs}`);
+      return apiGet<Parlay[]>(`${API_BASE}/supabase/parlays${qs}`);
     },
   });
 }
@@ -57,11 +153,11 @@ export const getListSupabaseFixturesQueryKey = (params?: Record<string, string |
   params,
 ];
 export function useListSupabaseFixtures(params?: Record<string, string | number>) {
-  return useQuery({
+  return useQuery<FixtureEvent[]>({
     queryKey: getListSupabaseFixturesQueryKey(params),
     queryFn: () => {
       const qs = params ? new URLSearchParams(params as Record<string, string>).toString() : "";
-      return apiGet(`${API_BASE}/supabase/fixtures${qs ? "?" + qs : ""}`);
+      return apiGet<FixtureEvent[]>(`${API_BASE}/supabase/fixtures${qs ? "?" + qs : ""}`);
     },
   });
 }
@@ -72,20 +168,20 @@ export const getListEventsQueryKey = (params?: { league?: string; limit?: number
   params,
 ];
 export function useListEvents(params?: { league?: string; limit?: number }) {
-  return useQuery({
+  return useQuery<FixtureEvent[]>({
     queryKey: getListEventsQueryKey(params),
     queryFn: () => {
       const qs = params ? new URLSearchParams(params as Record<string, string>).toString() : "";
-      return apiGet(`${API_BASE}/odds/events${qs ? "?" + qs : ""}`);
+      return apiGet<FixtureEvent[]>(`${API_BASE}/odds/events${qs ? "?" + qs : ""}`);
     },
   });
 }
 
 export const getGetEventQueryKey = (eventId: number) => ["odds/events", eventId];
 export function useGetEvent(eventId: number) {
-  return useQuery({
+  return useQuery<EventDetail>({
     queryKey: getGetEventQueryKey(eventId),
-    queryFn: () => apiGet(`${API_BASE}/odds/events/${eventId}`),
+    queryFn: () => apiGet<EventDetail>(`${API_BASE}/odds/events/${eventId}`),
     enabled: !!eventId,
   });
 }
@@ -96,11 +192,11 @@ export const getListTeamStatsQueryKey = (params?: { leagueSlug?: string; season?
   params,
 ];
 export function useListTeamStats(params?: { leagueSlug?: string; season?: string }) {
-  return useQuery({
+  return useQuery<Record<string, unknown>[]>({
     queryKey: getListTeamStatsQueryKey(params),
     queryFn: () => {
       const qs = params ? new URLSearchParams(params as Record<string, string>).toString() : "";
-      return apiGet(`${API_BASE}/csv/teams${qs ? "?" + qs : ""}`);
+      return apiGet<Record<string, unknown>[]>(`${API_BASE}/csv/teams${qs ? "?" + qs : ""}`);
     },
   });
 }
@@ -111,11 +207,11 @@ export const getListStandingsQueryKey = (params?: { league_slug?: string; season
   params,
 ];
 export function useListStandings(params?: { league_slug?: string; season?: string }) {
-  return useQuery({
+  return useQuery<Standing[]>({
     queryKey: getListStandingsQueryKey(params),
     queryFn: () => {
       const qs = params ? new URLSearchParams(params as Record<string, string>).toString() : "";
-      return apiGet(`${API_BASE}/supabase/standings${qs ? "?" + qs : ""}`);
+      return apiGet<Standing[]>(`${API_BASE}/supabase/standings${qs ? "?" + qs : ""}`);
     },
   });
 }
@@ -147,9 +243,9 @@ export function useGetCatalog() {
 /* ─── Config ─── */
 export const getGetConfigQueryKey = () => ["config"];
 export function useGetConfig() {
-  return useQuery({
+  return useQuery<Config>({
     queryKey: getGetConfigQueryKey(),
-    queryFn: () => apiGet(`${API_BASE}/config`),
+    queryFn: () => apiGet<Config>(`${API_BASE}/config`),
   });
 }
 
@@ -219,9 +315,9 @@ export function useGetAIPrediction(fixtureId: string | number) {
 /* ─── Health ─── */
 export const getGetHealthQueryKey = () => ["health"];
 export function useGetHealth() {
-  return useQuery({
+  return useQuery<Health>({
     queryKey: getGetHealthQueryKey(),
-    queryFn: () => apiGet(`${API_BASE}/health`),
+    queryFn: () => apiGet<Health>(`${API_BASE}/health`),
   });
 }
 

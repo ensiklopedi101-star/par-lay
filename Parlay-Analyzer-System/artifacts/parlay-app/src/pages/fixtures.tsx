@@ -1,5 +1,5 @@
 import { useState, Fragment } from "react";
-import { useListEvents, useGetEvent, useListAvailableLeagues, useGetAIPrediction, useRunAIAnalysis, type AIAnalysisResult } from "@/api/parlay-hooks";
+import { useListEvents, useGetEvent, useListAvailableLeagues, useGetAIPrediction, useRunAIAnalysis, type AIAnalysisResult, type LeagueAvailable } from "@/api/parlay-hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AIAnalysisModal } from "@/components/AIAnalysisModal";
 import { format } from "date-fns";
 import { Brain, Loader2, Eye, AlertCircle } from "lucide-react";
+import { formatLeagueName } from "@/utils/format-league";
 
 interface OddsEntry {
   hdp?: number;
@@ -70,7 +71,7 @@ function EventExpandedRow({ eventId }: { eventId: number }) {
 
   if (!eventDetail || !eventDetail.bookmakers) return null;
 
-  const bookmakers = Object.entries(eventDetail.bookmakers) as [string, Market[]][];
+  const bookmakers = Object.entries(eventDetail.bookmakers as Record<string, Market[]>) as [string, Market[]][];
 
   return (
     <TableRow className="bg-secondary/20 hover:bg-secondary/20 border-b border-border">
@@ -209,8 +210,8 @@ export default function Fixtures() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Leagues</SelectItem>
-              {!isLeaguesLoading && leagues?.map((l) => (
-                <SelectItem key={l.slug} value={l.slug}>{l.name} ({l.eventsCount})</SelectItem>
+              {leagues?.map((l: LeagueAvailable) => (
+                <SelectItem key={l.slug} value={l.slug}>{formatLeagueName(l.name)} {l.eventsCount != null ? `(${l.eventsCount})` : ""}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -251,7 +252,7 @@ export default function Fixtures() {
                       {format(new Date(event.date), "MMM dd, HH:mm")}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline" className="font-mono text-xs">{event.leagueSlug}</Badge>
+                      <Badge variant="outline" className="text-xs">{formatLeagueName(event.leagueSlug ?? "")}</Badge>
                     </TableCell>
                     <TableCell className="font-bold">{event.home}</TableCell>
                     <TableCell className="font-bold">{event.away}</TableCell>

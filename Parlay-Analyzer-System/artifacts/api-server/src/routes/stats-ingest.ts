@@ -101,10 +101,13 @@ async function upsertTeamStat(
 
   if (existing) {
     // Update existing row (hanya kolom stat_type yang berubah)
+    // Match by the same natural key to avoid relying on id typing.
     const { error } = await supabase
       .from("team_season_stats")
       .update(payload)
-      .eq("id", existing.id);
+      .eq("league_slug", leagueSlug)
+      .eq("season", season)
+      .ilike("team_name", cleanTeam);
 
     if (error) {
       return { success: false, error: error.message };

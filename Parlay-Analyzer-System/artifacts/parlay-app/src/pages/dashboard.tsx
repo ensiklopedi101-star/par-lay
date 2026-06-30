@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useGetSyncStatus, useListAvailableLeagues, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth } from "@/api/parlay-hooks";
+import { useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth } from "@/api/parlay-hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Activity, Clock, Database, Server, BrainCircuit, CalendarDays, Zap, Shield, Wifi, AlertTriangle } from "lucide-react";
+import { Activity, Clock, Database, Server, BrainCircuit, CalendarDays, Zap, Shield } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { formatLeagueName } from "@/utils/format-league";
 
 function HealthDot({ status }: { status: string }) {
   const color = status === "active" ? "bg-emerald-500" : status === "idle" ? "bg-amber-500" : status === "error" || status === "missing_key" ? "bg-red-500" : "bg-slate-500";
@@ -27,7 +28,6 @@ function HealthBadge({ status }: { status: string }) {
 
 export default function Dashboard() {
   const { data: syncStatus, isLoading: isSyncLoading } = useGetSyncStatus();
-  const { data: leagues, isLoading: isLeaguesLoading } = useListAvailableLeagues();
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
   const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures({ status_short: "TIMED", limit: 500 });
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
@@ -224,7 +224,7 @@ export default function Dashboard() {
                 {syncStatus?.leagueBreakdown?.length ? (
                   syncStatus.leagueBreakdown.map((lb) => (
                     <div key={lb.leagueSlug} className="flex items-center justify-between border-b border-border/50 pb-2 last:border-0 last:pb-0">
-                      <span className="font-medium">{lb.leagueSlug}</span>
+                      <span className="font-medium">{formatLeagueName(lb.leagueSlug)}</span>
                       <span className="text-muted-foreground tabular-nums bg-secondary px-2 py-0.5 rounded text-xs">{lb.eventCount}</span>
                     </div>
                   ))

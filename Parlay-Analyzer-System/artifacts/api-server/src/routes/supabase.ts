@@ -65,8 +65,15 @@ router.get("/supabase/standings", async (req, res) => {
     const { data, error } = await q.limit(500);
     if (error) { logger.error({ error }, "Supabase standings error"); res.status(500).json({ error: error.message }); return; }
 
+    function extractLast6(form: Record<string, unknown>): string {
+      const v = form["Last 6"] ?? form["last_6"] ?? form["last6"] ?? form["Last_6"];
+      if (typeof v === "string") return v;
+      if (Array.isArray(v)) return v.join("");
+      return "";
+    }
+
     const rows = (data ?? []).map((row) => {
-      const form = (row.stats_team_form as Record<string, number | string>) ?? {};
+      const form = (row.stats_team_form as Record<string, unknown>) ?? {};
       const toNum = (v: unknown) => {
         const n = typeof v === "string" ? Number(v) : Number(v ?? 0);
         return Number.isFinite(n) ? n : 0;
@@ -88,6 +95,7 @@ router.get("/supabase/standings", async (req, res) => {
         goals_for: toNum(form.GF),
         goals_against: toNum(form.GA),
         goal_difference: gd,
+        last_6: extractLast6(form),
         _sortKey: { points, gd },
       };
     });

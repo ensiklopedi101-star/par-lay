@@ -3,3 +3,7 @@
 - [RAG Architecture](rag-architecture.md) — lessons_learned → diinject ke Gemini prompt sebelum analisis; odds_movement_history → trend data; settlement cron jam 06:00 harian
 - [Replit Import](replit-import.md) — Proyek sudah di-import ke Replit. Semua secrets (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, GEMINI_API_KEY, ODDS_API_KEY, SUPABASE_ACCESS_TOKEN, GITHUB_ACCESS_TOKEN, GITHUB_REPO_URL) tersedia di Replit Secrets. Workflow: `Start Backend` (8080), `Start application` (5000), `Project` (parallel). GitHub repo: `https://github.com/free2vps/par-lay`
 - [7-Module Quant System](quant-system.md) — M1-M7 sudah diimplementasi: Team Stats UI (11 indicators), Dashboard Health Monitor, Batch Scanner, Parlay Hub, Gemini v4 persona, AI Feedback Loop (performance_log), Backend Rules. Semua backend & frontend build berhasil.
+- [Frontend Hook Types](frontend-types.md) — Shared typed response interfaces di `src/api/parlay-hooks.ts`; semua `useQuery` pakai generic `<T>`; `formatLeagueName` di `src/utils/format-league.ts`.
+- [Standings Per-League & Default Season](standings-season-default.md) — Backend sort & position per liga; default season depan di UI; kolom Form (Last 6) sebagai pills W/D/L.
+- [Backend Framework Correction](express-not-fastify.md) — API server pakai Express, bukan Fastify.
+- [Gemini Persona DB-Driven](gemini-persona-db-driven.md) — Persona aktif di `scheduler_config.ai_persona`; seed script di `artifacts/api-server/scripts/seed-persona.mjs`.

@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { formatLeagueName } from "@/utils/format-league";
 /* 11 stat indicator keys as defined in backend */
 const STAT_KEYS = [
   { key: "stats_xg", label: "xG", desc: "Expected Goals" },
@@ -38,11 +39,6 @@ interface TeamStat {
   [key: string]: unknown;
 }
 
-interface LeagueOption {
-  slug: string;
-  name: string;
-}
-
 function TeamStatBadges({ team }: { team: Record<string, unknown> }) {
   return (
     <div className="flex flex-wrap gap-1">
@@ -61,8 +57,7 @@ export default function Teams() {
   const [season, setSeason] = useState<string>("");
   const [search, setSearch] = useState<string>("");
 
-  const { data: leaguesRaw } = useListAvailableLeagues();
-  const leagues = leaguesRaw as LeagueOption[] | undefined;
+  const { data: leagues } = useListAvailableLeagues();
   const { data: teamsRaw, isLoading } = useListTeamStats(
     leagueSlug === "all" && !season
       ? undefined
@@ -154,7 +149,7 @@ export default function Teams() {
             Object.entries(grouped).map(([league, leagueTeams]) => (
               <div key={league} className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary" className="font-mono text-sm">{league}</Badge>
+                  <Badge variant="secondary" className="text-sm">{formatLeagueName(league)}</Badge>
                   <span className="text-xs text-muted-foreground">{leagueTeams?.length} teams</span>
                 </div>
                 <Card className="bg-card border-border overflow-hidden">

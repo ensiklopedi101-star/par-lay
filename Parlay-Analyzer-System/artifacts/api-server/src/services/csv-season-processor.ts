@@ -373,12 +373,12 @@ export async function parseSeasonCsv(
 
     // Over / Under goals
     for (const [key, header] of Object.entries(overUnder)) {
-      (row as Record<string, number | null>)[key] = parsePercent(raw[header]);
+      (row as unknown as Record<string, number | null>)[key] = parsePercent(raw[header]);
     }
 
     // Shots
     for (const [key, header] of Object.entries(shots)) {
-      (row as Record<string, number | null>)[key] = parsePercent(raw[header]);
+      (row as unknown as Record<string, number | null>)[key] = parsePercent(raw[header]);
     }
 
     rows.push(row);
@@ -471,7 +471,7 @@ export async function upsertSeasonStats(
         "shots_over_135_pct", "shots_over_145_pct", "shots_over_155_pct",
       ];
       for (const col of newCols) {
-        const val = (row as Record<string, unknown>)[col];
+        const val = (row as unknown as Record<string, unknown>)[col];
         if (val !== null && val !== undefined) {
           dataToInsert[col] = val;
         }

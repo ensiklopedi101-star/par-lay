@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useListSupabaseParlays } from "@/api/parlay-hooks";
+import { useListSupabaseParlays, type Parlay, type ParlayLeg } from "@/api/parlay-hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,30 +13,6 @@ import {
 } from "@/components/ui/dialog";
 import { TrendingUp, TrendingDown, Minus, AlertCircle, CalendarDays, Target } from "lucide-react";
 import { format } from "date-fns";
-
-interface ParlayLeg {
-  fixture_id: number;
-  home: string;
-  away: string;
-  league: string;
-  date: string;
-  market: string;
-  selection: string;
-  odds: number;
-  probability: number;
-}
-
-interface Parlay {
-  parlay_id: string;
-  parlay_name: string;
-  legs_count: number;
-  combined_odds: number;
-  expected_value: number;
-  win_probability: number;
-  status: string;
-  created_at: string;
-  legs: ParlayLeg[];
-}
 
 function ParlayStatusBadge({ status }: { status: string }) {
   const statusStyles: Record<string, string> = {
