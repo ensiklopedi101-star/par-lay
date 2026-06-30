@@ -610,41 +610,35 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
   const prevSeason = String(new Date().getFullYear() - 1);
 
   const fetchStats = async (teamName: string): Promise<Record<string, unknown>> => {
-    // 1. Coba exact match musim berjalan
+    // 1. Strict canonical match: team_name + league_slug + musim berjalan.
+    //    Tidak menggunakan partial match karena nama tim sudah dijamin canonical
+    //    oleh Supabase Edge Function (FootyStats → fixtures sync).
     let { data: current } = await supabase
       .from("team_season_stats")
       .select(STAT_COLS)
       .ilike("team_name", teamName)
+      .ilike("league_slug", leagueSlug)
       .ilike("season", currentSeason)
       .limit(1)
       .maybeSingle();
 
-    // 2. Coba partial match musim berjalan
-    if (!current) {
-      const { data: partial } = await supabase
-        .from("team_season_stats")
-        .select(STAT_COLS)
-        .ilike("team_name", `%${teamName.split(" ")[0]}%`)
-        .ilike("season", currentSeason)
-        .limit(1)
-        .maybeSingle();
-      current = partial;
-    }
-
     const matchesPlayed = (current?.matches_played as number) ?? 0;
 
-    // 3. Jika musim berjalan < 5 match, ambil baseline 2025
-    if (matchesPlayed < 5) {
+    // 2. Fallback ke musim sebelumnya jika data tidak ditemukan atau
+    //    musim berjalan < 5 pertandingan (data terlalu sedikit untuk diandalkan).
+    //    Tetap menggunakan exact match pada team_name + league_slug — tanpa partial name.
+    if (!current || matchesPlayed < 5) {
       const { data: baseline } = await supabase
         .from("team_season_stats")
         .select(STAT_COLS)
         .ilike("team_name", teamName)
+        .ilike("league_slug", leagueSlug)
         .ilike("season", prevSeason)
         .limit(1)
         .maybeSingle();
 
       if (baseline && current) {
-        // Gabungkan: label current_season + baseline_reference
+        // Gabungkan: data musim berjalan + referensi musim lalu
         return {
           current_season: current,
           baseline_reference: baseline,
