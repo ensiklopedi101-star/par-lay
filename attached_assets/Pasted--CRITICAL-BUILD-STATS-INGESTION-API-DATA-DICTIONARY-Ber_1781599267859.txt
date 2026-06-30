@@ -1,0 +1,55 @@
+[CRITICAL BUILD: STATS INGESTION API & DATA DICTIONARY]
+Bertindaklah sebagai Senior Backend Engineer. Ekstensi Chrome kita sudah siap mengirimkan data statistik dalam bentuk JSON. Sekarang kita harus membangun endpoint penerima dan menanamkan "Kamus Konteks Statistik" agar AI (Gemini) nanti bisa memahami arti dari setiap laci JSONB di database kita.
+
+TUGAS 1: PERSIAPAN ENDPOINT & API KEY
+Buat sebuah route POST /api/stats/ingest.
+
+Wajibkan adanya header x-api-key.
+
+Bandingkan nilainya dengan environment variable process.env.EXTENSION_API_KEY.
+
+Jika tidak valid atau tidak ada, tolak dengan status 401 Unauthorized.
+
+Kembalikan URL endpoint lengkap dan instruksi pembuatan API Key di balasan Anda agar saya bisa memasukkannya ke ekstensi.
+
+TUGAS 2: STRUKTUR JSONB PAYLOAD YANG DIHARAPKAN
+Endpoint ini harus siap menerima JSON dengan struktur eksak seperti ini:
+
+JSON
+
+
+{
+  "raw_url_path": "england/premier-league",
+  "stat_type": "stats_xg",
+  "season": "2025-26",
+  "teams": [
+    {
+      "raw_team_name": "Manchester United",
+      "stat_data": { "MP": "38", "xG": "1.74", "xGA": "1.36", "xGD": "+0.38" }
+    }
+  ]
+}
+Normalisasikan raw_url_path menjadi format slug (misal: england-premier-league). Lalu lakukan UPSERT ke tabel team_season_stats di Supabase. INGAT: Hanya perbarui kolom yang sesuai dengan stat_type yang dikirim, jangan timpa kolom statistik lain dengan null.
+
+TUGAS 3 & 4: PEMBUATAN KAMUS STATISTIK (DATA DICTIONARY)
+Agar Gemini dan sistem backend memahami konteks data, buat sebuah file konfigurasi baru di utils/stats-dictionary.ts (atau .json). File ini WAJIB memuat pemetaan 11 statistik ini beserta isi metrik di dalamnya. Gunakan struktur ini:
+
+TypeScript
+
+
+export const STATS_DICTIONARY = {
+  "stats_xg": { name: "Expected Goals (xG)", metrics: ["xG", "xGA", "xGD", "GF", "GA", "xG vs Actual"] },
+  "stats_fts": { name: "Failed to Score", metrics: ["xFTS", "xFTS %", "Home %", "Away %"] },
+  "stats_btts": { name: "Both Teams to Score", metrics: ["BTTS", "BTTS %", "Home %", "Away %"] },
+  "stats_goals_conceded": { name: "Goals Conceded", metrics: ["Goals Conceded", "Per Match", "Home", "Away", "Home Advantage"] },
+  "stats_goals_scored": { name: "Goals Scored", metrics: ["Goals Scored", "Per Match", "Home", "Away", "Home Advantage"] },
+  "stats_shots": { name: "Match Shots", metrics: ["Over 10.5", "Over 11.5", "Over 12.5", "Over 13.5", "Over 14.5", "Over 15.5"] },
+  "stats_over_25": { name: "Over 2.5 Goals", metrics: ["Over 2.5", "%", "Home", "Away"] },
+  "stats_over_35": { name: "Over 3.5 Goals", metrics: ["Over 3.5", "%", "Home", "Away"] },
+  "stats_under": { name: "Under Goals", metrics: ["Under 2.5", "Under 0.5", "Under 1.5", "Under 3.5", "Under 4.5", "Under 5.5"] },
+  "stats_team_form": { name: "Team Form & General", metrics: ["MP", "W", "D", "L", "GF", "GA", "GD", "Pts", "Last 6", "PPG", "Clean sheet (CS)", "FTS", "BTTS", "Over 2.5", "Next Match"] },
+  "stats_ht": { name: "Half Time (HT) Stats", metrics: ["MP", "W - D - L (HT)", "win %", "Draw %", "Loss %"] }
+};
+Instruksi Tambahan: Ekspor kamus ini agar nantinya fungsi buildPrompt untuk Gemini dapat memanggilnya. Saat merangkai data untuk Gemini, gabungkan nama metrik dari kamus ini dengan value yang ada di database agar Gemini tahu persis bahwa angka "1.74" adalah "xG", bukan sekadar angka acak.
+
+Silakan tulis kode untuk Endpoint API dan Dictionary ini secara lengkap!

@@ -1,0 +1,241 @@
+import { useState } from "react";
+import { useGetSyncStatus, useListAvailableLeagues, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth } from "@/api/parlay-hooks";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Activity, Clock, Database, Server, BrainCircuit, CalendarDays, Zap, Shield, Wifi, AlertTriangle } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
+
+function HealthDot({ status }: { status: string }) {
+  const color = status === "active" ? "bg-emerald-500" : status === "idle" ? "bg-amber-500" : status === "error" || status === "missing_key" ? "bg-red-500" : "bg-slate-500";
+  return <div className={`w-2.5 h-2.5 rounded-full ${color} ${status === "calculating" ? "animate-pulse" : ""}`} />;
+}
+
+function HealthBadge({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    active: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+    idle: "bg-amber-500/10 text-amber-500 border-amber-500/20",
+    calculating: "bg-amber-500/10 text-amber-500 border-amber-500/20",
+    saving: "bg-blue-500/10 text-blue-500 border-blue-500/20",
+    error: "bg-red-500/10 text-red-500 border-red-500/20",
+    missing_key: "bg-red-500/10 text-red-500 border-red-500/20",
+    no_data: "bg-slate-500/10 text-slate-500 border-slate-500/20",
+    checking: "bg-slate-500/10 text-slate-500 border-slate-500/20",
+  };
+  return <Badge variant="outline" className={colors[status] || colors.checking}>{status}</Badge>;
+}
+
+export default function Dashboard() {
+  const { data: syncStatus, isLoading: isSyncLoading } = useGetSyncStatus();
+  const { data: leagues, isLoading: isLeaguesLoading } = useListAvailableLeagues();
+  const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
+  const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures({ status_short: "TIMED", limit: 500 });
+  const { data: health, isLoading: isHealthLoading } = useGetHealth();
+  const [scanState, setScanState] = useState<"idle" | "scanning">("idle");
+
+  const handleScan = async () => {
+    setScanState("scanning");
+    try {
+      const res = await fetch("/api/analyze/batch", { method: "POST" });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      // invalidate queries
+      window.location.reload();
+    } catch (err) {
+      console.error("Scan failed:", err);
+      setScanState("idle");
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard</h1>
+          <p className="text-muted-foreground">System overview and data synchronization status.</p>
+        </div>
+        <Button
+          size="lg"
+          onClick={handleScan}
+          disabled={scanState === "scanning"}
+          className="bg-primary hover:bg-primary/90 text-primary-foreground"
+        >
+          <Zap className="w-4 h-4 mr-2" />
+          {scanState === "scanning" ? "Scanning..." : "JALANKAN SCANNING GLOBAL & BUAT PARLAY"}
+        </Button>
+      </div>
+
+      {/* System Health Monitor — Modul 2 */}
+      <Card className="bg-card border-border">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg font-semibold flex items-center gap-2">
+            <Shield className="w-5 h-5 text-primary" />
+            Status Sistem
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isHealthLoading ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-16 w-full" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary/30">
+                <HealthDot status={health?.supabase?.status ?? "checking"} />
+                <div>
+                  <div className="text-sm font-medium">Supabase</div>
+                  <div className="text-xs text-muted-foreground">{health?.supabase?.latencyMs ? `${health.supabase.latencyMs}ms` : health?.supabase?.status}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary/30">
+                <HealthDot status={health?.gemini?.status ?? "checking"} />
+                <div>
+                  <div className="text-sm font-medium">Gemini API</div>
+                  <div className="text-xs text-muted-foreground">{health?.gemini?.model}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary/30">
+                <HealthDot status={health?.aiPipeline?.status ?? "idle"} />
+                <div>
+                  <div className="text-sm font-medium">AI Pipeline</div>
+                  <HealthBadge status={health?.aiPipeline?.status ?? "idle"} />
+                </div>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary/30">
+                <HealthDot status={health?.aiLearning?.status ?? "no_data"} />
+                <div>
+                  <div className="text-sm font-medium">AI Learning</div>
+                  <div className="text-xs text-muted-foreground">
+                    {health?.aiLearning?.hitRate != null ? `${(health.aiLearning.hitRate * 100).toFixed(1)}%` : "No data"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <Card className="bg-card border-border">
+          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total Events</CardTitle>
+            <Database className="w-4 h-4 text-primary" />
+          </CardHeader>
+          <CardContent>
+            {isSyncLoading ? (
+              <Skeleton className="h-8 w-20" />
+            ) : (
+              <div className="text-2xl font-bold">{syncStatus?.totalEvents || 0}</div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Active Leagues</CardTitle>
+            <Activity className="w-4 h-4 text-primary" />
+          </CardHeader>
+          <CardContent>
+            {isSyncLoading ? (
+              <Skeleton className="h-8 w-20" />
+            ) : (
+              <div className="text-2xl font-bold">{syncStatus?.leagueBreakdown?.length ?? 0}</div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Last Sync</CardTitle>
+            <Clock className="w-4 h-4 text-primary" />
+          </CardHeader>
+          <CardContent>
+            {isSyncLoading ? (
+              <Skeleton className="h-8 w-32" />
+            ) : (
+              <div className="text-sm font-medium mt-1">
+                {syncStatus?.lastSyncAt ? new Date(syncStatus.lastSyncAt).toLocaleString() : "Never"}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Sync Status</CardTitle>
+            <Server className="w-4 h-4 text-primary" />
+          </CardHeader>
+          <CardContent>
+            {isSyncLoading ? (
+              <Skeleton className="h-8 w-24" />
+            ) : (
+              <div className="flex items-center gap-2 mt-1">
+                <div className={`w-2.5 h-2.5 rounded-full ${syncStatus?.isRunning ? 'bg-amber-500 animate-pulse' : 'bg-primary'}`} />
+                <span className="text-sm font-medium">{syncStatus?.isRunning ? 'Syncing...' : 'Idle'}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+            <CardTitle className="text-sm font-medium text-muted-foreground">AI Parlays</CardTitle>
+            <BrainCircuit className="w-4 h-4 text-primary" />
+          </CardHeader>
+          <CardContent>
+            {isParlaysLoading ? (
+              <Skeleton className="h-8 w-20" />
+            ) : (
+              <div className="text-2xl font-bold">{parlays?.length || 0}</div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Upcoming Fixtures</CardTitle>
+            <CalendarDays className="w-4 h-4 text-primary" />
+          </CardHeader>
+          <CardContent>
+            {isFixturesLoading ? (
+              <Skeleton className="h-8 w-20" />
+            ) : (
+              <div className="text-2xl font-bold">{fixtures?.length || 0}</div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <Card className="col-span-1 bg-card border-border">
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold">League Breakdown</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {isSyncLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {syncStatus?.leagueBreakdown?.length ? (
+                  syncStatus.leagueBreakdown.map((lb) => (
+                    <div key={lb.leagueSlug} className="flex items-center justify-between border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                      <span className="font-medium">{lb.leagueSlug}</span>
+                      <span className="text-muted-foreground tabular-nums bg-secondary px-2 py-0.5 rounded text-xs">{lb.eventCount}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-muted-foreground text-center py-4">No events found.</div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

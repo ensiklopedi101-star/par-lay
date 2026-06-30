@@ -1,0 +1,56 @@
+[KONTEKS & PERAN]
+Bertindaklah sebagai Senior Full-Stack Engineer dan Arsitek Sistem Kuantitatif (Quant Betting). Saya baru saja mengunggah source code dari proyek "AI Parlay Agent" ke environment baru ini.
+
+[STATUS DATABASE SAAT INI]
+Sistem HANYA menggunakan Supabase PostgreSQL. Modul Upload CSV sudah selesai. Data tersimpan di tabel team_season_stats yang memiliki 11 kolom JSONB: stats_xg, stats_fts, stats_btts, stats_goals_conceded, stats_goals_scored, stats_shots, stats_over_25, stats_over_35, stats_under, stats_team_form, dan stats_ht.
+
+[TUGAS HARI INI: MODUL 3 - AI ANALYSIS ENGINE]
+Bangun layanan backend Node.js untuk menganalisis pertandingan menggunakan model Google Gemini 1.5 Pro.
+
+Langkah 1: Setup Google Generative AI
+
+Install package @google/generative-ai.
+
+Inisialisasi model gemini-1.5-pro menggunakan API Key dari environment variables GEMINI_API_KEY.
+
+Langkah 2: Ambil Data (Supabase Join)
+
+Buat endpoint POST /api/analyze/:fixtureId.
+
+Berdasarkan fixtureId, ambil data laga dan odds dari tabel fixtures/odds di Supabase untuk mendapat nama Tim Home dan Tim Away.
+
+Cari dan ambil SELURUH 11 kolom JSONB statistik Tim Home dan Tim Away dari tabel team_season_stats.
+
+Langkah 3: Pemetaan Data (Data Mapping) Berdasarkan Kategori
+Rangkai 11 data JSONB tersebut menjadi sebuah variabel teks (promptText) menggunakan JSON.stringify() agar AI mendapatkan konteks 100%. Susun format teksnya PERSIS seperti template di bawah ini:
+
+"Pertandingan: [Nama Tim Home] vs [Nama Tim Away].
+Data Odds Bandar: ${JSON.stringify(oddsData)}
+
+--- STATISTIK [Nama Tim Home] ---
+1. xG (xG, xGA, xGD, GF, GA): ${JSON.stringify(homeStats.stats_xg)}
+2. Failed to Score (xFTS, Home/Away %): ${JSON.stringify(homeStats.stats_fts)}
+3. BTTS (BTTS %, Home/Away %): ${JSON.stringify(homeStats.stats_btts)}
+4. Goal Conceded (Per Match, Home/Away): ${JSON.stringify(homeStats.stats_goals_conceded)}
+5. Goal Scored (Per Match, Home/Away): ${JSON.stringify(homeStats.stats_goals_scored)}
+6. Shots (Over 10.5 hingga 15.5): ${JSON.stringify(homeStats.stats_shots)}
+7. Over 2.5 (% Home/Away): ${JSON.stringify(homeStats.stats_over_25)}
+8. Over 3.5 (% Home/Away): ${JSON.stringify(homeStats.stats_over_35)}
+9. Under (0.5 hingga 5.5): ${JSON.stringify(homeStats.stats_under)}
+10. Team Form (MP, W, D, L, Last 6, PPG): ${JSON.stringify(homeStats.stats_team_form)}
+11. HT Win/Loss (Win/Draw/Loss %): ${JSON.stringify(homeStats.stats_ht)}
+
+--- STATISTIK [Nama Tim Away] ---
+(Gunakan struktur mapping 1-11 yang sama persis seperti Home untuk awayStats)"
+
+Langkah 4: Injeksi System Prompt & Call AI
+Gunakan parameter systemInstruction saat memanggil model.generateContent() dengan instruksi mutlak ini:
+"Anda adalah Quant Sniper, AI Analis Kuantitatif level elit. Tujuan Anda mencari profit melalui Value Betting. Bandingkan Probabilitas Asli (dari 11 data statistik di atas) melawan Probabilitas Bandar (Odds). Analisis secara mendalam pasaran yang paling menguntungkan (apakah 1X2, Over/Under, Shots, atau BTTS). Berikan rekomendasi akhir: AMBIL atau NO BET, beserta justifikasi matematis. Berikan skor keyakinan 1-10."
+
+Langkah 5: Simpan & Kembalikan Respons
+
+Simpan teks jawaban dari Gemini ke tabel Supabase ai_predictions (kolom: fixture_id, prediction_text, created_at).
+
+Kembalikan jawaban tersebut sebagai respons JSON ke frontend.
+
+Tolong berikan kode lengkap untuk controller/service AI ini!

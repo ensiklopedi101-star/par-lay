@@ -1,0 +1,77 @@
+import { Router, type IRouter } from "express";
+import { HealthCheckResponse } from "@workspace/api-zod";
+import { supabase } from "../lib/supabase-client";
+import { logger } from "../lib/logger";
+
+const router: IRouter = Router();
+
+router.get("/healthz", (_req, res) => {
+  const data = HealthCheckResponse.parse({ status: "ok" });
+  res.json(data);
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   SYSTEM HEALTH CHECK — Modul 2: Dashboard Bug Fix & Health Monitor
+   Returns real-time status of all critical services
+   ═══════════════════════════════════════════════════════════════ */
+router.get("/health", async (_req, res) => {
+  const health = {
+    supabase: { status: "checking", latencyMs: 0 },
+    gemini: { status: "checking", model: "gemini-2.0-flash" },
+    aiPipeline: { status: "idle" as "idle" | "calculating" | "saving" },
+    aiLearning: { status: "checking", hitRate: null as number | null },
+    oddsApi: { status: "checking", lastRateLimit: null as string | null },
+    timestamp: new Date().toISOString(),
+  };
+
+  /* 1. Supabase connection */
+  const t0 = Date.now();
+  try {
+    const { data, error } = await supabase
+      .from("fixtures")
+      .select("fixture_id", { count: "exact", head: true });
+    health.supabase.latencyMs = Date.now() - t0;
+    health.supabase.status = error ? "error" : "active";
+  } catch (err) {
+    health.supabase.status = "error";
+    health.supabase.latencyMs = Date.now() - t0;
+    logger.error({ err }, "Health check: Supabase failed");
+  }
+
+  /* 2. Gemini API */
+  const geminiKey = process.env["GEMINI_API_KEY"];
+  health.gemini.status = geminiKey ? "active" : "missing_key";
+
+  /* 3. AI Pipeline status — check if any recent predictions are pending */
+  try {
+    const { data: pending } = await supabase
+      .from("ai_predictions")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "active");
+    health.aiPipeline.status = (pending && pending.length > 0) ? "calculating" : "idle";
+  } catch {
+    health.aiPipeline.status = "idle";
+  }
+
+  /* 4. AI Learning — last performance log */
+  try {
+    const { data: perf } = await supabase
+      .from("performance_log")
+      .select("hit_rate, total_roi")
+      .order("date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    health.aiLearning.status = perf ? "active" : "no_data";
+    health.aiLearning.hitRate = perf?.hit_rate ?? null;
+  } catch {
+    health.aiLearning.status = "no_data";
+  }
+
+  /* 5. Odds API status */
+  const oddsKey = process.env["ODDS_API_KEY"];
+  health.oddsApi.status = oddsKey ? "active" : "missing_key";
+
+  res.json(health);
+});
+
+export default router;

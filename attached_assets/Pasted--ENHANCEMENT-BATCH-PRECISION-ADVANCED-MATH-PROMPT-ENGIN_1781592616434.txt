@@ -1,0 +1,55 @@
+[ENHANCEMENT BATCH: PRECISION, ADVANCED MATH, & PROMPT ENGINEERING]
+Berdasarkan evaluasi arsitektur kita saat ini, saya ingin melakukan penyempurnaan krusial pada tingkat akurasi matematis backend dan kedisiplinan output Gemini.
+
+PENTING: Tetap patuhi pedoman di AI_BACKEND_RULES.md (Off-loading math ke backend, Graceful Degradation, dll).
+
+Tolong implementasikan 2 Modul Penyempurnaan ini pada codebase kita:
+
+MODUL A: BACKEND LOGIC UPGRADES (TYPESCRIPT)
+
+Dynamic Confidence Threshold (Filtering): Di fungsi yang menyeleksi hasil prediksi untuk dimasukkan ke halaman AI Parlay Tickets, terapkan logika ini:
+
+Untuk taruhan Single Bet, izinkan masuk jika confidence >= 6.5.
+
+Untuk dirangkai menjadi Parlay, HANYA izinkan legs dengan confidence >= 8.0. Jangan masukkan laga dengan keyakinan rendah ke dalam tiket parlay.
+
+Kelly Criterion Calculator: Jangan biarkan LLM menebak stake. Buat fungsi kalkulator stake di backend menggunakan rumus Kelly Criterion: f = (bp - q) / b (di mana b adalah desimal odds dikurangi 1, p adalah probabilitas kemenangan dari LLM, dan q adalah probabilitas kekalahan 1 - p). Kirimkan hasil persentase stake ini ke UI.
+
+Asian Handicap Settlement: Perbarui fungsi settlement-engine. Tambahkan logika kondisional untuk menyelesaikan pasaran quarter lines (0.25 dan 0.75).
+
+Jika selisih menang setengah (Half Win): Hitung payout dengan membagi dua keuntungan bersih (((Odds - 1) / 2) + 1).
+
+Jika kalah setengah (Half Loss): Statuskan sebagai HALF_LOSS dan kembalikan setengah dari modal taruhan.
+
+RAG Context Filtering: Saat merangkai data untuk lessons_learned, modifikasi query Supabase agar memfilter berdasarkan league_id yang sama, BUKAN HANYA berdasarkan tim. Ini penting untuk mendapatkan konteks profil risiko liga tersebut.
+
+MODUL B: GEMINI PERSONA & PAYLOAD STRICTNESS
+Perbarui systemInstruction untuk Gemini (Quant Sniper v4) dengan menambahkan dua elemen ini:
+
+1. Tambahkan Aturan Hierarki Konflik (Conflict Resolution):
+"Jika terjadi konflik antara statistik historis (11 laci) dan pergerakan pasar kontemporer (Sharp Money), PRIORITASKAN efisiensi harga pasar terkini jika penurunan odds melebihi angka 0.10. Pergerakan drastis ini menandakan adanya variabel fundamental baru (cedera, rotasi) yang belum terekam oleh statistik."
+
+2. Tambahkan Few-Shot JSON Example di baris paling bawah instruksi:
+"OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
+
+JSON
+
+
+{
+  \"ticket_name\": \"The Weekend Eastern Banker\",
+  \"risk_level\": \"Medium\",
+  \"total_odds\": 4.15,
+  \"selections\": [
+    {
+      \"fixture_id\": \"10293\",
+      \"market\": \"Over 2.5\",
+      \"confidence\": 8.5,
+      \"odds\": 1.85,
+      \"ev_percent\": 8.2,
+      \"rationale\": \"Regresi 11 laci mengonfirmasi xG gabungan 3.12. Terjadi sharp money drop 0.12 pada Over, mengindikasikan arus dana besar terkonfirmasi.\"
+    }
+  ]
+}
+```*"
+
+Silakan mulai *refactor* file-file yang relevan (seperti `settlement-engine.ts`, fungsi *build prompt*, dan fungsi *parsing*). Beri tahu saya jika ada fungsi yang siap diuji!

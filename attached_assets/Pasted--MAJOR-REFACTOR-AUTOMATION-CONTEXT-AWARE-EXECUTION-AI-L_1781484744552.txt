@@ -1,0 +1,123 @@
+[MAJOR REFACTOR & AUTOMATION: CONTEXT-AWARE EXECUTION + AI LEARNING LOOP]
+Kita akan melakukan perombakan besar agar sistem menjadi mesin Auto-Trading Kuantitatif yang 100% otomatis, mandiri, dan BISA BELAJAR DARI KESALAHAN.
+
+PROTOKOL KEAMANAN KODE & DATABASE (WAJIB DIBACA SEBELUM MULAI):
+
+1. File Audit: Pindai folder/file eksisting. JANGAN membuat file baru jika fungsi serupa sudah ada (misal: settlement atau cron-job). Lakukan refactor.
+
+2. Aturan Insert vs Upsert: Untuk tabel state (fixtures, team_season_stats, league_standings), WAJIB gunakan ON CONFLICT DO UPDATE (UPSERT). Untuk tabel time-series (odds_movement_history, ai_predictions, performance_log), TETAP gunakan INSERT (Append).
+
+3. Audit Skema: JANGAN membuat tabel/kolom baru tanpa seizin saya. Jika butuh tabel baru, berikan script SQL-nya agar saya eksekusi manual untuk menghemat credit Anda.
+
+Terapkan 7 Modul Pembaruan berikut secara bertahap:
+
+MODUL 1: PERBAIKAN UI TEAM STATS (VISUALISASI DATA)
+
+Halaman Team Stats: Kelompokkan tim berdasarkan Nama Liga.
+
+Untuk setiap liga tampilkan deretan 11 indikator visual untuk 11 laci JSONB stats.
+
+Gunakan warna: 🟢 (Hijau) jika data stats terisi, 🔴 (Merah) jika null/kosong.
+
+MODUL 2: DASHBOARD BUG FIX & SYSTEM HEALTH MONITOR
+
+Perbaiki indikator "Active Leagues" di dashboard agar membaca dinamis dari database (tidak stuck di angka 10).
+
+System Health Widget: "Status Sistem" di dashboard atas dengan indikator real-time:
+
+🟢 Supabase Connection: Active
+
+🟢 Gemini API: Active (Model: 2.0 Flash)
+
+🟡 AI Pipeline Replit : [Idle / Calculating... / Saved to DB]
+
+🟢 AI Learning Module: Active (---- %)
+
+MODUL 3: AUTO-PARLAY BATCH SCANNER
+Hapus konsep klik analisis satu per satu per fixture.
+Buat tombol besar di Dashboard: "JALANKAN SCANNING GLOBAL & BUAT PARLAY".
+Saat ditekan, backend akan menarik SEMUA fixtures yang belum main dalam 48 jam ke depan, lengkap dengan pergerakan odds dan odds terbaru, dan mencocokkannya dengan 11 statistik tim.
+
+Backend merangkai semua data ini ke dalam SATU payload besar dan mengirimkannya ke Gemini.
+
+
+MODUL 4: PARLAY RECOMMENDATION HUB & AUTO-SETTLEMENT
+
+Sesuaikan menu "AI Parlay" untuk menampilkan hasil rekomendasi Modul 3.
+Di sini, tampilkan hasil output dari Modul 3. Tampilkan dalam bentuk kartu tiket Parlay yang elegan (misal: "Tiket A: 4 Tim - Safe EV", "Tiket B: 7 Tim - Aggressive""tiket C dan sebagainya).
+
+Auto-Settlement: Buat cron/worker yang mengambil skor akhir dari API. Hitung status tiket secara matematis (WIN, LOSS, HALF WIN, HALF LOSS, VOID/PUSH) dan update status tiket di UI.
+
+MODUL 5: STANDINGS API & MASTER PERSONA GEMINI
+
+Data Klasemen API: Jangan gunakan CSV. Tarik data klasemen (peringkat, poin, sisa laga) dari API (seperti football-data.org) dan lakukan UPSERT ke tabel league_standings.
+
+Update Persona Gemini (Quant Sniper v4):
+"IDENTITAS: Anda adalah 'Quant Sniper v4', AI Analis Kuantitatif & Sindikat Taruhan Profesional level elit. Anda sangat jeli, dingin, kreatif, dan selalu mengevaluasi kesalahan masa lalu (self-evaluating). 
+CARA BERPIKIR (THE EDGE):
+1. Anda bukan sekadar penghitung probabilitas statistik (11 JSONB). Anda membaca PSIKOLOGI dan MOTIVASI.
+2. Perhatikan 'Form' (Last 6 matches) dan posisi klasemen (jika data tersedia). 
+3. Selalu cari 'Sharp Money' dari pergerakan tren Odds.
+4. Anda mengevaluasi 11 metrik statistik, pergerakan tren Odds, PSIKOLOGI TIM (klasemen/desperation factor), dan CATATAN PERFORMA MASA LALU ANDA.
+TUGAS UTAMA: Saat menerima data batch (puluhan pertandingan lintas liga), tugas Anda adalah meracik TIKET PARLAY.
+Jangan batasi pada satu liga. Silang liga tidak masalah. > Berikan output dalam format JSON terstruktur yang berisi:
+- ticket_name (Misal: 'Utama (4-Legs)', 'Agresif (6 legs)', Cadangan (4 legs)', Jackpot (8 legs)')
+- risk_level (Low/Med/High)
+- total_odds
+- selections (Array berisi laga pilihan, market taruhan, dan alasan rasional, jeli dan mendalam yang menggabungkan statistik 11 laci + motif psikologis/klasemen/cedera pemain dan informasi terkait lainnya yang didalapatkan melalui pencarian internet).
+Cari value mutlak, abaikan tim yang tidak memiliki Expected Value (+EV)."
+
+
+MODUL 6: AI FEEDBACK LOOP (SELF-LEARNING)
+Tabel performance_log sudah tersedia di Supabase (kolom: date, total_parlays, wins, losses, hit_rate, total_roi, sharpe_ratio, calibration_err, notes).
+
+Perekaman: Setelah fungsi Auto-Settlement (Modul 4) menghitung hasil harian, backend harus melakukan agregasi performa hari itu (hitung win rate, ROI) dan melakukan INSERT ke tabel performance_log.
+
+Pembelajaran AI: Saat menjalankan Modul 3 (Batch Scanner), backend WAJIB menarik 5 data terakhir dari performance_log dan menyertakannya di bagian atas payload ke Gemini.
+
+Instruksi Evaluasi: Tambahkan di systemInstruction Gemini: "Sebelum meracik tiket baru, baca 'Catatan Performa AI' di payload. Jika ROI atau Hit Rate Anda sedang menurun (kalibrasi buruk), Anda WAJIB meningkatkan margin of safety dan hanya memilih laga dengan +EV tertinggi (Low Risk). Evaluasi kesalahan masa lalu dan adaptasi strategi Anda."
+
+MODUL 7 UNTUK PERSONA AI AGENT SISTEM/REPLIT
+Untuk proyek ini, posisikan diri Anda sebagai Senior Backend Quantitative Engineer. Tugas utama Anda di codebase ini adalah membangun "Data Aggregation Pipeline" yang efisien, kokoh, dan anti-gagal (fail-safe).
+
+Saat Anda menulis fungsi pencarian, penghimpunan, dan perhitungan data (terutama di odds-fetcher, settlement-engine, dan persiapan payload untuk AI), Anda WAJIB mematuhi protokol teknis berikut:
+
+1. PRINSIP OFF-LOADING (Jangan Bebani Gemini dengan Matematika Dasar):
+Gemini AI (LLM) buruk dalam kalkulasi desimal yang kompleks. JANGAN menyuruh Gemini menghitung nilai Expected Value (EV), perubahan selisih odds (Sharp Money), atau kalkulasi Win/Loss settlement.
+SEMUA perhitungan matematis harus dilakukan di Backend (TypeScript/Node.js).
+
+Hitung % tren penurunan odds (Misal: Odds turun 15% dari 2.10 ke 1.80).
+
+Hitung status Settlement (Asian Handicap 0.25, 0.75, dsb) murni menggunakan logika if/else di kode Anda.
+
+Kirimkan hasil perhitungan yang sudah matang (angka final) tersebut ke Gemini agar Gemini hanya fokus pada Reasoning (Analisis Logis).
+
+2. PENANGANAN DATA KOSONG (Graceful Degradation):
+Saat menggabungkan 11 laci statistik dari team_season_stats atau data league_standings, SANGAT MUNGKIN ada data yang null atau belum ter-update.
+
+JANGAN biarkan sistem crash atau melempar error 500 hanya karena 1 kolom statistik kosong.
+
+Gunakan Optional Chaining (?.) dan Nullish Coalescing (??).
+
+Berikan label eksplisit "DATA_UNAVAILABLE" pada payload yang dikirim ke Gemini agar LLM tahu bahwa ia harus menganalisis tanpa indikator tersebut, alih-alih berhalusinasi.
+
+3. MANAJEMEN RATE-LIMIT & OPTIMASI FETCHING:
+Provider data kita (Odds-API & API Klasemen) memiliki rate-limit (batas request).
+
+Saat melakukan agregasi data batch, hindari melakukan looping request API di dalam iterasi array (Promise.all secara membabi buta).
+
+Gunakan sistem Caching memori atau baca langsung dari Supabase untuk data yang tidak berubah setiap menit (seperti statistik mingguan dan klasemen). Hanya tembak API eksternal untuk Odds terkini dan Settlement hasil akhir.
+
+4. STRUKTUR PAYLOAD UNTUK LLM (Context Window Optimization):
+Saat Anda merangkai data untuk dikirim ke Gemini dalam POST /api/analyze/auto-parlay, format JSON harus sangat padat (minify) untuk menghemat token.
+Hapus kunci (keys) yang tidak relevan. Struktur payload harus berisi:
+
+ai_memory: (5 log performa terakhir dari performance_log).
+
+fixtures_data: Array berisi laga yang tersedia, lengkap dengan current_odds, sharp_money_trend (hasil kalkulasi backend dari odds_movement_history), home_team_stats (11 JSONB + standings), dan away_team_stats (11 JSONB + standings).
+
+Ingat: Anda adalah otak di balik layar yang menyiapkan bahan baku kualitas tinggi. Semakin rapi dan presisi kode fetching & calculating yang Anda buat, semakin tajam hasil prediksi Gemini. Terapkan standar ini di setiap baris kode yang Anda tulis!
+
+Instruksi Perilaku (Behavioral Prompt):
+Di baris paling atas file AI_BACKEND_RULES.md tersebut, tambahkan kalimat ini dengan huruf tebal:
+"PERHATIAN UNTUK AI ASSISTANT: Sebelum Anda menulis, memodifikasi, atau melakukan refactor pada fungsi backend, fetching data, atau routing di proyek ini, ANDA WAJIB MEMBACA DAN MEMATUHI ATURAN DI FILE INI."

@@ -1,0 +1,22 @@
+[KOREKSI MODEL, VERIFIKASI DATA & PEMBUATAN FRONTEND UI]
+Ya, silakan bangun Frontend UI untuk halaman AI Analysis. Tabel ai_predictions sudah saya buat di Supabase. Namun sebelum itu, terapkan tiga instruksi penting di bawah ini:
+
+1. PENTING: KOREKSI MODEL AI
+Di dalam file services/ai-analysis.ts (atau controller yang memanggil Gemini), segera ubah inisialisasi model dari gemini-1.5-pro menjadi gemini-3.5-flash. Ini mutlak karena keterbatasan kuota API.
+
+2. SISTEM VERIFIKASI DATA (Backend Pencegah Error)
+Saya ingin kepastian bahwa Replit benar-benar berhasil membaca data dari Supabase sebelum mengirimkannya ke Gemini. Terapkan logika ini di backend:
+
+Terminal Monitoring: Tambahkan console.log() yang mendetail tepat setelah proses fetch ke Supabase selesai. Cetak ke terminal: "Data ditarik untuk Home: [NamaTim], Away: [NamaTim]". Cetak juga status laci JSONB-nya, misal: "xG Home: Ada, FTS Away: Kosong/Null".
+
+Pencegah Blind-Call: Jika data statistik untuk kedua tim sama sekali kosong atau tidak ditemukan di tabel team_season_stats, batalkan pemanggilan ke Gemini API. Kembalikan response error 400 dengan pesan JSON: {"error": "Data statistik belum lengkap di Supabase. Silakan upload CSV terlebih dahulu."}
+
+3. INSTRUKSI FRONTEND UI (Tambahkan di komponen Fixtures):
+
+Logika Tombol: Cek dulu via GET /api/analyze/:fixtureId. Jika hasil prediksi sudah ada, tampilkan tombol "Lihat Hasil Analisis". Jika belum, tampilkan tombol "Analisis Sekarang (AI)".
+
+Status Loading & Verifikasi: Saat tombol diklik, ubah teks menjadi "Mengecek data & menganalisis..." (disable tombolnya). Jika backend mengembalikan error (karena data Supabase kosong), tangkap error tersebut dan tampilkan pesan Toast/Alert merah di UI: "Analisis ditolak: Data statistik belum lengkap."
+
+Rendering Hasil: Tampilkan output Gemini (prediction_text) di dalam Modal (Pop-up) atau Expandable Card. Pastikan frontend me-render teks Markdown dengan rapi (gunakan library seperti react-markdown). Berikan highlight visual (warna khusus/bold) jika di dalam teks terdapat rekomendasi "AMBIL" atau "NO BET".
+
+Silakan update file ai-analysis.ts dan berikan kode untuk UI frontend-nya secara bertahap agar tidak ada error!

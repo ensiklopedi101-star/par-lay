@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Parlay Analyzer"
+version = "1.0.0"
+id = "artifacts/parlay-app"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21275
+
+[services.development]
+run = "pnpm --filter @workspace/parlay-app run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/parlay-app", "run", "build" ]
+publicDir = "artifacts/parlay-app/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21275"
+BASE_PATH = "/"

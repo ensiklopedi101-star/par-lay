@@ -1,0 +1,465 @@
+import { logger } from "../lib/logger";
+import { supabase } from "../lib/supabase-client";
+
+const BASE_URL = "https://api.odds-api.io/v3";
+
+let syncRunning = false;
+export function isSyncRunning(): boolean { return syncRunning; }
+
+export interface LeagueConfig {
+  slug: string;
+  name: string;
+}
+
+export const DEFAULT_LEAGUES: LeagueConfig[] = [
+  { slug: "england-premier-league", name: "Premier League (EPL)" },
+  { slug: "england-championship", name: "Championship" },
+  { slug: "spain-laliga", name: "La Liga" },
+  { slug: "italy-serie-a", name: "Serie A" },
+  { slug: "france-ligue-1", name: "Ligue 1" },
+  { slug: "netherlands-eredivisie", name: "Eredivisie" },
+  { slug: "germany-bundesliga", name: "Bundesliga" },
+  { slug: "republic-of-korea-k-league-1", name: "K-League 1" },
+  { slug: "china-chinese-super-league", name: "Chinese Super League" },
+  { slug: "japan-j1-league", name: "J1 League (Japan)" },
+];
+
+export class RateLimitError extends Error {
+  constructor(public retryAfterSeconds: number) {
+    super(`Rate limited — retry in ${retryAfterSeconds}s`);
+  }
+}
+
+interface ApiLeague {
+  slug: string;
+  name: string;
+  eventsCount: number;
+}
+
+interface ApiOddsEntry {
+  hdp?: number;
+  over?: string;
+  under?: string;
+  home?: string;
+  draw?: string;
+  away?: string;
+  yes?: string;
+  no?: string;
+  [key: string]: unknown;
+}
+
+interface ApiMarket {
+  name: string;
+  odds: ApiOddsEntry[];
+}
+
+interface ApiEvent {
+  id: number;
+  home: string;
+  away: string;
+  date: string;
+  status: string;
+  /* Skor tersedia ketika status = "FT" / "AET" / "PEN" */
+  home_goals?: number | string | null;
+  away_goals?: number | string | null;
+  home_goals_ht?: number | string | null;
+  away_goals_ht?: number | string | null;
+  scores?: {
+    home?: number | string | null;
+    away?: number | string | null;
+    home_ht?: number | string | null;
+    away_ht?: number | string | null;
+  };
+  result?: {
+    home?: number | string | null;
+    away?: number | string | null;
+  };
+  bookmakers?: Record<string, ApiMarket[]>;
+}
+
+function parseRetryAfter(body: string): number {
+  const match = body.match(/resets in (\d+) minutes? and (\d+) seconds?/);
+  if (match) return parseInt(match[1]!) * 60 + parseInt(match[2]!);
+  return 3600;
+}
+
+async function apiGet<T>(url: string, label: string): Promise<T> {
+  logger.info({ url, label }, "RADAR: HTTP request to Odds-API");
+  const res = await fetch(url);
+  logger.info({ status: res.status, statusText: res.statusText, label, ok: res.ok }, "RADAR: HTTP response from Odds-API");
+  if (res.status === 429) {
+    const body = await res.text().catch(() => "");
+    logger.warn({ body, retryAfter: parseRetryAfter(body) }, "RADAR: Rate limited by Odds-API");
+    throw new RateLimitError(parseRetryAfter(body));
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    logger.error({ body, status: res.status, statusText: res.statusText, label }, "RADAR: Odds-API HTTP error");
+    throw new Error(`odds-api.io ${res.status} [${label}]: ${body}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export async function fetchActiveLeagueSlugs(apiKey: string): Promise<Set<string>> {
+  try {
+    const url = `${BASE_URL}/leagues?apiKey=${apiKey}&sport=football&all=true`;
+    logger.info({ url }, "RADAR: Fetching active leagues from Odds-API");
+    const data = await apiGet<ApiLeague[]>(url, "leagues");
+    logger.info({ rawData: data, dataLength: data?.length }, "RADAR: Response from Odds-API leagues");
+    const filtered = data.filter((l) => l.eventsCount > 0);
+    logger.info({ filteredCount: filtered.length, slugs: filtered.map((l) => l.slug) }, "RADAR: Active leagues after filtering");
+    return new Set(filtered.map((l) => l.slug));
+  } catch (err) {
+    if (err instanceof RateLimitError) throw err;
+    logger.error({ err }, "RADAR: Failed to fetch active leagues");
+    return new Set();
+  }
+}
+
+async function fetchLeagueEvents(leagueSlug: string, apiKey: string): Promise<ApiEvent[]> {
+  const params = new URLSearchParams({
+    apiKey,
+    sport: "football",
+    league: leagueSlug,
+    status: "pending",
+  });
+  const url = `${BASE_URL}/events?${params}`;
+  logger.info({ url, leagueSlug }, "RADAR: Fetching league events from Odds-API");
+  const data = await apiGet<ApiEvent | ApiEvent[]>(
+    url,
+    `events:${leagueSlug}`,
+  );
+  logger.info({ rawData: data, isArray: Array.isArray(data), dataLength: Array.isArray(data) ? data.length : 1 }, "RADAR: Response from Odds-API events");
+  return Array.isArray(data) ? data : [data];
+}
+
+async function fetchEventOdds(eventId: number, apiKey: string, bookmakers: string): Promise<ApiEvent> {
+  const params = new URLSearchParams({ apiKey, eventId: String(eventId), bookmakers });
+  const url = `${BASE_URL}/odds?${params}`;
+  logger.info({ url, eventId, bookmakers }, "RADAR: Fetching event odds from Odds-API");
+  const result = await apiGet<ApiEvent>(url, `odds:${eventId}`);
+  logger.info({ eventId, hasBookmakers: !!result.bookmakers, bookmakerCount: result.bookmakers ? Object.keys(result.bookmakers).length : 0 }, "RADAR: Response from Odds-API odds");
+  return result;
+}
+
+async function insertOddsMovementSnapshot(
+  fixtureId: number,
+  bookmaker: string,
+  market: ApiMarket,
+): Promise<void> {
+  const name = (market.name ?? "").toLowerCase();
+  const o = market.odds[0] ?? {};
+
+  let newOdds: Record<string, number | null> = {};
+
+  if (name === "ml" || name === "1x2" || name === "match_winner" || name === "h2h") {
+    newOdds = {
+      home_odds: o.home  ? parseFloat(o.home as string)  : null,
+      away_odds: o.away  ? parseFloat(o.away as string)  : null,
+      draw_odds: o.draw  ? parseFloat(o.draw as string)  : null,
+    };
+  } else if (name.includes("ou") || name.includes("total") || name.includes("over")) {
+    newOdds = {
+      over_odds:  o.over  ? parseFloat(o.over  as string) : null,
+      under_odds: o.under ? parseFloat(o.under as string) : null,
+    };
+  } else if (name === "btts" || name.includes("both_teams") || name.includes("both teams")) {
+    newOdds = {
+      btts_yes: o.yes ? parseFloat(o.yes as string) : null,
+      btts_no:  o.no  ? parseFloat(o.no  as string) : null,
+    };
+  } else if (name === "ah" || name.includes("handicap") || name.includes("spread")) {
+    newOdds = {
+      home_odds: o.home  ? parseFloat(o.home  as string) : null,
+      away_odds: o.away  ? parseFloat(o.away  as string) : null,
+    };
+  } else {
+    return; /* market tidak dikenal — skip */
+  }
+
+  /* Deduplication: cek snapshot terakhir untuk fixture+bookmaker+market ini.
+     Jika odds identik → tidak ada perubahan → skip insert untuk hemat storage. */
+  try {
+    const { data: latest } = await supabase
+      .from("odds_movement_history")
+      .select("home_odds, away_odds, draw_odds, over_odds, under_odds, btts_yes, btts_no")
+      .eq("fixture_id", String(fixtureId))
+      .eq("bookmaker", bookmaker)
+      .eq("market_type", market.name)
+      .order("captured_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latest) {
+      const isDuplicate = Object.entries(newOdds).every(([key, val]) => {
+        const prev = latest[key as keyof typeof latest] as number | null;
+        if (val === null && prev === null) return true;
+        if (val === null || prev === null) return false;
+        return Math.abs(val - prev) < 0.005; /* toleransi floating point */
+      });
+      if (isDuplicate) return; /* odds tidak berubah — skip */
+    }
+  } catch {
+    /* Jika cek gagal, tetap insert untuk keamanan */
+  }
+
+  const row: Record<string, unknown> = {
+    fixture_id: String(fixtureId),
+    bookmaker,
+    market_type: market.name,
+    captured_at: new Date().toISOString(),
+    ...newOdds,
+  };
+
+  const { error } = await supabase.from("odds_movement_history").insert(row);
+  if (error) {
+    logger.debug({ error, fixtureId, bookmaker, market: market.name }, "odds_movement_history insert skipped");
+  }
+}
+
+async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap: Map<string, number>) {
+  logger.info({ eventId: event.id, home: event.home, away: event.away, leagueSlug, leagueIdMapKeys: Array.from(leagueIdMap.keys()) }, "RADAR: saveEventAndOdds called");
+  const leagueId = leagueIdMap.get(leagueSlug);
+  logger.info({ leagueSlug, leagueIdFound: leagueId }, "RADAR: leagueId lookup result");
+  if (!leagueId) {
+    logger.warn({ leagueSlug }, "RADAR: No league_id found for league — skipping fixture upsert");
+  } else {
+    // 1. Upsert fixture to Supabase — termasuk skor bila event sudah selesai
+    const resolvedHomeGoals =
+      event.home_goals != null ? Number(event.home_goals) :
+      event.scores?.home != null ? Number(event.scores.home) :
+      event.result?.home != null ? Number(event.result.home) : null;
+
+    const resolvedAwayGoals =
+      event.away_goals != null ? Number(event.away_goals) :
+      event.scores?.away != null ? Number(event.scores.away) :
+      event.result?.away != null ? Number(event.result.away) : null;
+
+    const resolvedHomeHT =
+      event.home_goals_ht != null ? Number(event.home_goals_ht) :
+      event.scores?.home_ht != null ? Number(event.scores.home_ht) : null;
+
+    const resolvedAwayHT =
+      event.away_goals_ht != null ? Number(event.away_goals_ht) :
+      event.scores?.away_ht != null ? Number(event.scores.away_ht) : null;
+
+    const seasonYear = event.date ? new Date(event.date).getFullYear() : new Date().getFullYear();
+    logger.info({ seasonYear, eventDate: event.date }, "RADAR: Derived season year from fixture date");
+
+    const fixturePayload = {
+      fixture_id: event.id,
+      league_id: leagueId,
+      league_name: leagueSlug,
+      home_team_name: event.home,
+      away_team_name: event.away,
+      fixture_date: event.date,
+      status_short: event.status,
+      status_long: event.status,
+      season: seasonYear,
+      /* Skor disimpan ketika tersedia dari API */
+      ...(resolvedHomeGoals !== null && { home_goals: resolvedHomeGoals }),
+      ...(resolvedAwayGoals !== null && { away_goals: resolvedAwayGoals }),
+      ...(resolvedHomeHT !== null && { home_goals_ht: resolvedHomeHT }),
+      ...(resolvedAwayHT !== null && { away_goals_ht: resolvedAwayHT }),
+      last_updated: new Date().toISOString(),
+    };
+    logger.info({ fixturePayload }, "RADAR: Attempting fixture upsert");
+    const { error: fixtureErr } = await supabase
+      .from("fixtures")
+      .upsert(fixturePayload, { onConflict: "fixture_id" });
+    if (fixtureErr) {
+      logger.error({ error: fixtureErr, errorMessage: fixtureErr.message, errorDetails: fixtureErr.details, eventId: event.id }, "RADAR: Supabase fixture upsert ERROR");
+    } else {
+      logger.info({ eventId: event.id }, "RADAR: Fixture upsert SUCCESS");
+    }
+  }
+
+  if (!event.bookmakers) return;
+
+  // 2. Upsert odds to Supabase + 3. Insert odds movement snapshot
+  for (const [bookmaker, markets] of Object.entries(event.bookmakers)) {
+    const firstMarket = markets[0];
+    if (firstMarket && firstMarket.odds.length >= 2) {
+      const odds = firstMarket.odds[0];
+      const oddsPayload = {
+        match_id: String(event.id),
+        home_team: event.home,
+        away_team: event.away,
+        commence_time: event.date,
+        bookmaker,
+        market_type: firstMarket.name,
+        odds_1: odds.home ? parseFloat(odds.home) : null,
+        odds_2: odds.away ? parseFloat(odds.away) : null,
+        odds_draw: odds.draw ? parseFloat(odds.draw) : null,
+        captured_at: new Date().toISOString(),
+      };
+      logger.info({ oddsPayload }, "RADAR: Attempting odds upsert");
+      const { error: oddsErr } = await supabase
+        .from("odds_history")
+        .upsert(oddsPayload, { onConflict: "match_id, bookmaker" });
+      if (oddsErr) {
+        logger.error({ error: oddsErr, errorMessage: oddsErr.message, errorDetails: oddsErr.details, eventId: event.id, bookmaker }, "RADAR: Supabase odds upsert ERROR");
+      } else {
+        logger.info({ eventId: event.id, bookmaker }, "RADAR: Odds upsert SUCCESS");
+      }
+
+      // 3. Record snapshot to odds_movement_history
+      await insertOddsMovementSnapshot(event.id, bookmaker, firstMarket);
+
+      // Also snapshot additional markets (OU, BTTS) if available
+      for (const mkt of markets.slice(1)) {
+        await insertOddsMovementSnapshot(event.id, bookmaker, mkt);
+      }
+    }
+  }
+}
+
+async function getAlreadySyncedEventIds(eventIds: number[]): Promise<Set<number>> {
+  if (eventIds.length === 0) return new Set();
+  const { data, error } = await supabase
+    .from("fixtures")
+    .select("fixture_id")
+    .in("fixture_id", eventIds);
+  if (error) {
+    logger.error({ error }, "Failed to fetch already synced fixtures");
+    return new Set();
+  }
+  return new Set((data ?? []).map((r) => r.fixture_id));
+}
+
+export async function fetchAndSaveLeagueOdds(
+  league: LeagueConfig,
+  apiKey: string,
+  bookmakers: string,
+  leagueIdMap: Map<string, number>,
+): Promise<{ league: string; saved: number; skipped: boolean; errors: number }> {
+  let saved = 0;
+  let errors = 0;
+
+  try {
+    logger.info({ league: league.slug, apiKeyPrefix: apiKey?.slice(0, 8), bookmakers }, "RADAR: Fetching events for league");
+    const events = await fetchLeagueEvents(league.slug, apiKey);
+
+    if (events.length === 0) {
+      logger.info({ league: league.slug }, "No pending events — skipping");
+      return { league: league.slug, saved: 0, skipped: true, errors: 0 };
+    }
+
+    const allIds = events.map((e) => e.id);
+    const alreadySynced = await getAlreadySyncedEventIds(allIds);
+    const toFetch = events.filter((e) => !alreadySynced.has(e.id));
+
+    logger.info(
+      { league: league.slug, total: events.length, alreadySynced: alreadySynced.size, toFetch: toFetch.length },
+      "Events found",
+    );
+
+    for (const event of toFetch) {
+      try {
+        await new Promise((r) => setTimeout(r, 300));
+        const withOdds = await fetchEventOdds(event.id, apiKey, bookmakers);
+        await saveEventAndOdds(withOdds, league.slug, leagueIdMap);
+        saved++;
+      } catch (err) {
+        if (err instanceof RateLimitError) {
+          logger.warn({ retryAfter: err.retryAfterSeconds, saved }, "Rate limited — stopping sync early");
+          return { league: league.slug, saved, skipped: false, errors };
+        }
+        errors++;
+        logger.error({ err, eventId: event.id }, "Failed to fetch/save odds for event");
+      }
+    }
+  } catch (err) {
+    if (err instanceof RateLimitError) {
+      logger.warn({ retryAfter: err.retryAfterSeconds }, "Rate limited on league events fetch");
+      throw err;
+    }
+    logger.error({ err, league: league.slug }, "Failed to process league");
+    errors++;
+  }
+
+  logger.info({ league: league.slug, saved, errors }, "League sync done");
+  return { league: league.slug, saved, skipped: false, errors };
+}
+
+export async function fetchAndSaveAllLeagues(
+  leagues: LeagueConfig[] = DEFAULT_LEAGUES,
+  bookmakers = "Bet365,Sbobet",
+): Promise<void> {
+  if (syncRunning) {
+    logger.warn("Sync already running — skipping");
+    return;
+  }
+  const apiKey = process.env["ODDS_API_KEY"];
+  logger.info({ apiKeyPresent: !!apiKey, apiKeyPrefix: apiKey?.slice(0, 8) }, "RADAR: ODDS_API_KEY check");
+  if (!apiKey) {
+    logger.error("ODDS_API_KEY is not set — skipping odds fetch");
+    return;
+  }
+
+  syncRunning = true;
+  logger.info({ leagueCount: leagues.length }, "RADAR: Starting odds sync — checking active leagues");
+
+  let activeSlugs: Set<string>;
+  try {
+    activeSlugs = await fetchActiveLeagueSlugs(apiKey);
+  } catch (err) {
+    syncRunning = false;
+    if (err instanceof RateLimitError) {
+      logger.warn({ retryAfter: err.retryAfterSeconds }, "Rate limited fetching leagues — will retry next cycle");
+      return;
+    }
+    throw err;
+  }
+
+  logger.info({ activeCount: activeSlugs.size, activeSlugs: Array.from(activeSlugs) }, "RADAR: Active leagues fetched from API");
+
+  const leaguesToSync = leagues.filter((l) => activeSlugs.has(l.slug));
+  const offSeason = leagues.filter((l) => !activeSlugs.has(l.slug)).map((l) => l.name);
+
+  if (offSeason.length > 0) {
+    logger.info({ offSeason }, "Leagues off-season — skipping");
+  }
+
+  if (leaguesToSync.length === 0) {
+    syncRunning = false;
+    logger.info("RADAR: No active leagues to sync right now — will retry next cycle");
+    return;
+  }
+
+  // Build league_id map from Supabase
+  let leagueIdMap: Map<string, number>;
+  try {
+    const { data: leaguesData, error: leaguesErr } = await supabase
+      .from("leagues")
+      .select("id, name, slug")
+      .eq("is_active", true);
+    if (leaguesErr) {
+      logger.error({ error: leaguesErr }, "RADAR: ERROR loading leagues from Supabase");
+    }
+    logger.info({ leaguesDataCount: leaguesData?.length ?? 0, leaguesData: leaguesData ?? [] }, "RADAR: leagues table query result");
+    leagueIdMap = new Map((leaguesData ?? []).map((l) => [l.slug ?? l.name, l.id]));
+    logger.info({ leagueIdMapSize: leagueIdMap.size, leagueIdMapEntries: Array.from(leagueIdMap.entries()) }, "RADAR: League ID map loaded");
+  } catch (err) {
+    logger.warn({ err }, "RADAR: Failed to load league ID map — using empty map");
+    leagueIdMap = new Map();
+  }
+
+  try {
+    for (const league of leaguesToSync) {
+      logger.info({ league: league.slug }, "RADAR: Processing league");
+      await fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } catch (err) {
+    if (err instanceof RateLimitError) {
+      logger.warn("Rate limited mid-sync — stopping. Next cycle will continue from unsynced events.");
+      syncRunning = false;
+      return;
+    }
+    throw err;
+  }
+
+  syncRunning = false;
+  logger.info("RADAR: All leagues odds sync complete");
+}
