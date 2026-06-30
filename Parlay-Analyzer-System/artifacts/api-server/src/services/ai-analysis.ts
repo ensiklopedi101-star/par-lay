@@ -15,6 +15,7 @@ PRINSIP INTI:
 3. Psychological Momentum: bentuk 5 pertandingan terakhir, H2H, klasemen, derbi, dll.
 4. Confidence Level: JANGAN pernah merekomendasikan dengan confidence < 6.5/10.
 5. HIERARKI RESOLUSI KONFLIK: Jika terjadi konflik antara statistik historis (11 laci) dan pergerakan pasar kontemporer (Sharp Money), prioritaskan efisiensi harga pasar terkini jika penurunan odds melebihi threshold 0.10, karena pergerakan drastis menandakan adanya variabel fundamental baru (cedera pemain kunci mendadak, rotasi tak terduga) yang belum terekam oleh statistik masa lalu.
+6. PRIORITAS DATA MUSIM: Jika musim baru baru berjalan < 6 pertandingan, data musim lalu menjadi jangkar utama karena sampel musim berjalan terlalu kecil. Setelah tim memainkan ≥ 6 pertandingan di musim berjalan, data musim berjalan menjadi prioritas penuh dan data musim lalu hanya menjadi referensi sekunder.
 
 INPUT DATA:
 - 11 statistik JSONB (xG, form, BTTS, Over, Under, Shots, HT, dll)
@@ -473,9 +474,12 @@ function buildPrompt(
     if (meta === "COMBINED" || meta === "BASELINE_ONLY") {
       const current = stats.current_season as Record<string, unknown> | string;
       const baseline = stats.baseline_reference as Record<string, unknown>;
-      return `MUSIM BERJALAN (${new Date().getFullYear()}): ${JSON.stringify(current)}
+      const currentMatches = (typeof current === "object" && current != null)
+        ? (current.matches_played as number) ?? 0
+        : 0;
+      return `MUSIM BERJALAN (${new Date().getFullYear()}, ${currentMatches} pertandingan): ${JSON.stringify(current)}
 MUSIM SEBELUMNYA (${new Date().getFullYear() - 1}): ${JSON.stringify(baseline)}
-(Catatan: Data musim berjalan terbatas < 5 pertandingan, gunakan baseline sebagai jangkar)`;
+[ATURAN PRIORITAS: Musim berjalan masih < 6 pertandingan. Gunakan MUSIM SEBELUMNYA sebagai jangkar utama, dan MUSIM BERJALAN hanya sebagai cek konsistensi. Jika sudah ≥ 6 pertandingan, prioritas penuh ke MUSIM BERJALAN.]${meta === "BASELINE_ONLY" ? "\n[PERHATIAN: Data musim berjalan belum tersedia. Gunakan MUSIM SEBELUMNYA sebagai satu-satunya referensi historis.]" : ""}`;
     }
     return JSON.stringify(stats[label] ?? null);
   };
@@ -625,9 +629,10 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     const matchesPlayed = (current?.matches_played as number) ?? 0;
 
     // 2. Fallback ke musim sebelumnya jika data tidak ditemukan atau
-    //    musim berjalan < 5 pertandingan (data terlalu sedikit untuk diandalkan).
+    //    musim berjalan < 6 pertandingan (data terlalu sedikit untuk diandalkan).
     //    Tetap menggunakan exact match pada team_name + league_slug — tanpa partial name.
-    if (!current || matchesPlayed < 5) {
+    //    Setelah ≥ 6 pertandingan, data musim berjalan menjadi prioritas penuh.
+    if (!current || matchesPlayed < 6) {
       const { data: baseline } = await supabase
         .from("team_season_stats")
         .select(STAT_COLS)

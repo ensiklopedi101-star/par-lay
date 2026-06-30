@@ -92,17 +92,28 @@ router.get("/supabase/standings", async (req, res) => {
       };
     });
 
-    rows.sort((a, b) => {
-      if (b._sortKey.points !== a._sortKey.points) return b._sortKey.points - a._sortKey.points;
-      return b._sortKey.gd - a._sortKey.gd;
-    });
+    // Sort per league, then assign position per league (not global)
+    const groupedByLeague = rows.reduce<Record<string, typeof rows>>((acc, row) => {
+      const lg = row.league_name;
+      if (!acc[lg]) acc[lg] = [];
+      acc[lg].push(row);
+      return acc;
+    }, {});
 
-    rows.forEach((row, idx) => {
-      row.position = idx + 1;
-      delete (row as { _sortKey?: unknown })._sortKey;
-    });
+    const result: typeof rows = [];
+    for (const leagueRows of Object.values(groupedByLeague)) {
+      leagueRows.sort((a, b) => {
+        if (b._sortKey.points !== a._sortKey.points) return b._sortKey.points - a._sortKey.points;
+        return b._sortKey.gd - a._sortKey.gd;
+      });
+      leagueRows.forEach((row, idx) => {
+        row.position = idx + 1;
+        delete (row as { _sortKey?: unknown })._sortKey;
+        result.push(row);
+      });
+    }
 
-    res.json(rows);
+    res.json(result);
   } catch (err) {
     logger.error({ err }, "Supabase standings exception");
     res.status(500).json({ error: "Internal error" });
