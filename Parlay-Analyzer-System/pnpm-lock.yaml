@@ -22,7 +22,7 @@ catalogs:
       specifier: ^5.90.21
       version: 5.100.9
     '@types/node':
-      specifier: ^25.3.3
+      specifier: 25.6.2
       version: 25.6.2
     '@types/react':
       specifier: ^19.2.0
@@ -676,6 +676,10 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.108.1
         version: 2.108.1
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.6.2
 
   scripts:
     devDependencies:
@@ -3365,6 +3369,7 @@ packages:
   tsconfck@3.1.6:
     resolution: {integrity: sha512-ks6Vjr/jEw0P1gmOVwutM3B7fWxoWBL2KRDb1JfqGVawBmO5UsvmWOQFGHBPl5yxYz4eERr19E6L7NMv+Fej4w==}
     engines: {node: ^18 || >=20}
+    deprecated: unmaintained
     hasBin: true
     peerDependencies:
       typescript: ^5.0.0

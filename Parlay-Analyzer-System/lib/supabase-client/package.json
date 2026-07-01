@@ -8,5 +8,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.1"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:"
   }
 }

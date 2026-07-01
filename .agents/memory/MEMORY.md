@@ -7,3 +7,4 @@
 - [Standings Per-League & Default Season](standings-season-default.md) — Backend sort & position per liga; default season depan di UI; kolom Form (Last 6) sebagai pills W/D/L.
 - [Backend Framework Correction](express-not-fastify.md) — API server pakai Express, bukan Fastify.
 - [Gemini Persona DB-Driven](gemini-persona-db-driven.md) — Persona aktif di `scheduler_config.ai_persona`; seed script di `artifacts/api-server/scripts/seed-persona.mjs`.
+- [Workspace Cleanup](workspace-cleanup.md) — Workflow canonical: `Start Backend` (8080) + `Start application` (5000). Workflow artifact duplikat (`api-server`, `parlay-app: web`) di-stop. `pnpm run typecheck` di root clean setelah install `@types/node` di `lib/supabase-client`.
