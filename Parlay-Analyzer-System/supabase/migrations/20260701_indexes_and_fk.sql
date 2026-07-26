@@ -10,14 +10,15 @@
 CREATE INDEX IF NOT EXISTS idx_fixtures_fixture_date ON public.fixtures(fixture_date);
 CREATE INDEX IF NOT EXISTS idx_fixtures_league_name ON public.fixtures(league_name);
 CREATE INDEX IF NOT EXISTS idx_fixtures_status_short ON public.fixtures(status_short);
-CREATE INDEX IF NOT EXISTS idx_fixtures_event_date ON public.fixtures(event_date);
+-- NOTE: fixtures.event_date tidak ada di schema saat ini; index dihapus.
+-- CREATE INDEX IF NOT EXISTS idx_fixtures_event_date ON public.fixtures(event_date);
 
 -- AI Predictions: lookup berdasarkan fixture, status, dan tanggal dibuat
 CREATE INDEX IF NOT EXISTS idx_ai_predictions_fixture_id ON public.ai_predictions(fixture_id);
 CREATE INDEX IF NOT EXISTS idx_ai_predictions_status ON public.ai_predictions(status);
 CREATE INDEX IF NOT EXISTS idx_ai_predictions_created_at ON public.ai_predictions(created_at DESC);
 
--- Odds History: lookup per fixture + urutan waktu
+-- Odds History: lookup per fixture/match + urutan waktu
 CREATE INDEX IF NOT EXISTS idx_odds_history_match_id ON public.odds_history(match_id);
 CREATE INDEX IF NOT EXISTS idx_odds_history_captured_at ON public.odds_history(captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_odds_history_bookmaker ON public.odds_history(bookmaker);
@@ -53,44 +54,36 @@ CREATE INDEX IF NOT EXISTS idx_leagues_is_active ON public.leagues(is_active);
 -- FOREIGN KEYS
 -- ═══════════════════════════════════════════════════════════════
 -- Perhatikan: FK memerlukan tipe data yang sama di kedua kolom.
--- Jika tipe tidak cocok, jalankan ALTER COLUMN terlebih dahulu.
+-- Hanya tambahkan FK yang tipe kolomnya cocok dengan tabel referensi.
 
+-- AI Predictions -> Fixtures (fixture_id INTEGER di kedua tabel)
 ALTER TABLE public.ai_predictions
+  DROP CONSTRAINT IF EXISTS ai_predictions_fixture_id_fkey,
   DROP CONSTRAINT IF EXISTS fk_ai_predictions_fixture,
   ADD CONSTRAINT fk_ai_predictions_fixture
   FOREIGN KEY (fixture_id) REFERENCES public.fixtures(fixture_id)
   ON DELETE CASCADE;
 
-ALTER TABLE public.odds_history
-  DROP CONSTRAINT IF EXISTS fk_odds_history_fixture,
-  ADD CONSTRAINT fk_odds_history_fixture
-  FOREIGN KEY (match_id) REFERENCES public.fixtures(fixture_id)
-  ON DELETE CASCADE;
-
-ALTER TABLE public.odds_movement_history
-  DROP CONSTRAINT IF EXISTS fk_odds_movement_fixture,
-  ADD CONSTRAINT fk_odds_movement_fixture
-  FOREIGN KEY (fixture_id) REFERENCES public.fixtures(fixture_id)
-  ON DELETE CASCADE;
-
+-- Parlay Legs -> Parlays (parlay_id di parlay_legs mereferensi id di parlays)
 ALTER TABLE public.parlay_legs
+  DROP CONSTRAINT IF EXISTS parlay_legs_parlay_id_fkey,
   DROP CONSTRAINT IF EXISTS fk_parlay_legs_parlay,
   ADD CONSTRAINT fk_parlay_legs_parlay
-  FOREIGN KEY (parlay_id) REFERENCES public.parlays(parlay_id)
+  FOREIGN KEY (parlay_id) REFERENCES public.parlays(id)
   ON DELETE CASCADE;
 
+-- Parlay Legs -> Fixtures (fixture_id INTEGER di kedua tabel)
 ALTER TABLE public.parlay_legs
+  DROP CONSTRAINT IF EXISTS parlay_legs_fixture_id_fkey,
   DROP CONSTRAINT IF EXISTS fk_parlay_legs_fixture,
   ADD CONSTRAINT fk_parlay_legs_fixture
   FOREIGN KEY (fixture_id) REFERENCES public.fixtures(fixture_id)
   ON DELETE SET NULL;
 
--- lessons_learned.fixture_id diisi sebagai TEXT (String(fixture_id)) oleh settlement.
--- Supaya FK bisa dibuat, tipe harus sama dengan fixtures.fixture_id.
--- Jika fixtures.fixture_id bertipe BIGINT, jalankan ALTER COLUMN di bawah ini sebelum FK.
--- ALTER TABLE public.lessons_learned ALTER COLUMN fixture_id TYPE BIGINT USING (fixture_id::BIGINT);
--- ALTER TABLE public.lessons_learned
---   DROP CONSTRAINT IF EXISTS fk_lessons_learned_fixture,
---   ADD CONSTRAINT fk_lessons_learned_fixture
---   FOREIGN KEY (fixture_id) REFERENCES public.fixtures(fixture_id)
---   ON DELETE SET NULL;
+-- NOTE: odds_history.match_id berisi ID acak dari provider odds (bukan fixture_id).
+-- Tidak dibuat FK ke fixtures karena tipe dan referensi tidak cocok.
+-- Hanya index di atas yang digunakan untuk performa query.
+
+-- NOTE: odds_movement_history.fixture_id bertipe TEXT sedangkan fixtures.fixture_id
+-- bertipe INTEGER. Sebelum FK bisa dibuat, kolom harus disamakan tipenya (ALTER COLUMN)
+-- dan aplikasi harus disesuaikan. Saat ini hanya index yang dibuat.
