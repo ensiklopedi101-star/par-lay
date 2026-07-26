@@ -22,6 +22,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { RefreshCw, Save, Plus, X, Bot, Gavel, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { formatLeagueName } from "@/utils/format-league";
+import { useAdminPassword } from "@/hooks/use-admin-password";
+import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
 
 function TagList({
   label,
@@ -196,6 +198,7 @@ export default function SettingsPage() {
   const saveConfig = useSaveConfig();
   const triggerSync = useTriggerSync();
   const triggerSettlement = useTriggerSettlement();
+  const { open, withPassword, onSubmit, onCancel } = useAdminPassword();
 
   const [leagues, setLeagues] = useState<string[]>([]);
   const [bookmakers, setBookmakers] = useState<string[]>([]);
@@ -232,43 +235,49 @@ export default function SettingsPage() {
 
   function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    saveConfig.mutate(
-      { data: { leagues, bookmakers, markets, cronExpression, aiPersona: aiPersona || null, agentInstructions: agentInstructions || null } },
-      {
-        onSuccess: () => {
-          toast({ title: "Config tersimpan", description: "Konfigurasi scheduler dan persona AI berhasil diperbarui." });
-          queryClient.invalidateQueries({ queryKey: getGetConfigQueryKey() });
-        },
-        onError: () => {
-          toast({ title: "Gagal menyimpan", variant: "destructive" });
-        },
-      }
-    );
+    withPassword(() => {
+      saveConfig.mutate(
+        { data: { leagues, bookmakers, markets, cronExpression, aiPersona: aiPersona || null, agentInstructions: agentInstructions || null } },
+        {
+          onSuccess: () => {
+            toast({ title: "Config tersimpan", description: "Konfigurasi scheduler dan persona AI berhasil diperbarui." });
+            queryClient.invalidateQueries({ queryKey: getGetConfigQueryKey() });
+          },
+          onError: () => {
+            toast({ title: "Gagal menyimpan", variant: "destructive" });
+          },
+        }
+      );
+    });
   }
 
   function handleTriggerSync() {
-    triggerSync.mutate(undefined, {
-      onSuccess: () => {
-        toast({ title: "Sync dimulai", description: "Manual odds sync berhasil ditrigger." });
-        queryClient.invalidateQueries({ queryKey: getGetSyncStatusQueryKey() });
-      },
-      onError: () => {
-        toast({ title: "Sync gagal", variant: "destructive" });
-      },
+    withPassword(() => {
+      triggerSync.mutate(undefined, {
+        onSuccess: () => {
+          toast({ title: "Sync dimulai", description: "Manual odds sync berhasil ditrigger." });
+          queryClient.invalidateQueries({ queryKey: getGetSyncStatusQueryKey() });
+        },
+        onError: () => {
+          toast({ title: "Sync gagal", variant: "destructive" });
+        },
+      });
     });
   }
 
   function handleTriggerSettlement() {
-    triggerSettlement.mutate(undefined, {
-      onSuccess: (data: SettlementResult) => {
-        toast({
-          title: "Settlement selesai",
-          description: `${data.settled ?? 0} prediksi diselesaikan, ${data.lessons ?? 0} pelajaran baru.`,
-        });
-      },
-      onError: () => {
-        toast({ title: "Settlement gagal", variant: "destructive" });
-      },
+    withPassword(() => {
+      triggerSettlement.mutate(undefined, {
+        onSuccess: (data: SettlementResult) => {
+          toast({
+            title: "Settlement selesai",
+            description: `${data.settled ?? 0} prediksi diselesaikan, ${data.lessons ?? 0} pelajaran baru.`,
+          });
+        },
+        onError: () => {
+          toast({ title: "Settlement gagal", variant: "destructive" });
+        },
+      });
     });
   }
 
@@ -485,13 +494,15 @@ export default function SettingsPage() {
 
             <Button
               onClick={() => {
-                saveConfig.mutate(
-                  { data: { aiPersona: aiPersona || null, agentInstructions: agentInstructions || null } },
-                  {
-                    onSuccess: () => toast({ title: "Persona tersimpan", description: "Gemini akan menggunakan persona baru pada analisis berikutnya." }),
-                    onError: () => toast({ title: "Gagal menyimpan persona", variant: "destructive" }),
-                  }
-                );
+                withPassword(() => {
+                  saveConfig.mutate(
+                    { data: { aiPersona: aiPersona || null, agentInstructions: agentInstructions || null } },
+                    {
+                      onSuccess: () => toast({ title: "Persona tersimpan", description: "Gemini akan menggunakan persona baru pada analisis berikutnya." }),
+                      onError: () => toast({ title: "Gagal menyimpan persona", variant: "destructive" }),
+                    }
+                  );
+                });
               }}
               disabled={saveConfig.isPending}
               variant="outline"
@@ -502,6 +513,8 @@ export default function SettingsPage() {
           </CardContent>
         )}
       </Card>
+
+      <AdminPasswordDialog open={open} onOpenChange={onCancel} onSubmit={onSubmit} />
     </div>
   );
 }

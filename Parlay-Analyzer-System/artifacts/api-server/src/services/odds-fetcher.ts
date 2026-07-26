@@ -337,7 +337,7 @@ export async function fetchAndSaveLeagueOdds(
   let errors = 0;
 
   try {
-    logger.info({ league: league.slug, apiKeyPrefix: apiKey?.slice(0, 8), bookmakers }, "RADAR: Fetching events for league");
+    logger.info({ league: league.slug, bookmakers }, "RADAR: Fetching events for league");
     const events = await fetchLeagueEvents(league.slug, apiKey);
 
     if (events.length === 0) {
@@ -391,7 +391,7 @@ export async function fetchAndSaveAllLeagues(
     return;
   }
   const apiKey = process.env["ODDS_API_KEY"];
-  logger.info({ apiKeyPresent: !!apiKey, apiKeyPrefix: apiKey?.slice(0, 8) }, "RADAR: ODDS_API_KEY check");
+  logger.info({ apiKeyPresent: !!apiKey }, "RADAR: ODDS_API_KEY check");
   if (!apiKey) {
     logger.error("ODDS_API_KEY is not set — skipping odds fetch");
     return;

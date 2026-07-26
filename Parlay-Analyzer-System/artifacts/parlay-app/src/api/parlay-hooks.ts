@@ -104,10 +104,22 @@ export interface Parlay {
   legs?: ParlayLeg[];
 }
 
+function getAdminPassword(): string | null {
+  try {
+    return localStorage.getItem("adminPassword");
+  } catch {
+    return null;
+  }
+}
+
 async function apiPost<T>(url: string, body?: unknown): Promise<T> {
+  const adminPassword = getAdminPassword();
+  const headers: Record<string, string> = {};
+  if (body) headers["content-type"] = "application/json";
+  if (adminPassword) headers["x-admin-password"] = adminPassword;
   const res = await fetch(url, {
     method: "POST",
-    headers: body ? { "content-type": "application/json" } : undefined,
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) throw new Error(`API ${res.status}`);

@@ -2,10 +2,12 @@ import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
 import { fetchAndSaveAllLeagues, DEFAULT_LEAGUES } from "../services/odds-fetcher";
 import { logger } from "../lib/logger";
+import { requireAdmin } from "../middlewares/admin";
 
 const router: IRouter = Router();
 
-router.post("/sync/trigger", (req, res) => {
+/** Admin-only: trigger manual sync odds dari semua liga aktif. */
+router.post("/sync/trigger", requireAdmin, (req, res) => {
   res.json({ message: "Odds sync started in background" });
   fetchAndSaveAllLeagues().catch((err) =>
     logger.error({ err }, "Manual odds sync failed"),
@@ -70,16 +72,51 @@ router.get("/odds/events/:eventId", async (req, res) => {
       logger.error({ error: oddsErr }, "Failed to fetch odds");
     }
 
-    const bookmakers: Record<string, unknown> = {};
+    const bookmakers: Record<string, { name: string; odds: Record<string, unknown>[] }[]> = {};
     for (const row of oddsRows ?? []) {
-      bookmakers[row.bookmaker] = {
-        market_type: row.market_type,
-        odds: {
-          home: row.odds_1,
-          away: row.odds_2,
-          draw: row.odds_draw,
-        },
-      };
+      const bm = (row.bookmaker as string) ?? "Unknown";
+      const mt = String(row.market_type ?? "").toLowerCase();
+      if (!bookmakers[bm]) bookmakers[bm] = [];
+
+      const entry: Record<string, unknown> = {};
+      if (
+        mt === "h2h" ||
+        mt === "1x2" ||
+        mt === "match_winner" ||
+        mt === "match winner" ||
+        mt === "ml"
+      ) {
+        entry.home = row.odds_1;
+        entry.draw = row.odds_draw;
+        entry.away = row.odds_2;
+      } else if (
+        mt === "totals" ||
+        mt === "over_under" ||
+        mt === "over/under" ||
+        mt.includes("over") ||
+        mt.includes("total")
+      ) {
+        entry.over = row.odds_1;
+        entry.under = row.odds_2;
+      } else if (
+        mt === "btts" ||
+        mt === "both_teams_to_score" ||
+        mt === "both teams to score" ||
+        mt.includes("both teams")
+      ) {
+        entry.yes = row.odds_1;
+        entry.no = row.odds_2;
+      } else if (mt.includes("handicap") || mt.includes("ah") || mt.includes("spread")) {
+        entry.home = row.odds_1;
+        entry.away = row.odds_2;
+        entry.hdp = row.odds_draw;
+      } else {
+        entry.odds_1 = row.odds_1;
+        entry.odds_2 = row.odds_2;
+        entry.odds_draw = row.odds_draw;
+      }
+
+      bookmakers[bm].push({ name: String(row.market_type ?? mt), odds: [entry] });
     }
 
     res.json({

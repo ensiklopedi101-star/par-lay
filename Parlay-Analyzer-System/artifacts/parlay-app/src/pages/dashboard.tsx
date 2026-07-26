@@ -6,6 +6,8 @@ import { Activity, Clock, Database, Server, BrainCircuit, CalendarDays, Zap, Shi
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { formatLeagueName } from "@/utils/format-league";
+import { useAdminPassword } from "@/hooks/use-admin-password";
+import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
 
 function HealthDot({ status }: { status: string }) {
   const color = status === "active" ? "bg-emerald-500" : status === "idle" ? "bg-amber-500" : status === "error" || status === "missing_key" ? "bg-red-500" : "bg-slate-500";
@@ -32,18 +34,33 @@ export default function Dashboard() {
   const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures({ status_short: "TIMED", limit: 500 });
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
   const [scanState, setScanState] = useState<"idle" | "scanning">("idle");
+  const [scanError, setScanError] = useState<string | null>(null);
+  const { open, withPassword, onSubmit, onCancel } = useAdminPassword();
 
-  const handleScan = async () => {
+  const runScan = async (pwd: string) => {
     setScanState("scanning");
+    setScanError(null);
     try {
-      const res = await fetch("/api/analyze/batch", { method: "POST" });
-      if (!res.ok) throw new Error(`API ${res.status}`);
+      const res = await fetch("/api/analyze/batch", {
+        method: "POST",
+        headers: { "x-admin-password": pwd },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: `API ${res.status}` }));
+        throw new Error(body.error ?? `API ${res.status}`);
+      }
       // invalidate queries
       window.location.reload();
     } catch (err) {
+      const message = err instanceof Error ? err.message : "Scan failed";
       console.error("Scan failed:", err);
+      setScanError(message);
       setScanState("idle");
     }
+  };
+
+  const handleScan = () => {
+    withPassword(runScan);
   };
 
   return (
@@ -63,6 +80,16 @@ export default function Dashboard() {
           {scanState === "scanning" ? "Scanning..." : "JALANKAN SCANNING GLOBAL & BUAT PARLAY"}
         </Button>
       </div>
+
+      {scanError && (
+        <Card className="border-red-500/20 bg-red-500/5">
+          <CardContent className="py-3 text-sm text-red-500">
+            Scan gagal: {scanError}
+          </CardContent>
+        </Card>
+      )}
+
+      <AdminPasswordDialog open={open} onOpenChange={onCancel} onSubmit={onSubmit} />
 
       {/* System Health Monitor — Modul 2 */}
       <Card className="bg-card border-border">

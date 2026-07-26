@@ -345,6 +345,110 @@ function formatLessonsBlock(lessons: LessonRow[]): string {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   RELATIONAL RAG — Konteks tambahan dari H2H, klasemen, dan form
+   ═══════════════════════════════════════════════════════════════ */
+
+interface FixtureResult {
+  fixture_id: string | number;
+  home_team_name: string;
+  away_team_name: string;
+  home_goals: number | null;
+  away_goals: number | null;
+  fixture_date: string;
+  league_name: string;
+  league_slug?: string;
+}
+
+interface StandingContext {
+  team: string;
+  position: number;
+  points: number;
+  played: number;
+  form: string;
+}
+
+async function fetchHeadToHead(
+  homeTeam: string,
+  awayTeam: string,
+  leagueName: string,
+  leagueSlug: string,
+): Promise<FixtureResult[]> {
+  try {
+    const leaguePattern = leagueName || leagueSlug;
+    const { data } = await supabase
+      .from("fixtures")
+      .select("fixture_id, home_team_name, away_team_name, home_goals, away_goals, fixture_date, league_name, league_slug")
+      .or(
+        `and(home_team_name.ilike.%${homeTeam}%,away_team_name.ilike.%${awayTeam}%),` +
+        `and(home_team_name.ilike.%${awayTeam}%,away_team_name.ilike.%${homeTeam}%)`
+      )
+      .or(`league_slug.ilike.%${leagueSlug}%,league_name.ilike.%${leaguePattern}%`)
+      .not("home_goals", "is", null)
+      .not("away_goals", "is", null)
+      .order("fixture_date", { ascending: false })
+      .limit(5);
+    const rows = (data ?? []) as FixtureResult[];
+    // Final safety filter: ensure the result really belongs to the target league
+    return rows.filter((r) => {
+      const ln = (r.league_name ?? "").toLowerCase();
+      const ls = (r.league_slug ?? "").toLowerCase();
+      const target = leaguePattern.toLowerCase();
+      return ln.includes(target) || ls.includes(target);
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function fetchStandingContext(
+  teamName: string,
+  leagueSlug: string,
+  season: string,
+): Promise<StandingContext | null> {
+  try {
+    const { data } = await supabase
+      .from("team_season_stats")
+      .select("team_name, stats_team_form")
+      .ilike("team_name", teamName)
+      .ilike("league_slug", leagueSlug)
+      .ilike("season", season)
+      .maybeSingle();
+    if (!data) return null;
+    const form = (data.stats_team_form as Record<string, unknown>) ?? {};
+    const toNum = (v: unknown) => {
+      const n = typeof v === "string" ? Number(v) : Number(v ?? 0);
+      return Number.isFinite(n) ? n : 0;
+    };
+    return {
+      team: data.team_name,
+      position: toNum(form.Pos),
+      points: toNum(form.Pts),
+      played: toNum(form.MP),
+      form: String(form["Last 6"] ?? form["last_6"] ?? ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatHeadToHeadBlock(fixtures: FixtureResult[]): string {
+  if (fixtures.length === 0) return "";
+  const lines = ["\n--- RIVALITAS LANGSUNG (HEAD-TO-HEAD) ---"];
+  for (const f of fixtures) {
+    const date = new Date(f.fixture_date).toLocaleDateString("id-ID");
+    lines.push(
+      `  ${f.home_team_name} ${f.home_goals ?? 0}-${f.away_goals ?? 0} ${f.away_team_name} (${date})`
+    );
+  }
+  return lines.join("\n");
+}
+
+function formatStandingContextBlock(label: string, ctx: StandingContext | null): string {
+  if (!ctx) return "";
+  return `\n--- ${label} ---\n  Posisi: ${ctx.position} | Poin: ${ctx.points} | Main: ${ctx.played} | Form (Last 6): ${ctx.form || "N/A"}`;
+}
+
+/* ═══════════════════════════════════════════════════════════════
    EKSTRAK & STRUKTURISASI ODDS
    ═══════════════════════════════════════════════════════════════ */
 function extractStructuredOdds(rows: OddsRow[]): StructuredOdds {
@@ -465,6 +569,7 @@ function buildPrompt(
   trendBlock: string,
   lessonsBlock: string,
   perfBlock: string,
+  relationalBlock: string,
   homeStats: Record<string, unknown>,
   awayStats: Record<string, unknown>,
 ): string {
@@ -491,6 +596,7 @@ ${oddsBlock}
 ${trendBlock}
 ${lessonsBlock}
 ${perfBlock}
+${relationalBlock}
 
 --- STATISTIK ${homeTeam} (HOME) ---
 1. xG (xG, xGA, xGD, GF, GA): ${fmt(homeStats, "stats_xg")}
@@ -594,24 +700,31 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
   const structuredOdds = extractStructuredOdds((oddsRows ?? []) as OddsRow[]);
   const oddsBlock = formatOddsBlock(homeTeam, awayTeam, structuredOdds);
 
-  /* ── 3. Fetch odds movement trend + lessons + performance log (parallel) ── */
+  /* ── 3. Fetch odds movement trend + lessons + performance log + relational context (parallel) ── */
   // Ekstrak league slug dari fixture untuk RAG filtering
-  const leagueSlug = fixture.league_slug ?? fixture.league_name ?? "";
-  const [movementRows, lessons, perfLog] = await Promise.all([
+  const leagueSlug: string = fixture.league_slug ?? fixture.league_name ?? "";
+  const currentSeason = String(new Date().getFullYear());
+  const prevSeason = String(new Date().getFullYear() - 1);
+  const [movementRows, lessons, perfLog, h2h, homeStandings, awayStandings] = await Promise.all([
     fetchOddsMovementTrend(fixtureId),
     fetchRelevantLessons(homeTeam, awayTeam, leagueSlug),
     fetchPerformanceLog(),
+    fetchHeadToHead(homeTeam, awayTeam, leagueName, leagueSlug),
+    fetchStandingContext(homeTeam, leagueSlug, currentSeason),
+    fetchStandingContext(awayTeam, leagueSlug, currentSeason),
   ]);
 
   const trendBlock = formatOddsMovementTrend(movementRows);
   const lessonsBlock = formatLessonsBlock(lessons);
   const perfBlock = formatPerformanceBlock(perfLog);
+  const relationalBlock = [
+    formatHeadToHeadBlock(h2h),
+    formatStandingContextBlock("KLASEMEN HOME", homeStandings),
+    formatStandingContextBlock("KLASEMEN AWAY", awayStandings),
+  ].join("\n");
 
-  /* ── 4. Fetch team stats (multi-season: 2026 + 2025) ── */
+  /* ── 4. Fetch team stats (multi-season: current + previous) ── */
   const STAT_COLS = "stats_xg, stats_fts, stats_btts, stats_goals_conceded, stats_goals_scored, stats_shots, stats_over_25, stats_over_35, stats_under, stats_team_form, stats_ht, season, matches_played";
-
-  const currentSeason = String(new Date().getFullYear());
-  const prevSeason = String(new Date().getFullYear() - 1);
 
   const fetchStats = async (teamName: string): Promise<Record<string, unknown>> => {
     // 1. Strict canonical match: team_name + league_slug + musim berjalan.
@@ -705,7 +818,7 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     systemInstruction: finalPersona,
   });
 
-  const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, homeStats, awayStats);
+  const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
   const geminiResult = await model.generateContent(promptText);
   const predictionText = geminiResult.response.text();
 

@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { isSyncRunning } from "../services/odds-fetcher";
+import { requireAdmin } from "../middlewares/admin";
 
 export const LEAGUES_CATALOG = [
   { slug: "england-premier-league",      name: "Premier League",         country: "Inggris" },
@@ -85,7 +86,8 @@ router.get("/config", async (_req, res) => {
   }
 });
 
-router.post("/config", async (req, res) => {
+/** Admin-only: update scheduler config & AI persona. */
+router.post("/config", requireAdmin, async (req, res) => {
   try {
     const { leagues, bookmakers, markets, cronExpression, aiPersona, agentInstructions } = req.body;
     const { data: existing } = await supabase
@@ -146,7 +148,7 @@ router.post("/config", async (req, res) => {
   }
 });
 
-router.post("/sync/settle", async (_req, res) => {
+router.post("/sync/settle", requireAdmin, async (_req, res) => {
   try {
     const { runSettlement } = await import("../services/settlement");
     const result = await runSettlement();
