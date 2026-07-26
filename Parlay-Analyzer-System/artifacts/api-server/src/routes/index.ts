@@ -7,6 +7,7 @@ import seasonCsvRouter from "./season-csv";
 import supabaseRouter from "./supabase";
 import analyzeRouter from "./analyze";
 import statsIngestRouter from "./stats-ingest";
+import cronRouter from "./cron";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use(seasonCsvRouter);
 router.use(supabaseRouter);
 router.use(analyzeRouter);
 router.use(statsIngestRouter);
+router.use(cronRouter);
 
 export default router;
