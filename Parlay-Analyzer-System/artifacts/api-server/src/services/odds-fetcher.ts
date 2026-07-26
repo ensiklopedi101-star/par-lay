@@ -6,6 +6,92 @@ const BASE_URL = "https://api.odds-api.io/v3";
 let syncRunning = false;
 export function isSyncRunning(): boolean { return syncRunning; }
 
+const MAX_EVENTS_PER_SYNC = 80;
+export const DEFAULT_BOOKMAKERS = "Bet365";
+
+interface SyncRunRecord {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  leagues: string[];
+  events_fetched: number;
+  events_inserted: number;
+  odds_fetched: number;
+  errors: number;
+  rate_limited_seconds: number;
+  error_message: string | null;
+}
+
+async function startSyncRun(leagues: string[]): Promise<number | null> {
+  try {
+    const { data, error } = await supabase
+      .from("sync_runs")
+      .insert({
+        started_at: new Date().toISOString(),
+        status: "running",
+        leagues,
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    return (data?.id as number) ?? null;
+  } catch (err) {
+    logger.warn({ err }, "sync_runs insert failed; status tracking disabled");
+    return null;
+  }
+}
+
+async function finishSyncRun(
+  id: number | null,
+  status: "completed" | "partial" | "failed",
+  stats: {
+    events_fetched?: number;
+    events_inserted?: number;
+    odds_fetched?: number;
+    errors?: number;
+    rate_limited_seconds?: number;
+    error_message?: string;
+  },
+) {
+  if (!id) return;
+  try {
+    await supabase
+      .from("sync_runs")
+      .update({
+        finished_at: new Date().toISOString(),
+        status,
+        ...stats,
+      })
+      .eq("id", id);
+  } catch (err) {
+    logger.warn({ err, id }, "sync_runs update failed");
+  }
+}
+
+async function incrementSyncRunStats(
+  id: number | null | undefined,
+  stats: Partial<Pick<SyncRunRecord, "events_fetched" | "events_inserted" | "odds_fetched" | "errors">>,
+) {
+  if (!id) return;
+  try {
+    const { data } = await supabase.from("sync_runs").select("*").eq("id", id).single();
+    if (!data) return;
+    const current = data as SyncRunRecord;
+    await supabase
+      .from("sync_runs")
+      .update({
+        events_fetched: (current.events_fetched ?? 0) + (stats.events_fetched ?? 0),
+        events_inserted: (current.events_inserted ?? 0) + (stats.events_inserted ?? 0),
+        odds_fetched: (current.odds_fetched ?? 0) + (stats.odds_fetched ?? 0),
+        errors: (current.errors ?? 0) + (stats.errors ?? 0),
+      })
+      .eq("id", id);
+  } catch (err) {
+    logger.warn({ err, id }, "sync_runs increment failed");
+  }
+}
+
 export interface LeagueConfig {
   slug: string;
   name: string;
@@ -332,27 +418,38 @@ export async function fetchAndSaveLeagueOdds(
   apiKey: string,
   bookmakers: string,
   leagueIdMap: Map<string, number>,
-): Promise<{ league: string; saved: number; skipped: boolean; errors: number }> {
+  options: { syncRunId?: number | null; maxEvents?: number } = {},
+): Promise<{ league: string; saved: number; skipped: boolean; errors: number; eventsFetched: number; oddsFetched: number }> {
+  const { syncRunId, maxEvents } = options;
   let saved = 0;
   let errors = 0;
+  let eventsFetched = 0;
+  let oddsFetched = 0;
 
   try {
     logger.info({ league: league.slug, bookmakers }, "RADAR: Fetching events for league");
     const events = await fetchLeagueEvents(league.slug, apiKey);
+    eventsFetched = events.length;
 
     if (events.length === 0) {
       logger.info({ league: league.slug }, "No pending events — skipping");
-      return { league: league.slug, saved: 0, skipped: true, errors: 0 };
+      return { league: league.slug, saved: 0, skipped: true, errors: 0, eventsFetched: 0, oddsFetched: 0 };
     }
 
     const allIds = events.map((e) => e.id);
     const alreadySynced = await getAlreadySyncedEventIds(allIds);
-    const toFetch = events.filter((e) => !alreadySynced.has(e.id));
+    let toFetch = events.filter((e) => !alreadySynced.has(e.id));
+
+    if (maxEvents != null && maxEvents > 0) {
+      toFetch = toFetch.slice(0, maxEvents);
+    }
 
     logger.info(
       { league: league.slug, total: events.length, alreadySynced: alreadySynced.size, toFetch: toFetch.length },
       "Events found",
     );
+
+    await incrementSyncRunStats(syncRunId, { events_fetched: eventsFetched, events_inserted: toFetch.length });
 
     for (const event of toFetch) {
       try {
@@ -360,10 +457,12 @@ export async function fetchAndSaveLeagueOdds(
         const withOdds = await fetchEventOdds(event.id, apiKey, bookmakers);
         await saveEventAndOdds(withOdds, league.slug, leagueIdMap);
         saved++;
+        oddsFetched++;
       } catch (err) {
         if (err instanceof RateLimitError) {
           logger.warn({ retryAfter: err.retryAfterSeconds, saved }, "Rate limited — stopping sync early");
-          return { league: league.slug, saved, skipped: false, errors };
+          await incrementSyncRunStats(syncRunId, { odds_fetched: oddsFetched, errors });
+          return { league: league.slug, saved, skipped: false, errors, eventsFetched, oddsFetched };
         }
         errors++;
         logger.error({ err, eventId: event.id }, "Failed to fetch/save odds for event");
@@ -378,13 +477,14 @@ export async function fetchAndSaveLeagueOdds(
     errors++;
   }
 
+  await incrementSyncRunStats(syncRunId, { odds_fetched: oddsFetched, errors });
   logger.info({ league: league.slug, saved, errors }, "League sync done");
-  return { league: league.slug, saved, skipped: false, errors };
+  return { league: league.slug, saved, skipped: false, errors, eventsFetched, oddsFetched };
 }
 
 export async function fetchAndSaveAllLeagues(
   leagues: LeagueConfig[] = DEFAULT_LEAGUES,
-  bookmakers = "Bet365,Sbobet",
+  bookmakers = DEFAULT_BOOKMAKERS,
 ): Promise<void> {
   if (syncRunning) {
     logger.warn("Sync already running — skipping");
@@ -427,6 +527,16 @@ export async function fetchAndSaveAllLeagues(
     return;
   }
 
+  // Start tracking this sync run
+  const syncRunId = await startSyncRun(leaguesToSync.map((l) => l.slug));
+  let totalEventsFetched = 0;
+  let totalEventsInserted = 0;
+  let totalOddsFetched = 0;
+  let totalErrors = 0;
+  let rateLimitedSeconds = 0;
+  let status: "completed" | "partial" | "failed" = "completed";
+  let errorMessage = "";
+
   // Build league_id map from Supabase
   let leagueIdMap: Map<string, number>;
   try {
@@ -446,20 +556,49 @@ export async function fetchAndSaveAllLeagues(
   }
 
   try {
+    let remainingSlots = MAX_EVENTS_PER_SYNC;
     for (const league of leaguesToSync) {
-      logger.info({ league: league.slug }, "RADAR: Processing league");
-      await fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap);
+      if (remainingSlots <= 0) {
+        logger.info({ maxEvents: MAX_EVENTS_PER_SYNC }, "RADAR: Reached per-sync event cap — pausing until next cycle");
+        status = "partial";
+        break;
+      }
+      logger.info({ league: league.slug, remainingSlots }, "RADAR: Processing league");
+      const result = await fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, {
+        syncRunId,
+        maxEvents: remainingSlots,
+      });
+      totalEventsFetched += result.eventsFetched;
+      totalEventsInserted += result.saved;
+      totalOddsFetched += result.oddsFetched;
+      totalErrors += result.errors;
+      remainingSlots -= result.saved;
       await new Promise((r) => setTimeout(r, 500));
     }
   } catch (err) {
     if (err instanceof RateLimitError) {
       logger.warn("Rate limited mid-sync — stopping. Next cycle will continue from unsynced events.");
-      syncRunning = false;
-      return;
+      status = "partial";
+      rateLimitedSeconds = err.retryAfterSeconds;
+    } else {
+      status = "failed";
+      errorMessage = err instanceof Error ? err.message : "Unknown error";
+      logger.error({ err }, "RADAR: Sync failed");
     }
-    throw err;
   }
 
+  await finishSyncRun(syncRunId, status, {
+    events_fetched: totalEventsFetched,
+    events_inserted: totalEventsInserted,
+    odds_fetched: totalOddsFetched,
+    errors: totalErrors,
+    rate_limited_seconds: rateLimitedSeconds,
+    error_message: errorMessage,
+  });
+
   syncRunning = false;
-  logger.info("RADAR: All leagues odds sync complete");
+  logger.info(
+    { status, totalEventsFetched, totalEventsInserted, totalOddsFetched, totalErrors },
+    "RADAR: All leagues odds sync complete",
+  );
 }

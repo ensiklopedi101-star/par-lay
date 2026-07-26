@@ -48,7 +48,7 @@ async function getOrCreateConfig() {
     .from("scheduler_config")
     .insert({
       leagues: ["serie-a"],
-      bookmakers: ["Bet365", "Sbobet"],
+      bookmakers: ["Bet365"],
       markets: ["ML", "Totals", "BTTS", "Asian Handicap"],
       cron_expression: "0 */3 * * *",
     })
@@ -182,20 +182,36 @@ router.get("/sync/status", async (_req, res) => {
       leagueMap.set(row.league_name, (leagueMap.get(row.league_name) ?? 0) + 1);
     }
 
-    const { data: lastSync, error: lastSyncErr } = await supabase
-      .from("fixtures")
-      .select("updated_at")
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .single();
-
-    if (lastSyncErr) {
-      logger.error({ error: lastSyncErr }, "Failed to fetch last sync");
+    // Prefer dedicated sync_runs table for accurate last sync time
+    let lastSyncAt: string | null = null;
+    let lastSyncStatus: string | null = null;
+    try {
+      const { data: lastSync } = await supabase
+        .from("sync_runs")
+        .select("finished_at, status")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (lastSync) {
+        lastSyncAt = (lastSync.finished_at as string) ?? null;
+        lastSyncStatus = (lastSync.status as string) ?? null;
+      }
+    } catch (err) {
+      // sync_runs table may not exist yet; fallback to fixtures.updated_at
+      logger.debug({ err }, "sync_runs table not available, falling back to fixtures.updated_at");
+      const { data: fallback } = await supabase
+        .from("fixtures")
+        .select("updated_at")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      lastSyncAt = fallback?.updated_at ?? null;
     }
 
     res.json({
       totalEvents: totalCount ?? 0,
-      lastSyncAt: lastSync?.updated_at ?? null,
+      lastSyncAt,
+      lastSyncStatus,
       isRunning: isSyncRunning(),
       leagueBreakdown: Array.from(leagueMap.entries()).map(([leagueSlug, eventCount]) => ({
         leagueSlug,

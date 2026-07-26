@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { logger } from "../lib/logger";
-import { fetchAndSaveAllLeagues, DEFAULT_LEAGUES, type LeagueConfig } from "../services/odds-fetcher";
+import { fetchAndSaveAllLeagues, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, type LeagueConfig } from "../services/odds-fetcher";
 import { runSettlement } from "../services/settlement";
 import { supabase } from "../lib/supabase-client";
 
@@ -10,7 +10,7 @@ let currentSettlementTask: ReturnType<typeof cron.schedule> | null = null;
 /* ─── Load config & run odds sync ─── */
 async function loadConfigAndSync() {
   let leagues: LeagueConfig[] = DEFAULT_LEAGUES;
-  let bookmakers = "Bet365,Sbobet";
+  let bookmakers = DEFAULT_BOOKMAKERS;
   try {
     const { data, error } = await supabase
       .from("scheduler_config")
