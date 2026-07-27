@@ -438,7 +438,9 @@ export async function fetchAndSaveLeagueOdds(
 
     const allIds = events.map((e) => e.id);
     const alreadySynced = await getAlreadySyncedEventIds(allIds);
-    let toFetch = events.filter((e) => !alreadySynced.has(e.id));
+    let toFetch = events
+      .filter((e) => !alreadySynced.has(e.id))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     if (maxEvents != null && maxEvents > 0) {
       toFetch = toFetch.slice(0, maxEvents);

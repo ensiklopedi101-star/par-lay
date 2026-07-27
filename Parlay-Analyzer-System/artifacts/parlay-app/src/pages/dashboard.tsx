@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { addDays, formatISO } from "date-fns";
 import { useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth } from "@/api/parlay-hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,12 @@ function HealthBadge({ status }: { status: string }) {
 export default function Dashboard() {
   const { data: syncStatus, isLoading: isSyncLoading } = useGetSyncStatus();
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
-  const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures({ status_short: "TIMED", limit: 500 });
+  const now = new Date();
+  const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures({
+    date_from: formatISO(now),
+    date_to: formatISO(addDays(now, 7)),
+    limit: 500,
+  });
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
   const [scanState, setScanState] = useState<"idle" | "scanning">("idle");
   const [scanError, setScanError] = useState<string | null>(null);

@@ -7,10 +7,12 @@ const router: IRouter = Router();
 /* ─── Fixtures ─── */
 router.get("/supabase/fixtures", async (req, res) => {
   try {
-    const { league_name, status_short, limit } = req.query;
+    const { league_name, status_short, date_from, date_to, limit } = req.query;
     let q = supabase.from("fixtures").select("*");
     if (league_name) q = q.eq("league_name", league_name as string);
     if (status_short) q = q.eq("status_short", status_short as string);
+    if (date_from) q = q.gte("fixture_date", date_from as string);
+    if (date_to) q = q.lte("fixture_date", date_to as string);
     const { data, error } = await q.order("fixture_date", { ascending: true }).limit(Number(limit ?? 200));
     if (error) { logger.error({ error }, "Supabase fixtures error"); res.status(500).json({ error: error.message }); return; }
     res.json(data ?? []);
