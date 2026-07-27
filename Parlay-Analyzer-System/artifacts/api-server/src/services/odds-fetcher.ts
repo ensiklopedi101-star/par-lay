@@ -403,14 +403,14 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
 async function getAlreadySyncedEventIds(eventIds: number[]): Promise<Set<number>> {
   if (eventIds.length === 0) return new Set();
   const { data, error } = await supabase
-    .from("fixtures")
-    .select("fixture_id")
-    .in("fixture_id", eventIds);
+    .from("odds_history")
+    .select("match_id")
+    .in("match_id", eventIds.map((id) => String(id)));
   if (error) {
-    logger.error({ error }, "Failed to fetch already synced fixtures");
+    logger.error({ error }, "Failed to fetch already synced odds");
     return new Set();
   }
-  return new Set((data ?? []).map((r) => r.fixture_id));
+  return new Set((data ?? []).map((r) => Number(r.match_id)));
 }
 
 export async function fetchAndSaveLeagueOdds(
