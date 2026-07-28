@@ -61,6 +61,7 @@ export interface Config {
   bookmakers?: string[];
   markets?: string[];
   cronExpression?: string;
+  scanDays?: number;
   aiPersona?: string | null;
   agentInstructions?: string | null;
   [key: string]: unknown;

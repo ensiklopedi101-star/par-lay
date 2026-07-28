@@ -76,6 +76,7 @@ router.get("/config", async (_req, res) => {
       bookmakers: cfg.bookmakers,
       markets: cfg.markets,
       cronExpression: cfg.cron_expression,
+      scanDays: Number(cfg.scan_days ?? 11),
       aiPersona: cfg.ai_persona ?? null,
       agentInstructions: cfg.agent_instructions ?? null,
       updatedAt: cfg.updated_at ?? null,
@@ -89,7 +90,12 @@ router.get("/config", async (_req, res) => {
 /** Admin-only: update scheduler config & AI persona. */
 router.post("/config", requireAdmin, async (req, res) => {
   try {
-    const { leagues, bookmakers, markets, cronExpression, aiPersona, agentInstructions } = req.body;
+    const { leagues, bookmakers, markets, cronExpression, scanDays, aiPersona, agentInstructions } = req.body;
+    const normalizedScanDays = scanDays === undefined ? undefined : Number(scanDays);
+    if (normalizedScanDays !== undefined && (!Number.isInteger(normalizedScanDays) || normalizedScanDays < 1 || normalizedScanDays > 90)) {
+      res.status(400).json({ error: "scanDays must be an integer between 1 and 90" });
+      return;
+    }
     const { data: existing } = await supabase
       .from("scheduler_config")
       .select("id")
@@ -102,6 +108,7 @@ router.post("/config", requireAdmin, async (req, res) => {
     if (bookmakers !== undefined) updatePayload.bookmakers = bookmakers;
     if (markets !== undefined) updatePayload.markets = markets;
     if (cronExpression !== undefined) updatePayload.cron_expression = cronExpression;
+    if (normalizedScanDays !== undefined) updatePayload.scan_days = normalizedScanDays;
     if (aiPersona !== undefined) updatePayload.ai_persona = aiPersona;
     if (agentInstructions !== undefined) updatePayload.agent_instructions = agentInstructions;
 
@@ -123,6 +130,7 @@ router.post("/config", requireAdmin, async (req, res) => {
           bookmakers,
           markets,
           cron_expression: cronExpression,
+          scan_days: normalizedScanDays ?? 11,
           ai_persona: aiPersona ?? null,
           agent_instructions: agentInstructions ?? null,
         })
@@ -138,6 +146,7 @@ router.post("/config", requireAdmin, async (req, res) => {
       bookmakers: cfg.bookmakers,
       markets: cfg.markets,
       cronExpression: cfg.cron_expression,
+      scanDays: Number(cfg.scan_days ?? 11),
       aiPersona: cfg.ai_persona ?? null,
       agentInstructions: cfg.agent_instructions ?? null,
       updatedAt: cfg.updated_at ?? null,

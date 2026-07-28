@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { addDays, formatISO } from "date-fns";
-import { useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth, getListSupabaseParlaysQueryKey } from "@/api/parlay-hooks";
+import { useGetConfig, useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth, getListSupabaseParlaysQueryKey } from "@/api/parlay-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,8 @@ function HealthBadge({ status }: { status: string }) {
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const { data: syncStatus, isLoading: isSyncLoading } = useGetSyncStatus();
+  const { data: config } = useGetConfig();
+  const scanDays = config?.scanDays ?? 11;
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
   const now = new Date();
   const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures({
@@ -123,7 +125,7 @@ export default function Dashboard() {
           className="bg-primary hover:bg-primary/90 text-primary-foreground"
         >
           <Zap className="w-4 h-4 mr-2" />
-          {scanState === "scanning" ? "Scanning 11 hari..." : "SCANNING 11 HARI & BUAT PARLAY"}
+          {scanState === "scanning" ? `Scanning ${scanDays} hari...` : `SCANNING ${scanDays} HARI & BUAT PARLAY`}
         </Button>
       </div>
 

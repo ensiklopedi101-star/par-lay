@@ -8,18 +8,27 @@ import { requireAdmin } from "../middlewares/admin";
 const router: IRouter = Router();
 
 /* ═════════════════════════════════════════════════════════════════════════════════
-   M3: BATCH SCANNER — Scan semua fixture dalam 11 hari ke depan
+   M3: BATCH SCANNER — Scan semua fixture dalam configured scan window
    (didefinisikan sebelum /analyze/:fixtureId agar tidak tertangkap wildcard)
    ══════════════════════════════════════════════════════════════════════════════════ */
 
-/** Admin-only: jalankan batch scan AI untuk fixture 11 hari ke depan. */
+/** Admin-only: jalankan batch scan AI untuk fixture dalam configured scan window. */
 router.post("/analyze/batch", requireAdmin, async (_req, res) => {
   try {
     logger.info("BATCH SCANNER: Request received");
 
-    /* 1. Ambil fixture dalam 11 hari ke depan */
+    /* 1. Ambil fixture dalam configured scan window */
     const now = new Date().toISOString();
-    const future = new Date(Date.now() + 11 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: config } = await supabase
+      .from("scheduler_config")
+      .select("scan_days")
+      .limit(1)
+      .maybeSingle();
+    const configuredScanDays = Number(config?.scan_days ?? 11);
+    const scanDays = Number.isInteger(configuredScanDays) && configuredScanDays >= 1 && configuredScanDays <= 90
+      ? configuredScanDays
+      : 11;
+    const future = new Date(Date.now() + scanDays * 24 * 60 * 60 * 1000).toISOString();
 
     const { data: fixtures, error: fixturesError } = await supabase
       .from("fixtures")
@@ -35,7 +44,7 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
     }
 
     if (!fixtures || fixtures.length === 0) {
-      res.json({ scanned: 0, tickets: [], message: "No fixtures in the next 11 days" });
+      res.json({ scanned: 0, tickets: [], message: `No fixtures in the next ${scanDays} days` });
       return;
     }
 
@@ -172,7 +181,7 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
       validTickets: validTickets.length,
       parlayLegs: parlayLegs.length,
       tickets,
-      message: `Processed ${tickets.length} of ${fixtures.length} fixtures in the next 11 days`,
+      message: `Processed ${tickets.length} of ${fixtures.length} fixtures in the next ${scanDays} days`,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

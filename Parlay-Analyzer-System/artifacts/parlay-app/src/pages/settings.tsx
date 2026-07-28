@@ -204,6 +204,7 @@ export default function SettingsPage() {
   const [bookmakers, setBookmakers] = useState<string[]>([]);
   const [markets, setMarkets] = useState<string[]>([]);
   const [cronExpression, setCronExpression] = useState("0 */3 * * *");
+  const [scanDays, setScanDays] = useState(11);
   const [aiPersona, setAiPersona] = useState("");
   const [agentInstructions, setAgentInstructions] = useState("");
   const [personaExpanded, setPersonaExpanded] = useState(false);
@@ -216,6 +217,7 @@ export default function SettingsPage() {
       setBookmakers(config.bookmakers ?? []);
       setMarkets(config.markets ?? []);
       setCronExpression(config.cronExpression ?? "0 */3 * * *");
+      setScanDays(config.scanDays ?? 11);
       setAiPersona(config.aiPersona ?? "");
       setAgentInstructions(config.agentInstructions ?? "");
     }
@@ -237,7 +239,7 @@ export default function SettingsPage() {
     e.preventDefault();
     withPassword(() => {
       saveConfig.mutate(
-        { data: { leagues, bookmakers, markets, cronExpression, aiPersona: aiPersona || null, agentInstructions: agentInstructions || null } },
+        { data: { leagues, bookmakers, markets, cronExpression, scanDays, aiPersona: aiPersona || null, agentInstructions: agentInstructions || null } },
         {
           onSuccess: () => {
             toast({ title: "Config tersimpan", description: "Konfigurasi scheduler dan persona AI berhasil diperbarui." });
@@ -414,6 +416,23 @@ export default function SettingsPage() {
                 <p className="text-xs text-muted-foreground">
                   Default:{" "}
                   <code className="text-primary">0 */3 * * *</code> — setiap 3 jam
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="scan-days">Batas Hari Scanning</Label>
+                <Input
+                  id="scan-days"
+                  type="number"
+                  min={1}
+                  max={90}
+                  step={1}
+                  value={scanDays}
+                  onChange={(e) => setScanDays(Math.max(1, Math.min(90, Number(e.target.value) || 1)))}
+                  data-testid="input-scan-days"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Batch Scanner akan memproses fixture dari sekarang sampai {scanDays} hari ke depan. Default: 11 hari, maksimum: 90 hari.
                 </p>
               </div>
 

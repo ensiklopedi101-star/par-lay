@@ -8,6 +8,7 @@ export const schedulerConfigTable = pgTable("scheduler_config", {
   bookmakers: text("bookmakers").array().notNull().default([]),
   markets: text("markets").array().notNull().default([]),
   cronExpression: text("cron_expression").notNull().default("0 */3 * * *"),
+  scanDays: integer("scan_days").notNull().default(11),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
