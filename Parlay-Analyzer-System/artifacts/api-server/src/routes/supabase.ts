@@ -8,7 +8,10 @@ const router: IRouter = Router();
 router.get("/supabase/fixtures", async (req, res) => {
   try {
     const { league_name, status_short, date_from, date_to, limit } = req.query;
-    let q = supabase.from("fixtures").select("*");
+    let q = supabase
+      .from("fixtures")
+      .select("*")
+      .gte("fixture_date", (date_from as string | undefined) ?? new Date().toISOString());
     if (league_name) q = q.eq("league_name", league_name as string);
     if (status_short) q = q.eq("status_short", status_short as string);
     if (date_from) q = q.gte("fixture_date", date_from as string);

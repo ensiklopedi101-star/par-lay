@@ -41,6 +41,7 @@ export interface FixtureEvent {
   date: string;
   leagueSlug?: string;
   status?: string;
+  isUpcomingRadar?: boolean;
   [key: string]: unknown;
 }
 

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AIAnalysisModal } from "@/components/AIAnalysisModal";
 import { format } from "date-fns";
-import { Brain, Loader2, Eye, AlertCircle } from "lucide-react";
+import { Brain, Loader2, Eye, AlertCircle, Radar } from "lucide-react";
 import { formatLeagueName } from "@/utils/format-league";
 
 interface OddsEntry {
@@ -249,7 +249,15 @@ export default function Fixtures() {
                 <Fragment key={event.id}>
                   <TableRow className="border-border hover:bg-secondary/30 transition-colors">
                     <TableCell className="font-medium whitespace-nowrap">
-                      {format(new Date(event.date), "MMM dd, HH:mm")}
+                      <div className="flex flex-col gap-1">
+                        <span>{format(new Date(event.date), "MMM dd, HH:mm")}</span>
+                        {event.isUpcomingRadar && (
+                          <Badge className="w-fit gap-1 border-amber-400/30 bg-amber-400/10 text-[10px] text-amber-300">
+                            <Radar className="h-3 w-3" />
+                            RADAR UPCOMING
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-xs">{formatLeagueName(event.leagueSlug ?? "")}</Badge>

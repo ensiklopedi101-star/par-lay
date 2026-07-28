@@ -17,7 +17,13 @@ router.post("/sync/trigger", requireAdmin, (req, res) => {
 router.get("/odds/events", async (req, res) => {
   try {
     const { league, limit } = req.query;
-    let q = supabase.from("fixtures").select("*").order("fixture_date", { ascending: true });
+    const now = new Date();
+    const radarEnd = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
+    let q = supabase
+      .from("fixtures")
+      .select("*")
+      .gte("fixture_date", now.toISOString())
+      .order("fixture_date", { ascending: true });
     if (league) {
       q = q.eq("league_name", league as string);
     }
@@ -35,6 +41,7 @@ router.get("/odds/events", async (req, res) => {
         away: e.away_team_name,
         date: e.fixture_date,
         status: e.status_short,
+         isUpcomingRadar: new Date(e.fixture_date).getTime() <= radarEnd.getTime(),
         updatedAt: e.updated_at,
       })),
     );
@@ -126,6 +133,8 @@ router.get("/odds/events/:eventId", async (req, res) => {
       away: event.away_team_name,
       date: event.fixture_date,
       status: event.status_short,
+       isUpcomingRadar: new Date(event.fixture_date).getTime() <=
+         Date.now() + 10 * 24 * 60 * 60 * 1000,
       updatedAt: event.updated_at,
       bookmakers,
     });
