@@ -22,7 +22,7 @@ function isAuthorized(req: any): boolean {
  * Keep-alive is recommended for 30-minute pings to keep a Replit workspace alive
  * without burning the Odds-API free-plan quota.
  */
-router.get("/cron", (req, res) => {
+function handleCron(req: any, res: any) {
   if (!CRON_SECRET) {
     res.status(503).json({ error: "CRON_SECRET not configured" });
     return;
@@ -51,6 +51,9 @@ router.get("/cron", (req, res) => {
     action: "keep-alive",
     timestamp: new Date().toISOString(),
   });
-});
+}
+
+// The router is mounted at `/api`, so this route is exposed as `/api/cron`.
+router.get("/cron", handleCron);
 
 export default router;

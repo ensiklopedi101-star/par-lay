@@ -34,6 +34,16 @@ async function loadConfigAndSync() {
   await fetchAndSaveAllLeagues(leagues, bookmakers);
 }
 
+function scheduleOddsTask(expression: string) {
+  if (currentOddsTask) currentOddsTask.stop();
+  currentOddsTask = cron.schedule(expression, () => {
+    loadConfigAndSync().catch((err) =>
+      logger.error({ err }, "Scheduled odds sync failed"),
+    );
+  });
+  logger.info({ expression }, "Odds scheduler configured");
+}
+
 /* ─── Daily settlement runner ─── */
 async function runDailySettlement() {
   logger.info("[SETTLEMENT] Cron harian dimulai — mengecek hasil pertandingan semalam...");
@@ -58,12 +68,27 @@ export function startScheduler() {
   if (currentOddsTask)       { currentOddsTask.stop(); }
   if (currentSettlementTask) { currentSettlementTask.stop(); }
 
-  /* Odds sync: every 3 hours */
-  currentOddsTask = cron.schedule("0 */3 * * *", () => {
-    loadConfigAndSync().catch((err) =>
-      logger.error({ err }, "Scheduled odds sync failed"),
-    );
-  });
+  /* The initial run loads scheduler_config; reconfigure from there. */
+  let configuredExpression = "0 */3 * * *";
+  supabase
+    .from("scheduler_config")
+    .select("cron_expression")
+    .limit(1)
+    .maybeSingle()
+    .then(({ data, error }) => {
+      if (error) {
+        logger.warn({ err: error }, "Failed to load cron expression — using default");
+      }
+      const expression = typeof data?.cron_expression === "string" && data.cron_expression.trim()
+        ? data.cron_expression.trim()
+        : configuredExpression;
+      try {
+        scheduleOddsTask(expression);
+      } catch (err) {
+        logger.error({ err, expression }, "Invalid cron expression — using default");
+        scheduleOddsTask(configuredExpression);
+      }
+    });
 
   /* Settlement: every day at 06:00 server time */
   currentSettlementTask = cron.schedule("0 6 * * *", () => {
@@ -72,5 +97,5 @@ export function startScheduler() {
     );
   });
 
-  logger.info("Scheduler running — odds sync every 3h | settlement daily at 06:00");
+  logger.info("Scheduler running — odds sync uses scheduler_config | settlement daily at 06:00");
 }

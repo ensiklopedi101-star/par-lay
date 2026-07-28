@@ -60,6 +60,8 @@ A football betting analysis system that pulls odds from Odds-API, stores team st
 - `CSV_UPLOAD_PASSWORD` defaults to `parlay2024` — set env var to change it
 - The frontend uses `@/api/parlay-hooks` not `@workspace/api-client-react` for data fetching
 - If Supabase views (`v_active_parlays`, `v_odds_movement`) don't exist, the Supabase routes will return errors
+- External keep-alive: call `GET /api/cron?action=keep-alive` every 30 minutes with the `x-cron-secret` header (or `token` query parameter). Do not use `action=sync` every 15 minutes; it consumes Odds API quota.
+- Odds movement is stored in `odds_movement_history` when a new odds snapshot differs from the previous snapshot. The keep-alive endpoint itself does not fetch odds or create a snapshot.
 
 ## Pointers
 
