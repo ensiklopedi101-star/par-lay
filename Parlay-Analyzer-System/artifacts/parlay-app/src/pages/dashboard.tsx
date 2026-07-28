@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { addDays, formatISO } from "date-fns";
-import { useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth } from "@/api/parlay-hooks";
+import { useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth, getListSupabaseParlaysQueryKey } from "@/api/parlay-hooks";
+import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Activity, Clock, Database, Server, BrainCircuit, CalendarDays, Zap, Shield } from "lucide-react";
@@ -30,6 +31,7 @@ function HealthBadge({ status }: { status: string }) {
 }
 
 export default function Dashboard() {
+  const queryClient = useQueryClient();
   const { data: syncStatus, isLoading: isSyncLoading } = useGetSyncStatus();
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
   const now = new Date();
@@ -41,11 +43,18 @@ export default function Dashboard() {
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
   const [scanState, setScanState] = useState<"idle" | "scanning">("idle");
   const [scanError, setScanError] = useState<string | null>(null);
+  const [scanResult, setScanResult] = useState<{
+    scanned: number;
+    validTickets: number;
+    parlayLegs: number;
+    message?: string;
+  } | null>(null);
   const { open, withPassword, onSubmit, onCancel } = useAdminPassword();
 
   const runScan = async (pwd: string) => {
     setScanState("scanning");
     setScanError(null);
+    setScanResult(null);
     try {
       const res = await fetch("/api/analyze/batch", {
         method: "POST",
@@ -55,8 +64,20 @@ export default function Dashboard() {
         const body = await res.json().catch(() => ({ error: `API ${res.status}` }));
         throw new Error(body.error ?? `API ${res.status}`);
       }
-      // invalidate queries
-      window.location.reload();
+      const result = (await res.json()) as {
+        scanned?: number;
+        validTickets?: number;
+        parlayLegs?: number;
+        message?: string;
+      };
+      setScanResult({
+        scanned: result.scanned ?? 0,
+        validTickets: result.validTickets ?? 0,
+        parlayLegs: result.parlayLegs ?? 0,
+        message: result.message,
+      });
+      setScanState("idle");
+      await queryClient.invalidateQueries({ queryKey: getListSupabaseParlaysQueryKey({ status: "active" }) });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Scan failed";
       console.error("Scan failed:", err);
@@ -91,6 +112,26 @@ export default function Dashboard() {
         <Card className="border-red-500/20 bg-red-500/5">
           <CardContent className="py-3 text-sm text-red-500">
             Scan gagal: {scanError}
+          </CardContent>
+        </Card>
+      )}
+
+      {scanResult && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardContent className="py-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="font-semibold text-primary">Scanning selesai</div>
+                <div className="text-sm text-muted-foreground">
+                  {scanResult.message ?? "Hasil analisis berhasil diperbarui."}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3 text-sm tabular-nums">
+                <span>Scanned: <strong>{scanResult.scanned}</strong></span>
+                <span>Valid: <strong>{scanResult.validTickets}</strong></span>
+                <span>Parlay legs: <strong>{scanResult.parlayLegs}</strong></span>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
