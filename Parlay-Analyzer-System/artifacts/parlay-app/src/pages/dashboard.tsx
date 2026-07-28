@@ -48,6 +48,15 @@ export default function Dashboard() {
     validTickets: number;
     parlayLegs: number;
     message?: string;
+    tickets?: Array<{
+      home_team: string;
+      away_team: string;
+      status: string;
+      confidence: number;
+      selection: string;
+      prediction_text: string;
+      is_parlay_leg: boolean;
+    }>;
   } | null>(null);
   const { open, withPassword, onSubmit, onCancel } = useAdminPassword();
 
@@ -69,12 +78,22 @@ export default function Dashboard() {
         validTickets?: number;
         parlayLegs?: number;
         message?: string;
+        tickets?: Array<{
+          home_team: string;
+          away_team: string;
+          status: string;
+          confidence: number;
+          selection: string;
+          prediction_text: string;
+          is_parlay_leg: boolean;
+        }>;
       };
       setScanResult({
         scanned: result.scanned ?? 0,
         validTickets: result.validTickets ?? 0,
         parlayLegs: result.parlayLegs ?? 0,
         message: result.message,
+        tickets: result.tickets,
       });
       setScanState("idle");
       await queryClient.invalidateQueries({ queryKey: getListSupabaseParlaysQueryKey({ status: "active" }) });
@@ -132,6 +151,25 @@ export default function Dashboard() {
                 <span>Parlay legs: <strong>{scanResult.parlayLegs}</strong></span>
               </div>
             </div>
+            {scanResult.tickets && scanResult.tickets.length > 0 && (
+              <div className="mt-4 space-y-2 border-t border-border/50 pt-3">
+                {scanResult.tickets.map((ticket, index) => (
+                  <div
+                    key={`${ticket.home_team}-${ticket.away_team}-${index}`}
+                    className="flex flex-col gap-1 rounded-md bg-background/40 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <span className="font-medium">
+                      {ticket.home_team} vs {ticket.away_team}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {ticket.status === "error"
+                        ? ticket.prediction_text
+                        : `${ticket.selection || "NO_BET"} · confidence ${ticket.confidence}${ticket.is_parlay_leg ? " · parlay leg" : ""}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

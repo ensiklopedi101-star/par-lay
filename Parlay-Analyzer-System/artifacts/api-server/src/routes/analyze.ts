@@ -21,12 +21,18 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
     const now = new Date().toISOString();
     const future = new Date(Date.now() + 11 * 24 * 60 * 60 * 1000).toISOString();
 
-    const { data: fixtures } = await supabase
+    const { data: fixtures, error: fixturesError } = await supabase
       .from("fixtures")
-      .select("fixture_id, home_team, away_team, league_name, event_date")
-      .gte("event_date", now)
-      .lte("event_date", future)
-      .order("event_date", { ascending: true });
+      .select("fixture_id, home_team_name, away_team_name, league_name, fixture_date")
+      .gte("fixture_date", now)
+      .lte("fixture_date", future)
+      .order("fixture_date", { ascending: true });
+
+    if (fixturesError) {
+      logger.error({ error: fixturesError }, "BATCH SCANNER: Failed to load fixtures");
+      res.status(500).json({ error: `Failed to load fixtures: ${fixturesError.message}` });
+      return;
+    }
 
     if (!fixtures || fixtures.length === 0) {
       res.json({ scanned: 0, tickets: [], message: "No fixtures in the next 11 days" });
@@ -114,8 +120,8 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
         const message = err instanceof Error ? err.message : "Unknown";
         tickets.push({
           fixture_id: String(fx.fixture_id),
-          home_team: fx.home_team,
-          away_team: fx.away_team,
+          home_team: fx.home_team_name,
+          away_team: fx.away_team_name,
           league: fx.league_name ?? "",
           confidence: 0,
           selection: "NO_BET",
@@ -155,7 +161,13 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
       { scanned: tickets.length, valid: validTickets.length, parlayLegs: parlayLegs.length },
       "BATCH SCANNER: Done"
     );
-    res.json({ scanned: tickets.length, validTickets: validTickets.length, parlayLegs: parlayLegs.length, tickets });
+    res.json({
+      scanned: tickets.length,
+      validTickets: validTickets.length,
+      parlayLegs: parlayLegs.length,
+      tickets,
+      message: `Processed ${tickets.length} of ${fixtures.length} fixtures in the next 11 days`,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     logger.error({ err }, "BATCH SCANNER failed");
