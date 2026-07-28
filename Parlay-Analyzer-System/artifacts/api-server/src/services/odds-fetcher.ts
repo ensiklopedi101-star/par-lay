@@ -371,76 +371,93 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
 
   // 2. Upsert odds to Supabase + 3. Insert odds movement snapshot
   for (const [bookmaker, markets] of Object.entries(event.bookmakers)) {
-    const firstMarket = markets[0];
-    if (firstMarket && firstMarket.odds.length >= 1) {
-      const odds = firstMarket.odds[0];
-      const oddsPayload = {
-        match_id: String(event.id),
-        home_team: event.home,
-        away_team: event.away,
-        commence_time: event.date,
-        bookmaker,
-        market_type: firstMarket.name,
-        odds_1: odds.home ? parseFloat(odds.home) : null,
-        odds_2: odds.away ? parseFloat(odds.away) : null,
-        odds_draw: odds.draw ? parseFloat(odds.draw) : null,
-        captured_at: new Date().toISOString(),
-      };
-      logger.info({ oddsPayload }, "RADAR: Attempting odds save");
-      // The live database does not define a unique constraint on
-      // (match_id, bookmaker), so PostgREST cannot use that pair in
-      // `onConflict`. Update the existing bookmaker row explicitly and
-      // insert when this fixture/bookmaker has not been seen yet.
-      const { data: existingOdds, error: existingOddsErr } = await supabase
-        .from("odds_history")
-        .select("id")
-        .eq("match_id", String(event.id))
-        .eq("bookmaker", bookmaker)
-        .order("captured_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      let oddsErr = existingOddsErr;
-      if (!oddsErr && existingOdds?.id != null) {
-        const result = await supabase
+    for (const market of markets) {
+      if (market.odds.length >= 1) {
+        const odds = market.odds[0];
+        const oddsPayload = {
+          match_id: String(event.id),
+          home_team: event.home,
+          away_team: event.away,
+          commence_time: event.date,
+          bookmaker,
+          market_type: market.name,
+          odds_1: odds.home ? parseFloat(odds.home) : null,
+          odds_2: odds.away ? parseFloat(odds.away) : null,
+          odds_draw: odds.draw ? parseFloat(odds.draw) : null,
+          captured_at: new Date().toISOString(),
+        };
+        logger.info({ oddsPayload }, "RADAR: Attempting odds save");
+        // The live database does not define a unique constraint on
+        // (match_id, bookmaker, market_type), so save the latest row
+        // explicitly instead of relying on PostgREST onConflict.
+        const { data: existingOdds, error: existingOddsErr } = await supabase
           .from("odds_history")
-          .update(oddsPayload)
-          .eq("id", existingOdds.id);
-        oddsErr = result.error;
-      } else if (!oddsErr) {
-        const result = await supabase
-          .from("odds_history")
-          .insert(oddsPayload);
-        oddsErr = result.error;
-      }
-      if (oddsErr) {
-        logger.error({ error: oddsErr, errorMessage: oddsErr.message, errorDetails: oddsErr.details, eventId: event.id, bookmaker }, "RADAR: Supabase odds save ERROR");
-      } else {
-        logger.info({ eventId: event.id, bookmaker }, "RADAR: Odds save SUCCESS");
-      }
+          .select("id")
+          .eq("match_id", String(event.id))
+          .eq("bookmaker", bookmaker)
+          .eq("market_type", market.name)
+          .order("captured_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-      // 3. Record snapshot to odds_movement_history
-      await insertOddsMovementSnapshot(event.id, bookmaker, firstMarket);
+        let oddsErr = existingOddsErr;
+        if (!oddsErr && existingOdds?.id != null) {
+          const result = await supabase
+            .from("odds_history")
+            .update(oddsPayload)
+            .eq("id", existingOdds.id);
+          oddsErr = result.error;
+        } else if (!oddsErr) {
+          const result = await supabase
+            .from("odds_history")
+            .insert(oddsPayload);
+          oddsErr = result.error;
+        }
+        if (oddsErr) {
+          logger.error({ error: oddsErr, errorMessage: oddsErr.message, errorDetails: oddsErr.details, eventId: event.id, bookmaker, market: market.name }, "RADAR: Supabase odds save ERROR");
+        } else {
+          logger.info({ eventId: event.id, bookmaker, market: market.name }, "RADAR: Odds save SUCCESS");
+        }
 
-      // Also snapshot additional markets (OU, BTTS) if available
-      for (const mkt of markets.slice(1)) {
-        await insertOddsMovementSnapshot(event.id, bookmaker, mkt);
+        // 3. Record snapshot to odds_movement_history
+        await insertOddsMovementSnapshot(event.id, bookmaker, market);
       }
     }
   }
 }
 
-async function getAlreadySyncedEventIds(eventIds: number[]): Promise<Set<number>> {
+async function getAlreadySyncedEventIds(
+  eventIds: number[],
+  requestedBookmakers: string[],
+): Promise<Set<number>> {
   if (eventIds.length === 0) return new Set();
   const { data, error } = await supabase
     .from("odds_history")
-    .select("match_id")
+    .select("match_id, bookmaker")
     .in("match_id", eventIds.map((id) => String(id)));
   if (error) {
     logger.error({ error }, "Failed to fetch already synced odds");
     return new Set();
   }
-  return new Set((data ?? []).map((r) => Number(r.match_id)));
+  const configured = new Set(requestedBookmakers.map((name) => name.trim()).filter(Boolean));
+  const bookmakersByEvent = new Map<number, Set<string>>();
+  for (const row of data ?? []) {
+    const eventId = Number(row.match_id);
+    if (!Number.isFinite(eventId)) continue;
+    if (!bookmakersByEvent.has(eventId)) bookmakersByEvent.set(eventId, new Set());
+    bookmakersByEvent.get(eventId)!.add(String(row.bookmaker));
+  }
+
+  // A fixture is complete only when every configured bookmaker has at least
+  // one saved market. This allows a later sync to fill a newly selected
+  // bookmaker without re-fetching fixtures that are already complete.
+  return new Set(
+    Array.from(bookmakersByEvent.entries())
+      .filter(([, bookmakers]) =>
+        configured.size === 0 || Array.from(configured).every((name) => bookmakers.has(name)),
+      )
+      .map(([eventId]) => eventId),
+  );
 }
 
 export async function fetchAndSaveLeagueOdds(
@@ -473,7 +490,8 @@ export async function fetchAndSaveLeagueOdds(
       return Number.isFinite(eventTime) && eventTime >= now && eventTime <= windowEnd;
     });
     const allIds = upcomingEvents.map((e) => e.id);
-    const alreadySynced = await getAlreadySyncedEventIds(allIds);
+    const requestedBookmakers = bookmakers.split(",").map((name) => name.trim()).filter(Boolean);
+    const alreadySynced = await getAlreadySyncedEventIds(allIds, requestedBookmakers);
     let toFetch = upcomingEvents
       .filter((e) => !alreadySynced.has(e.id))
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
