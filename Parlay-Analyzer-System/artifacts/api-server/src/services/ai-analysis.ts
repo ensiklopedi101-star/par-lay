@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { cleanTeamName } from "../lib/team-name-cleaner";
 
 /* ═══════════════════════════════════════════════════════════════
    DEFAULT SYSTEM INSTRUCTION — Quant Sniper v4
@@ -367,6 +368,116 @@ interface StandingContext {
   form: string;
 }
 
+const TEAM_NAME_ALIASES: Record<string, string> = {
+  united: "utd",
+  "manchester utd": "man utd",
+  "inter milan": "inter",
+  "internazionale": "inter",
+  psg: "paris",
+};
+
+function normalizeTeamForMatch(name: string): string {
+  const cleaned = cleanTeamName(name)
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  return TEAM_NAME_ALIASES[cleaned] ?? cleaned.replace(/\bunited\b/g, "utd");
+}
+
+function leagueSlugCandidates(leagueSlug: string): string[] {
+  const slug = leagueSlug.trim().toLowerCase();
+  const candidates = new Set([slug]);
+  if (slug.includes("republic-of-korea")) {
+    candidates.add(slug.replace("republic-of-korea", "south-korea"));
+  }
+  if (slug.includes("south-korea")) {
+    candidates.add(slug.replace("south-korea", "republic-of-korea"));
+  }
+  return Array.from(candidates).filter(Boolean);
+}
+
+function seasonStart(season: unknown): number {
+  const match = String(season ?? "").match(/\b(20\d{2})\b/);
+  return match ? Number(match[1]) : 0;
+}
+
+function seasonIncludesYear(season: unknown, year: number): boolean {
+  const years = [...String(season ?? "").matchAll(/20\d{2}/g)].map((match) => Number(match[0]));
+  if (years.length >= 2) return year >= years[0]! && year <= years[1]!;
+  return years[0] === year;
+}
+
+function matchesPlayedFromStats(row: Record<string, unknown> | undefined): number {
+  const form = row?.stats_team_form;
+  if (!form || typeof form !== "object") return 0;
+  const value = (form as Record<string, unknown>).MP ??
+    (form as Record<string, unknown>).mp ??
+    (form as Record<string, unknown>)["Matches Played"];
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function teamMatchScore(requested: string, candidate: string): number {
+  const wanted = normalizeTeamForMatch(requested);
+  const actual = normalizeTeamForMatch(candidate);
+  if (!wanted || !actual) return 0;
+  if (wanted === actual) return 100;
+  const wantedTokens = new Set(wanted.split(" "));
+  const actualTokens = new Set(actual.split(" "));
+  const overlap = [...wantedTokens].filter((token) => actualTokens.has(token)).length;
+  const coverage = overlap / Math.max(wantedTokens.size, actualTokens.size);
+  if (coverage >= 0.75) return 70 + Math.round(coverage * 20);
+  if (coverage >= 0.5 && (wanted.includes(actual) || actual.includes(wanted))) return 55;
+  return 0;
+}
+
+const STATS_COLUMNS = "stats_xg, stats_fts, stats_btts, stats_goals_conceded, stats_goals_scored, stats_shots, stats_over_25, stats_over_35, stats_under, stats_team_form, stats_ht, season, team_name, league_slug";
+
+async function findTeamStats(teamName: string, leagueSlug: string): Promise<Record<string, unknown>> {
+  const { data, error } = await supabase
+    .from("team_season_stats")
+    .select(STATS_COLUMNS)
+    .in("league_slug", leagueSlugCandidates(leagueSlug))
+    .limit(1000);
+
+  if (error) {
+    logger.warn({ error, teamName, leagueSlug }, "Failed to resolve team statistics");
+    return {};
+  }
+
+  const matches = (data ?? [])
+    .map((row) => ({ row: row as Record<string, unknown>, score: teamMatchScore(teamName, String(row.team_name ?? "")) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return seasonStart(b.row.season) - seasonStart(a.row.season);
+    });
+
+  const best = matches[0]?.row;
+  if (!best) return {};
+
+  const currentYear = new Date().getFullYear();
+  const currentRows = matches.filter((entry) => seasonIncludesYear(entry.row.season, currentYear));
+  const current = currentRows[0]?.row;
+  const baseline = best;
+  const matchesPlayed = matchesPlayedFromStats(current);
+
+  if (current && matchesPlayed >= 6) return current;
+  if (current && baseline !== current) {
+    return { current_season: current, baseline_reference: baseline, _meta: "COMBINED" };
+  }
+  if (baseline) {
+    return {
+      current_season: current ? "DATA_UNAVAILABLE" : "DATA_UNAVAILABLE",
+      baseline_reference: baseline,
+      _meta: "BASELINE_ONLY",
+    };
+  }
+  return {};
+}
+
 async function fetchHeadToHead(
   homeTeam: string,
   awayTeam: string,
@@ -406,21 +517,18 @@ async function fetchStandingContext(
   season: string,
 ): Promise<StandingContext | null> {
   try {
-    const { data } = await supabase
-      .from("team_season_stats")
-      .select("team_name, stats_team_form")
-      .ilike("team_name", teamName)
-      .ilike("league_slug", leagueSlug)
-      .ilike("season", season)
-      .maybeSingle();
-    if (!data) return null;
-    const form = (data.stats_team_form as Record<string, unknown>) ?? {};
+    const data = await findTeamStats(teamName, leagueSlug);
+    const stats = (data.current_season && typeof data.current_season === "object"
+      ? data.current_season
+      : data) as Record<string, unknown>;
+    if (!Object.keys(stats).length) return null;
+    const form = (stats.stats_team_form as Record<string, unknown>) ?? {};
     const toNum = (v: unknown) => {
       const n = typeof v === "string" ? Number(v) : Number(v ?? 0);
       return Number.isFinite(n) ? n : 0;
     };
     return {
-      team: data.team_name,
+      team: String(stats.team_name ?? teamName),
       position: toNum(form.Pos),
       points: toNum(form.Pts),
       played: toNum(form.MP),
@@ -644,6 +752,14 @@ function hasStatsObject(stats: Record<string, unknown> | undefined): boolean {
   return Object.values(stats).some((v) => v !== null && v !== undefined);
 }
 
+function hasStatValue(stats: Record<string, unknown>, key: string): boolean {
+  if (stats[key] !== null && stats[key] !== undefined) return true;
+  const current = stats.current_season as Record<string, unknown> | undefined;
+  const baseline = stats.baseline_reference as Record<string, unknown> | undefined;
+  return (current?.[key] !== null && current?.[key] !== undefined) ||
+    (baseline?.[key] !== null && baseline?.[key] !== undefined);
+}
+
 /* ═══════════════════════════════════════════════════════════════
    EXPORTS
    ═══════════════════════════════════════════════════════════════ */
@@ -702,9 +818,8 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
 
   /* ── 3. Fetch odds movement trend + lessons + performance log + relational context (parallel) ── */
   // Ekstrak league slug dari fixture untuk RAG filtering
-  const leagueSlug: string = fixture.league_slug ?? fixture.league_name ?? "";
-  const currentSeason = String(new Date().getFullYear());
-  const prevSeason = String(new Date().getFullYear() - 1);
+   const leagueSlug: string = fixture.league_slug ?? fixture.league_name ?? "";
+   const currentSeason = String(new Date().getFullYear());
   const [movementRows, lessons, perfLog, h2h, homeStandings, awayStandings] = await Promise.all([
     fetchOddsMovementTrend(fixtureId),
     fetchRelevantLessons(homeTeam, awayTeam, leagueSlug),
@@ -723,59 +838,11 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     formatStandingContextBlock("KLASEMEN AWAY", awayStandings),
   ].join("\n");
 
-  /* ── 4. Fetch team stats (multi-season: current + previous) ── */
-  const STAT_COLS = "stats_xg, stats_fts, stats_btts, stats_goals_conceded, stats_goals_scored, stats_shots, stats_over_25, stats_over_35, stats_under, stats_team_form, stats_ht, season, matches_played";
-
-  const fetchStats = async (teamName: string): Promise<Record<string, unknown>> => {
-    // 1. Strict canonical match: team_name + league_slug + musim berjalan.
-    //    Tidak menggunakan partial match karena nama tim sudah dijamin canonical
-    //    oleh Supabase Edge Function (FootyStats → fixtures sync).
-    let { data: current } = await supabase
-      .from("team_season_stats")
-      .select(STAT_COLS)
-      .ilike("team_name", teamName)
-      .ilike("league_slug", leagueSlug)
-      .ilike("season", currentSeason)
-      .limit(1)
-      .maybeSingle();
-
-    const matchesPlayed = (current?.matches_played as number) ?? 0;
-
-    // 2. Fallback ke musim sebelumnya jika data tidak ditemukan atau
-    //    musim berjalan < 6 pertandingan (data terlalu sedikit untuk diandalkan).
-    //    Tetap menggunakan exact match pada team_name + league_slug — tanpa partial name.
-    //    Setelah ≥ 6 pertandingan, data musim berjalan menjadi prioritas penuh.
-    if (!current || matchesPlayed < 6) {
-      const { data: baseline } = await supabase
-        .from("team_season_stats")
-        .select(STAT_COLS)
-        .ilike("team_name", teamName)
-        .ilike("league_slug", leagueSlug)
-        .ilike("season", prevSeason)
-        .limit(1)
-        .maybeSingle();
-
-      if (baseline && current) {
-        // Gabungkan: data musim berjalan + referensi musim lalu
-        return {
-          current_season: current,
-          baseline_reference: baseline,
-          _meta: "COMBINED",
-        } as unknown as Record<string, unknown>;
-      }
-      if (baseline && !current) {
-        return {
-          current_season: "DATA_UNAVAILABLE",
-          baseline_reference: baseline,
-          _meta: "BASELINE_ONLY",
-        } as unknown as Record<string, unknown>;
-      }
-    }
-
-    return (current ?? {}) as Record<string, unknown>;
-  };
-
-  const [homeStats, awayStats] = await Promise.all([fetchStats(homeTeam), fetchStats(awayTeam)]);
+   /* ── 4. Fetch team stats with league/name/season resolver ── */
+   const [homeStats, awayStats] = await Promise.all([
+     findTeamStats(homeTeam, leagueSlug),
+     findTeamStats(awayTeam, leagueSlug),
+   ]);
 
   /* ── Terminal monitoring ── */
   const STAT_KEYS = ["stats_xg","stats_fts","stats_btts","stats_goals_conceded","stats_goals_scored","stats_shots","stats_over_25","stats_over_35","stats_under","stats_team_form","stats_ht"] as const;
@@ -786,7 +853,7 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
   console.log(`[AI-ANALYSIS] Status JSONB statistik:`);
   for (const key of STAT_KEYS) {
     const label = key.replace("stats_", "").padEnd(18);
-    console.log(`  ${label}  Home: ${homeStats[key] != null ? "✓" : "✗"}  |  Away: ${awayStats[key] != null ? "✓" : "✗"}`);
+    console.log(`  ${label}  Home: ${hasStatValue(homeStats, key) ? "✓" : "✗"}  |  Away: ${hasStatValue(awayStats, key) ? "✓" : "✗"}`);
   }
 
   /* ── Guard: tolak jika statistik kosong ── */

@@ -16,3 +16,4 @@
 - [Upcoming Odds Sync](upcoming-odds-sync.md) — Simpan histori; ambil odds hanya untuk fixture pending 10 hari ke depan dengan cap 80 event per siklus.
 - [Cron and Market Movement](cron-and-market-movement.md) — Keep-alive memakai `/api/cron`; market movement tercatat saat fetch odds menghasilkan perubahan, bukan saat ping keep-alive.
 - [Batch Scanner Fixture Schema](batch-scanner-fixture-schema.md) — Batch analyzer harus memakai kolom live `fixture_date`, `home_team_name`, dan `away_team_name`.
+- [Cross-league Stats Resolver](stats-resolver.md) — Resolver stats toleran terhadap variasi slug liga, rentang musim, suffix nama tim, dan membaca MP dari JSONB form.
