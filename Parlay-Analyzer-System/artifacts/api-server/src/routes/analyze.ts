@@ -70,8 +70,14 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
 
     const toScan = fixtures.filter((f) => !existingSet.has(String(f.fixture_id))).slice(0, 10);
 
-    for (const fx of toScan) {
+    for (let index = 0; index < toScan.length; index++) {
+      const fx = toScan[index]!;
       try {
+        if (index > 0) {
+          logger.info("[AI-BATCH] Menunggu 5 detik (API Throttling)...");
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+        }
+        logger.info({ matchNumber: index + 1, total: toScan.length }, `[AI-BATCH] Menganalisa pertandingan ${index + 1}...`);
         const result = await analyzeFixture(String(fx.fixture_id));
         /* Try to extract JSON from prediction_text */
         let ticket = {

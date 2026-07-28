@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { cleanTeamName } from "../lib/team-name-cleaner";
+import { getGeminiModel } from "./model-discovery";
 
 /* ═══════════════════════════════════════════════════════════════
    DEFAULT SYSTEM INSTRUCTION — Quant Sniper v4
@@ -778,12 +779,80 @@ export class StatsEmptyError extends Error {
   }
 }
 
+const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+function isRetryableAIError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(429|503)\b|too many requests|service unavailable|temporarily unavailable/i.test(message);
+}
+
+async function generateWithGroq(
+  apiKey: string,
+  systemInstruction: string,
+  prompt: string,
+): Promise<string> {
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: process.env["GROQ_MODEL"] ?? "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.2,
+    }),
+  });
+  const body = await response.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } };
+  if (!response.ok) throw new Error(body.error?.message ?? `Groq API ${response.status}`);
+  const text = body.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error("Groq returned an empty response");
+  return text;
+}
+
+async function generateAIResponse(apiKey: string | undefined, systemInstruction: string, prompt: string): Promise<{ text: string; provider: string; model: string }> {
+  const groqKey = process.env["GROQ_API_KEY"];
+  const provider = (process.env["AI_PROVIDER"] ?? "auto").toLowerCase();
+  if (provider === "groq" || (provider === "auto" && !apiKey && groqKey)) {
+    if (!groqKey) throw new Error("GROQ_API_KEY is not set");
+    return { text: await generateWithGroq(groqKey, systemInstruction, prompt), provider: "groq", model: process.env["GROQ_MODEL"] ?? "llama-3.3-70b-versatile" };
+  }
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+
+  const modelName = await getGeminiModel(apiKey);
+  const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({
+    model: modelName,
+    systemInstruction,
+  });
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    try {
+      const result = await model.generateContent(prompt);
+      return { text: result.response.text(), provider: "gemini", model: modelName };
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableAIError(error) || attempt === 2) break;
+      logger.warn({ attempt: attempt + 1, model: modelName }, "[AI-RETRY] Gemini 429/503; waiting 15 seconds");
+      await sleep(15_000);
+    }
+  }
+  if (groqKey && provider === "auto") {
+    logger.warn("[AI-FALLBACK] Gemini unavailable; trying Groq");
+    return { text: await generateWithGroq(groqKey, systemInstruction, prompt), provider: "groq", model: process.env["GROQ_MODEL"] ?? "llama-3.3-70b-versatile" };
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 /* ═══════════════════════════════════════════════════════════════
    MAIN: analyzeFixture
    ═══════════════════════════════════════════════════════════════ */
 export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult> {
   const apiKey = process.env["GEMINI_API_KEY"];
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+  const groqKey = process.env["GROQ_API_KEY"];
+  const provider = (process.env["AI_PROVIDER"] ?? "auto").toLowerCase();
+  if (!apiKey && !(provider === "groq" && groqKey) && !(provider === "auto" && groqKey)) {
+    throw new Error("GEMINI_API_KEY is not set and Groq fallback is unavailable");
+  }
   if (!supabase) throw new Error("Supabase client not initialised");
 
   /* ── 1. Fetch fixture ── */
@@ -869,7 +938,7 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     console.log(`[AI-ANALYSIS] PERINGATAN — data ${!homeHasData ? homeTeam : awayTeam} tidak ditemukan, melanjutkan parsial.`);
   }
 
-  console.log(`[AI-ANALYSIS] Mengirim prompt ke Gemini (gemini-2.0-flash)...\n`);
+   console.log(`[AI-ANALYSIS] Mengirim prompt ke AI provider...\n`);
   logger.info({ fixtureId, homeTeam, awayTeam, trendSnapshots: movementRows.length, ragLessons: lessons.length }, "Calling Gemini for analysis");
 
   /* ── 5. Load persona dari Supabase → Call Gemini ── */
@@ -879,17 +948,11 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     : persona;
   console.log(`[AI-ANALYSIS] Persona sumber: ${persona === DEFAULT_SYSTEM_INSTRUCTION ? "DEFAULT (fallback)" : "SUPABASE (kustom)"}`);
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    systemInstruction: finalPersona,
-  });
-
   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
-  const geminiResult = await model.generateContent(promptText);
-  const predictionText = geminiResult.response.text();
+   const aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
+   const predictionText = aiResult.text;
 
-  console.log(`[AI-ANALYSIS] Respons Gemini diterima (${predictionText.length} karakter).`);
+   console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
 
   /* ── 6. Simpan ke ai_predictions ── */
   const { error: insertError } = await supabase.from("ai_predictions").insert({
