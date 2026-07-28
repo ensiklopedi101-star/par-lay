@@ -8,18 +8,18 @@ import { requireAdmin } from "../middlewares/admin";
 const router: IRouter = Router();
 
 /* ═════════════════════════════════════════════════════════════════════════════════
-   M3: BATCH SCANNER — Scan semua fixture dalam 48 jam ke depan
+   M3: BATCH SCANNER — Scan semua fixture dalam 11 hari ke depan
    (didefinisikan sebelum /analyze/:fixtureId agar tidak tertangkap wildcard)
    ══════════════════════════════════════════════════════════════════════════════════ */
 
-/** Admin-only: jalankan batch scan AI untuk fixture 48 jam ke depan. */
+/** Admin-only: jalankan batch scan AI untuk fixture 11 hari ke depan. */
 router.post("/analyze/batch", requireAdmin, async (_req, res) => {
   try {
     logger.info("BATCH SCANNER: Request received");
 
-    /* 1. Ambil fixture dalam 48 jam ke depan */
+    /* 1. Ambil fixture dalam 11 hari ke depan */
     const now = new Date().toISOString();
-    const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+    const future = new Date(Date.now() + 11 * 24 * 60 * 60 * 1000).toISOString();
 
     const { data: fixtures } = await supabase
       .from("fixtures")
@@ -29,7 +29,7 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
       .order("event_date", { ascending: true });
 
     if (!fixtures || fixtures.length === 0) {
-      res.json({ scanned: 0, tickets: [], message: "No fixtures in the next 48 hours" });
+      res.json({ scanned: 0, tickets: [], message: "No fixtures in the next 11 days" });
       return;
     }
 

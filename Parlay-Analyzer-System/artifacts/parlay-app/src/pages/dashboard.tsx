@@ -104,7 +104,7 @@ export default function Dashboard() {
           className="bg-primary hover:bg-primary/90 text-primary-foreground"
         >
           <Zap className="w-4 h-4 mr-2" />
-          {scanState === "scanning" ? "Scanning..." : "JALANKAN SCANNING GLOBAL & BUAT PARLAY"}
+          {scanState === "scanning" ? "Scanning 11 hari..." : "SCANNING 11 HARI & BUAT PARLAY"}
         </Button>
       </div>
 
