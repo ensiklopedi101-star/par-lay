@@ -12,6 +12,8 @@ async function apiGet<T>(url: string): Promise<T> {
 export interface SyncStatus {
   isRunning: boolean;
   totalEvents: number;
+  configuredLeagueCount?: number;
+  configuredLeagues?: string[];
   lastSyncAt?: string;
   leagueBreakdown?: { leagueSlug: string; eventCount: number }[];
 }

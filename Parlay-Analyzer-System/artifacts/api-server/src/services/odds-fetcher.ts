@@ -7,7 +7,12 @@ let syncRunning = false;
 export function isSyncRunning(): boolean { return syncRunning; }
 
 const MAX_EVENTS_PER_SYNC = 80;
+const UPCOMING_WINDOW_DAYS = 10;
 export const DEFAULT_BOOKMAKERS = "Bet365";
+
+function redactApiKey(url: string): string {
+  return url.replace(/([?&]apiKey=)[^&]*/i, "$1[REDACTED]");
+}
 
 interface SyncRunRecord {
   id: number;
@@ -108,6 +113,8 @@ export const DEFAULT_LEAGUES: LeagueConfig[] = [
   { slug: "republic-of-korea-k-league-1", name: "K-League 1" },
   { slug: "china-chinese-super-league", name: "Chinese Super League" },
   { slug: "japan-j1-league", name: "J1 League (Japan)" },
+  { slug: "uefa-europa-league", name: "UEFA Europa League" },
+  { slug: "uefa-champions-league", name: "UEFA Champions League" },
 ];
 
 export class RateLimitError extends Error {
@@ -170,7 +177,7 @@ function parseRetryAfter(body: string): number {
 }
 
 async function apiGet<T>(url: string, label: string): Promise<T> {
-  logger.info({ url, label }, "RADAR: HTTP request to Odds-API");
+   logger.info({ url: redactApiKey(url), label }, "RADAR: HTTP request to Odds-API");
   const res = await fetch(url);
   logger.info({ status: res.status, statusText: res.statusText, label, ok: res.ok }, "RADAR: HTTP response from Odds-API");
   if (res.status === 429) {
@@ -189,7 +196,7 @@ async function apiGet<T>(url: string, label: string): Promise<T> {
 export async function fetchActiveLeagueSlugs(apiKey: string): Promise<Set<string>> {
   try {
     const url = `${BASE_URL}/leagues?apiKey=${apiKey}&sport=football&all=true`;
-    logger.info({ url }, "RADAR: Fetching active leagues from Odds-API");
+     logger.info({ url: redactApiKey(url) }, "RADAR: Fetching active leagues from Odds-API");
     const data = await apiGet<ApiLeague[]>(url, "leagues");
     logger.info({ rawData: data, dataLength: data?.length }, "RADAR: Response from Odds-API leagues");
     const filtered = data.filter((l) => l.eventsCount > 0);
@@ -210,7 +217,7 @@ async function fetchLeagueEvents(leagueSlug: string, apiKey: string): Promise<Ap
     status: "pending",
   });
   const url = `${BASE_URL}/events?${params}`;
-  logger.info({ url, leagueSlug }, "RADAR: Fetching league events from Odds-API");
+   logger.info({ url: redactApiKey(url), leagueSlug }, "RADAR: Fetching league events from Odds-API");
   const data = await apiGet<ApiEvent | ApiEvent[]>(
     url,
     `events:${leagueSlug}`,
@@ -222,7 +229,7 @@ async function fetchLeagueEvents(leagueSlug: string, apiKey: string): Promise<Ap
 async function fetchEventOdds(eventId: number, apiKey: string, bookmakers: string): Promise<ApiEvent> {
   const params = new URLSearchParams({ apiKey, eventId: String(eventId), bookmakers });
   const url = `${BASE_URL}/odds?${params}`;
-  logger.info({ url, eventId, bookmakers }, "RADAR: Fetching event odds from Odds-API");
+  logger.info({ url: redactApiKey(url), eventId, bookmakers }, "RADAR: Fetching event odds from Odds-API");
   const result = await apiGet<ApiEvent>(url, `odds:${eventId}`);
   logger.info({ eventId, hasBookmakers: !!result.bookmakers, bookmakerCount: result.bookmakers ? Object.keys(result.bookmakers).length : 0 }, "RADAR: Response from Odds-API odds");
   return result;
@@ -365,7 +372,7 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
   // 2. Upsert odds to Supabase + 3. Insert odds movement snapshot
   for (const [bookmaker, markets] of Object.entries(event.bookmakers)) {
     const firstMarket = markets[0];
-    if (firstMarket && firstMarket.odds.length >= 2) {
+    if (firstMarket && firstMarket.odds.length >= 1) {
       const odds = firstMarket.odds[0];
       const oddsPayload = {
         match_id: String(event.id),
@@ -379,14 +386,37 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
         odds_draw: odds.draw ? parseFloat(odds.draw) : null,
         captured_at: new Date().toISOString(),
       };
-      logger.info({ oddsPayload }, "RADAR: Attempting odds upsert");
-      const { error: oddsErr } = await supabase
+      logger.info({ oddsPayload }, "RADAR: Attempting odds save");
+      // The live database does not define a unique constraint on
+      // (match_id, bookmaker), so PostgREST cannot use that pair in
+      // `onConflict`. Update the existing bookmaker row explicitly and
+      // insert when this fixture/bookmaker has not been seen yet.
+      const { data: existingOdds, error: existingOddsErr } = await supabase
         .from("odds_history")
-        .upsert(oddsPayload, { onConflict: "match_id, bookmaker" });
+        .select("id")
+        .eq("match_id", String(event.id))
+        .eq("bookmaker", bookmaker)
+        .order("captured_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      let oddsErr = existingOddsErr;
+      if (!oddsErr && existingOdds?.id != null) {
+        const result = await supabase
+          .from("odds_history")
+          .update(oddsPayload)
+          .eq("id", existingOdds.id);
+        oddsErr = result.error;
+      } else if (!oddsErr) {
+        const result = await supabase
+          .from("odds_history")
+          .insert(oddsPayload);
+        oddsErr = result.error;
+      }
       if (oddsErr) {
-        logger.error({ error: oddsErr, errorMessage: oddsErr.message, errorDetails: oddsErr.details, eventId: event.id, bookmaker }, "RADAR: Supabase odds upsert ERROR");
+        logger.error({ error: oddsErr, errorMessage: oddsErr.message, errorDetails: oddsErr.details, eventId: event.id, bookmaker }, "RADAR: Supabase odds save ERROR");
       } else {
-        logger.info({ eventId: event.id, bookmaker }, "RADAR: Odds upsert SUCCESS");
+        logger.info({ eventId: event.id, bookmaker }, "RADAR: Odds save SUCCESS");
       }
 
       // 3. Record snapshot to odds_movement_history
@@ -436,9 +466,15 @@ export async function fetchAndSaveLeagueOdds(
       return { league: league.slug, saved: 0, skipped: true, errors: 0, eventsFetched: 0, oddsFetched: 0 };
     }
 
-    const allIds = events.map((e) => e.id);
+    const now = Date.now();
+    const windowEnd = now + UPCOMING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const upcomingEvents = events.filter((e) => {
+      const eventTime = new Date(e.date).getTime();
+      return Number.isFinite(eventTime) && eventTime >= now && eventTime <= windowEnd;
+    });
+    const allIds = upcomingEvents.map((e) => e.id);
     const alreadySynced = await getAlreadySyncedEventIds(allIds);
-    let toFetch = events
+    let toFetch = upcomingEvents
       .filter((e) => !alreadySynced.has(e.id))
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 

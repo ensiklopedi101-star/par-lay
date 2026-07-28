@@ -13,3 +13,4 @@
 - [Gemini Persona DB-Driven](gemini-persona-db-driven.md) — Persona aktif di `scheduler_config.ai_persona`; seed script di `artifacts/api-server/scripts/seed-persona.mjs`.
 - [Workspace Cleanup](workspace-cleanup.md) — Workflow canonical: `Start Backend` (8080) + `Start application` (5000). Workflow artifact duplikat (`api-server`, `parlay-app: web`) di-stop. `pnpm run typecheck` di root clean setelah install `@types/node` di `lib/supabase-client`.
 - [Supabase Node WebSocket](supabase-node-websocket.md) — Node.js 20 perlu transport `ws` eksplisit saat membuat client Supabase Realtime.
+- [Upcoming Odds Sync](upcoming-odds-sync.md) — Simpan histori; ambil odds hanya untuk fixture pending 10 hari ke depan dengan cap 80 event per siklus.

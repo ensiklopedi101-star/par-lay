@@ -35,7 +35,7 @@ export default function Dashboard() {
   const now = new Date();
   const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures({
     date_from: formatISO(now),
-    date_to: formatISO(addDays(now, 3)),
+    date_to: formatISO(addDays(now, 10)),
     limit: 500,
   });
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
@@ -173,7 +173,9 @@ export default function Dashboard() {
             {isSyncLoading ? (
               <Skeleton className="h-8 w-20" />
             ) : (
-              <div className="text-2xl font-bold">{syncStatus?.leagueBreakdown?.length ?? 0}</div>
+              <div className="text-2xl font-bold">
+                {syncStatus?.configuredLeagueCount ?? syncStatus?.leagueBreakdown?.length ?? 0}
+              </div>
             )}
           </CardContent>
         </Card>

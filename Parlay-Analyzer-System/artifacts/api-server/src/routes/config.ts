@@ -161,6 +161,15 @@ router.post("/sync/settle", requireAdmin, async (_req, res) => {
 
 router.get("/sync/status", async (_req, res) => {
   try {
+    const { data: schedulerConfig } = await supabase
+      .from("scheduler_config")
+      .select("leagues")
+      .limit(1)
+      .maybeSingle();
+    const configuredLeagues = Array.isArray(schedulerConfig?.leagues)
+      ? schedulerConfig.leagues
+      : [];
+
     const { count: totalCount, error: countErr } = await supabase
       .from("fixtures")
       .select("*", { count: "exact", head: true });
@@ -210,6 +219,8 @@ router.get("/sync/status", async (_req, res) => {
 
     res.json({
       totalEvents: totalCount ?? 0,
+      configuredLeagueCount: configuredLeagues.length,
+      configuredLeagues,
       lastSyncAt,
       lastSyncStatus,
       isRunning: isSyncRunning(),
