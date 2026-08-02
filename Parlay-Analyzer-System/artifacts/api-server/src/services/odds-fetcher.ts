@@ -8,7 +8,7 @@ export function isSyncRunning(): boolean { return syncRunning; }
 
 const MAX_EVENTS_PER_SYNC = 80;
 const UPCOMING_WINDOW_DAYS = 10;
-export const DEFAULT_BOOKMAKERS = "Bet365";
+export const DEFAULT_BOOKMAKERS = "Bet365,Betano";
 
 function redactApiKey(url: string): string {
   return url.replace(/([?&]apiKey=)[^&]*/i, "$1[REDACTED]");

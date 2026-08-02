@@ -24,7 +24,16 @@ async function loadConfigAndSync() {
         if (matched.length > 0) leagues = matched;
       }
       if (Array.isArray(cfg.bookmakers) && cfg.bookmakers.length > 0) {
-        bookmakers = cfg.bookmakers.join(",");
+        // 1xBet is not accepted by the current Odds-API free-plan catalogue.
+        // Keep the user's two-bookmaker configuration bounded, but replace only
+        // this known invalid legacy value for the outbound request.
+        bookmakers = cfg.bookmakers
+          .map((name: unknown) => String(name).trim())
+          .filter(Boolean)
+          .map((name: string) => name.toLowerCase() === "1xbet" ? "Betano" : name)
+          .filter((name: string, index: number, all: string[]) => all.indexOf(name) === index)
+          .slice(0, 2)
+          .join(",");
       }
     }
   } catch (err) {

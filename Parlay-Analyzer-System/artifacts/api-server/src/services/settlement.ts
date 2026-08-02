@@ -9,9 +9,10 @@
  * Semua skor sudah disimpan oleh odds-fetcher ke tabel `fixtures`.
  */
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { generateAIResponse } from "./ai-analysis";
+import { settleParlaysForFixtures } from "./parlay-builder";
 
 /* ─────────────────────────────────────────
    Tipe
@@ -22,9 +23,11 @@ interface PendingPrediction {
   fixture_id: number;
   prediction_text: string | null;
   best_market: string | null;
+  market_bet: string | null;
   home_team: string | null;
   away_team: string | null;
   expected_value: number | null;
+  ev_at_analysis: number | null;
   league: string | null;
 }
 
@@ -162,17 +165,14 @@ async function generateLossLesson(
   prediction: PendingPrediction,
   homeGoals: number,
   awayGoals: number,
-  geminiKey: string,
+  geminiKey: string | undefined,
 ): Promise<string | null> {
   try {
-    const genAI = new GoogleGenerativeAI(geminiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
     const prompt = `Anda adalah analis evaluasi pasca-pertandingan.
 
 Pertandingan : ${prediction.home_team} vs ${prediction.away_team}
 Skor Akhir   : ${homeGoals} - ${awayGoals}
-Pasaran Bet  : ${prediction.best_market ?? "tidak diketahui"}
+Pasaran Bet  : ${prediction.market_bet ?? prediction.best_market ?? "tidak diketahui"}
 
 Prediksi AI sebelumnya:
 ${prediction.prediction_text?.slice(0, 1500) ?? "Tidak tersedia"}
@@ -185,8 +185,12 @@ Tugas Anda — tulis dalam 2-3 kalimat maksimal:
 
 Format: langsung tulis pelajarannya, tanpa intro, tanpa header, dalam bahasa Indonesia.`;
 
-    const result = await model.generateContent(prompt);
-    return result.response.text().trim();
+    const result = await generateAIResponse(
+      geminiKey,
+      "Anda adalah evaluator hasil prediksi betting yang objektif.",
+      prompt,
+    );
+    return result.text.trim();
   } catch (err) {
     logger.warn({ err }, "[SETTLEMENT] Gagal generate pelajaran dari Gemini");
     return null;
@@ -201,11 +205,12 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
   logger.info("[SETTLEMENT] Memulai pengecekan hasil pertandingan...");
 
   const geminiKey = process.env["GEMINI_API_KEY"];
+  const aiAvailable = Boolean(geminiKey || process.env["GROQ_API_KEY"]);
 
   /* 1. Ambil prediksi yang masih aktif */
   const { data: pendingPredictions, error: predErr } = await supabase
     .from("ai_predictions")
-    .select("id, fixture_id, prediction_text, best_market, home_team, away_team, expected_value, league")
+    .select("id, fixture_id, prediction_text, best_market, market_bet, home_team, away_team, expected_value, ev_at_analysis, league")
     .eq("status", "active")
     .not("prediction_text", "is", null)
     .limit(100);
@@ -263,13 +268,14 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
     }
 
     /* 4. Hitung WIN/LOSS secara matematis murni dari skor */
-    const betResult = calculateResult(homeGoals, awayGoals, prediction.best_market, prediction.prediction_text);
+    const marketBet = prediction.market_bet ?? prediction.best_market;
+    const betResult = calculateResult(homeGoals, awayGoals, marketBet, prediction.prediction_text);
 
     if (betResult === null) {
       /* Market tidak dikenali — tandai manual */
       logger.warn({
         fixtureId: fixture.fixture_id,
-        bestMarket: prediction.best_market,
+        bestMarket: marketBet,
       }, "[SETTLEMENT] Market tidak dikenali — perlu review manual");
 
       await supabase.from("ai_predictions").update({
@@ -287,7 +293,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
     logger.info({
       fixtureId: fixture.fixture_id,
       match: `${fixture.home_team_name} ${homeGoals}-${awayGoals} ${fixture.away_team_name}`,
-      market: prediction.best_market,
+      market: marketBet,
       result: betResult,
     }, "[SETTLEMENT] Hasil dihitung");
 
@@ -300,18 +306,24 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
       updated_at: new Date().toISOString(),
     }).eq("id", prediction.id);
 
+    await supabase
+      .from("parlay_legs")
+      .update({ result: betResult })
+      .eq("fixture_id", fixture.fixture_id)
+      .is("result", null);
+
     settled++;
 
     /* 6. Simpan ke lessons_learned untuk kedua hasil (WIN & LOSS)
           LOSS: Gemini generate evaluasi kenapa salah
           WIN : simpan catatan referensi positif tanpa Gemini */
-    const evAtBet = prediction.expected_value ?? 0;
+    const evAtBet = prediction.ev_at_analysis ?? prediction.expected_value ?? 0;
 
     let lessonText: string | null = null;
-    if (betResult === "LOSS" && geminiKey) {
+    if (betResult === "LOSS" && aiAvailable) {
       lessonText = await generateLossLesson(prediction, homeGoals, awayGoals, geminiKey);
     } else if (betResult === "WIN") {
-      lessonText = `Prediksi berhasil. Market: ${prediction.best_market ?? "N/A"}. Skor: ${homeGoals}-${awayGoals}. EV saat analisis: ${evAtBet.toFixed(2)}.`;
+      lessonText = `Prediksi berhasil. Market: ${marketBet ?? "N/A"}. Skor: ${homeGoals}-${awayGoals}. EV saat analisis: ${evAtBet.toFixed(2)}.`;
     }
 
     const { error: lessonErr } = await supabase.from("lessons_learned").insert({
@@ -325,7 +337,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
       ev_at_bet:  evAtBet,
       ai_prediction: prediction.prediction_text?.slice(0, 2000) ?? null,
       lesson_text: lessonText,
-      market_bet:  prediction.best_market ?? null,
+      market_bet:  marketBet ?? null,
       created_at:  new Date().toISOString(),
     });
 
@@ -333,6 +345,8 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
       lessons++;
     }
   }
+
+  await settleParlaysForFixtures(completedFixtures.map((fixture) => fixture.fixture_id));
 
   /* M6: AI Feedback Loop — aggregate daily performance log */
   const today = new Date().toISOString().split("T")[0];
@@ -347,7 +361,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
     const winCount = completedFixtures.filter((f) => {
       const p = pendingPredictions.find((pp) => pp.fixture_id === f.fixture_id);
       if (!p || isNoBet(p)) return false;
-      const result = calculateResult(f.home_goals!, f.away_goals!, p.best_market, p.prediction_text);
+      const result = calculateResult(f.home_goals!, f.away_goals!, p.market_bet ?? p.best_market, p.prediction_text);
       return result === "WIN";
     }).length;
     const lossCount = settled - winCount;
@@ -367,7 +381,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
     const winCount = completedFixtures.filter((f) => {
       const p = pendingPredictions.find((pp) => pp.fixture_id === f.fixture_id);
       if (!p || isNoBet(p)) return false;
-      const result = calculateResult(f.home_goals!, f.away_goals!, p.best_market, p.prediction_text);
+      const result = calculateResult(f.home_goals!, f.away_goals!, p.market_bet ?? p.best_market, p.prediction_text);
       return result === "WIN";
     }).length;
     const lossCount = settled - winCount;

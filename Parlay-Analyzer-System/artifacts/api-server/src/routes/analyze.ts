@@ -1,11 +1,188 @@
 import { Router, type IRouter } from "express";
-import { analyzeFixture, StatsEmptyError } from "../services/ai-analysis";
+import { analyzeFixture, extractPredictionRecommendation, StatsEmptyError } from "../services/ai-analysis";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 import { calculateKelly, extractProbFromPrediction } from "../lib/kelly-criterion";
 import { requireAdmin } from "../middlewares/admin";
+import { createParlayFromCandidates, type ParlayCandidate } from "../services/parlay-builder";
+import { randomUUID } from "node:crypto";
 
 const router: IRouter = Router();
+
+type BatchTicket = {
+  fixture_id: string;
+  prediction_id?: string | number;
+  home_team: string;
+  away_team: string;
+  league: string;
+  confidence: number;
+  selection: string;
+  market: string;
+  odds: number;
+  ev_percent: number;
+  kelly_stake: string;
+  kelly_edge: number;
+  prediction_text: string;
+  status: "scanned" | "skipped" | "error";
+  is_parlay_leg: boolean;
+};
+
+type BatchJob = {
+  id: string;
+  status: "running" | "completed" | "failed";
+  scanDays: number;
+  total: number;
+  completed: number;
+  currentMatch: string | null;
+  tickets: BatchTicket[];
+  parlayId: string | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+const batchJobs = new Map<string, BatchJob>();
+const MAX_BATCH_JOBS = 20;
+
+function trimBatchJobs() {
+  while (batchJobs.size > MAX_BATCH_JOBS) {
+    const oldest = batchJobs.keys().next().value;
+    if (!oldest) break;
+    batchJobs.delete(oldest);
+  }
+}
+
+function publicBatchJob(job: BatchJob) {
+  return {
+    jobId: job.id,
+    status: job.status,
+    scanDays: job.scanDays,
+    total: job.total,
+    completed: job.completed,
+    currentMatch: job.currentMatch,
+    scanned: job.tickets.length,
+    parlayLegs: job.tickets.filter((ticket) => ticket.is_parlay_leg).length,
+    tickets: job.status === "running" ? job.tickets : job.tickets,
+    parlayId: job.parlayId,
+    error: job.error,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt,
+  };
+}
+
+async function runBatchJob(job: BatchJob, fixtures: Array<{
+  fixture_id: number;
+  home_team_name: string;
+  away_team_name: string;
+  league_name: string | null;
+  fixture_date: string;
+}>) {
+  const parlayCandidates: ParlayCandidate[] = [];
+  const existing = await supabase
+    .from("ai_predictions")
+    .select("fixture_id")
+    .eq("status", "active")
+    .gte("created_at", job.startedAt);
+  const existingSet = new Set((existing.data ?? []).map((row) => String(row.fixture_id)));
+  const toScan = fixtures.filter((fixture) => !existingSet.has(String(fixture.fixture_id))).slice(0, 10);
+  job.total = toScan.length;
+
+  for (let index = 0; index < toScan.length; index++) {
+    const fx = toScan[index]!;
+    job.currentMatch = `${fx.home_team_name} vs ${fx.away_team_name}`;
+    try {
+      if (index > 0) {
+        logger.info("[AI-BATCH] Menunggu 5 detik (API Throttling)...");
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+      }
+      logger.info({ matchNumber: index + 1, total: toScan.length }, `[AI-BATCH] Menganalisa pertandingan ${index + 1}...`);
+      const result = await analyzeFixture(String(fx.fixture_id));
+      const recommendation = extractPredictionRecommendation(result.prediction_text);
+      const prob = extractProbFromPrediction(result.prediction_text);
+      const kelly = prob && recommendation.odds > 1
+        ? calculateKelly(recommendation.odds, prob)
+        : { recommendedUnit: "N/A", edge: 0, isPositiveEdge: false };
+      const isParlayLeg = Boolean(
+        recommendation.marketBet &&
+        recommendation.odds > 1 &&
+        recommendation.confidence >= 8 &&
+        recommendation.marketBet.toLowerCase() !== "no_bet",
+      );
+
+      const ticket: BatchTicket = {
+        fixture_id: String(fx.fixture_id),
+        prediction_id: result.prediction_id,
+        home_team: result.home_team,
+        away_team: result.away_team,
+        league: fx.league_name ?? "",
+        confidence: recommendation.confidence,
+        selection: recommendation.marketBet ?? "NO_BET",
+        market: recommendation.marketBet ?? "",
+        odds: recommendation.odds,
+        ev_percent: recommendation.evPercent,
+        kelly_stake: kelly.recommendedUnit,
+        kelly_edge: kelly.edge,
+        prediction_text: result.prediction_text.substring(0, 500),
+        status: "scanned",
+        is_parlay_leg: isParlayLeg,
+      };
+      job.tickets.push(ticket);
+      if (isParlayLeg) {
+        parlayCandidates.push({
+          predictionId: result.prediction_id,
+          fixtureId: fx.fixture_id,
+          homeTeam: result.home_team,
+          awayTeam: result.away_team,
+          league: fx.league_name ?? "",
+          date: fx.fixture_date,
+          market: recommendation.marketBet!,
+          selection: recommendation.marketBet!,
+          odds: recommendation.odds,
+          confidence: recommendation.confidence,
+          evPercent: recommendation.evPercent,
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown";
+      job.tickets.push({
+        fixture_id: String(fx.fixture_id),
+        home_team: fx.home_team_name,
+        away_team: fx.away_team_name,
+        league: fx.league_name ?? "",
+        confidence: 0,
+        selection: "NO_BET",
+        market: "",
+        odds: 0,
+        ev_percent: 0,
+        kelly_stake: "N/A",
+        kelly_edge: 0,
+        prediction_text: message,
+        status: "error",
+        is_parlay_leg: false,
+      });
+    } finally {
+      job.completed = index + 1;
+    }
+  }
+
+  job.currentMatch = null;
+  job.parlayId = await createParlayFromCandidates(parlayCandidates);
+  const validTickets = job.tickets.filter((ticket) => ticket.confidence >= 6.5 && ticket.status === "scanned");
+  const parlayLegs = job.tickets.filter((ticket) => ticket.is_parlay_leg);
+  const { error: logErr } = await supabase.from("performance_log").insert({
+    date: new Date().toISOString().split("T")[0],
+    predictions_made: job.tickets.length,
+    valid_tickets: validTickets.length,
+    hit_rate: null,
+    total_roi: null,
+    created_at: new Date().toISOString(),
+  });
+  if (logErr) logger.warn({ logErr }, "BATCH SCANNER: Failed to log to performance_log");
+  logger.info(
+    { scanned: job.tickets.length, valid: validTickets.length, parlayLegs: parlayLegs.length, parlayId: job.parlayId },
+    "BATCH SCANNER: Done",
+  );
+}
 
 /* ═════════════════════════════════════════════════════════════════════════════════
    M3: BATCH SCANNER — Scan semua fixture dalam configured scan window
@@ -16,6 +193,16 @@ const router: IRouter = Router();
 router.post("/analyze/batch", requireAdmin, async (_req, res) => {
   try {
     logger.info("BATCH SCANNER: Request received");
+    const runningJob = Array.from(batchJobs.values()).find((job) => job.status === "running");
+    if (runningJob) {
+      res.status(409).json({
+        error: "Batch scanner sedang berjalan",
+        jobId: runningJob.id,
+        completed: runningJob.completed,
+        total: runningJob.total,
+      });
+      return;
+    }
 
     /* 1. Ambil fixture dalam configured scan window */
     const now = new Date().toISOString();
@@ -44,150 +231,69 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
     }
 
     if (!fixtures || fixtures.length === 0) {
-      res.json({ scanned: 0, tickets: [], message: `No fixtures in the next ${scanDays} days` });
+      const job: BatchJob = {
+        id: randomUUID(),
+        status: "completed",
+        scanDays,
+        total: 0,
+        completed: 0,
+        currentMatch: null,
+        tickets: [],
+        parlayId: null,
+        error: null,
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+      };
+      batchJobs.set(job.id, job);
+      trimBatchJobs();
+      res.status(202).json({
+        ...publicBatchJob(job),
+        message: `Tidak ada fixture dalam ${scanDays} hari ke depan`,
+      });
       return;
     }
 
-    logger.info({ count: fixtures.length }, "BATCH SCANNER: Fixtures to scan");
-
-    /* 2. Ambil predictions yang sudah ada (untuk skip) */
-    const { data: existing } = await supabase
-      .from("ai_predictions")
-      .select("fixture_id")
-      .eq("status", "active")
-      .gte("created_at", now);
-
-    const existingSet = new Set((existing ?? []).map((r) => String(r.fixture_id)));
-
-    /* 3. Scan per fixture (max 10 untuk rate limit) */
-    const tickets: {
-      fixture_id: string;
-      home_team: string;
-      away_team: string;
-      league: string;
-      confidence: number;
-      selection: string;
-      market: string;
-      odds: number;
-      ev_percent: number;
-      kelly_stake: string;
-      kelly_edge: number;
-      prediction_text: string;
-      status: "scanned" | "skipped" | "error";
-      is_parlay_leg: boolean;
-    }[] = [];
-
-    const toScan = fixtures.filter((f) => !existingSet.has(String(f.fixture_id))).slice(0, 10);
-
-    for (let index = 0; index < toScan.length; index++) {
-      const fx = toScan[index]!;
-      try {
-        if (index > 0) {
-          logger.info("[AI-BATCH] Menunggu 5 detik (API Throttling)...");
-          await new Promise((resolve) => setTimeout(resolve, 5_000));
-        }
-        logger.info({ matchNumber: index + 1, total: toScan.length }, `[AI-BATCH] Menganalisa pertandingan ${index + 1}...`);
-        const result = await analyzeFixture(String(fx.fixture_id));
-        /* Try to extract JSON from prediction_text */
-        let ticket = {
-          selection: "NO_BET",
-          market: "",
-          confidence: 0,
-          odds: 0,
-          ev_percent: 0,
-        };
-        const jsonMatch = result.prediction_text.match(/\{[\s\S]*?\}/);
-        if (jsonMatch) {
-          try {
-            const parsed = JSON.parse(jsonMatch[0]);
-            ticket = { ...ticket, ...parsed };
-          } catch {
-            /* ignore JSON parse error */
-          }
-        }
-
-        // Kelly Criterion calculation (backend, not Gemini)
-        const prob = extractProbFromPrediction(result.prediction_text);
-        const kelly = prob && ticket.odds > 1
-          ? calculateKelly(ticket.odds, prob)
-          : { recommendedUnit: "N/A", edge: 0, isPositiveEdge: false };
-
-        // Dynamic threshold: Single >= 6.5, Parlay >= 8.0
-        const isParlayLeg = ticket.confidence >= 8.0;
-
-        tickets.push({
-          fixture_id: String(fx.fixture_id),
-          home_team: result.home_team,
-          away_team: result.away_team,
-          league: fx.league_name ?? "",
-          confidence: ticket.confidence || 0,
-          selection: ticket.selection || "NO_BET",
-          market: ticket.market || "",
-          odds: ticket.odds || 0,
-          ev_percent: ticket.ev_percent || 0,
-          kelly_stake: kelly.recommendedUnit,
-          kelly_edge: kelly.edge,
-          prediction_text: result.prediction_text.substring(0, 500),
-          status: "scanned",
-          is_parlay_leg: isParlayLeg,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown";
-        tickets.push({
-          fixture_id: String(fx.fixture_id),
-          home_team: fx.home_team_name,
-          away_team: fx.away_team_name,
-          league: fx.league_name ?? "",
-          confidence: 0,
-          selection: "NO_BET",
-          market: "",
-          odds: 0,
-          ev_percent: 0,
-          kelly_stake: "N/A",
-          kelly_edge: 0,
-          prediction_text: message,
-          status: "error",
-          is_parlay_leg: false,
-        });
-      }
-    }
-
-    /* 4. Dynamic threshold filtering:
-        - Single Bet: confidence >= 6.5
-        - Parlay Leg: confidence >= 8.0
-    */
-    const validTickets = tickets.filter((t) => t.confidence >= 6.5 && t.status === "scanned");
-    const parlayLegs = tickets.filter((t) => t.confidence >= 8.0 && t.status === "scanned");
-
-    /* 5. Log ke performance_log */
-    const { error: logErr } = await supabase.from("performance_log").insert({
-      date: new Date().toISOString().split("T")[0],
-      predictions_made: tickets.length,
-      valid_tickets: validTickets.length,
-      hit_rate: null,
-      total_roi: null,
-      created_at: new Date().toISOString(),
-    });
-    if (logErr) {
-      logger.warn({ logErr }, "BATCH SCANNER: Failed to log to performance_log");
-    }
-
-    logger.info(
-      { scanned: tickets.length, valid: validTickets.length, parlayLegs: parlayLegs.length },
-      "BATCH SCANNER: Done"
-    );
-    res.json({
-      scanned: tickets.length,
-      validTickets: validTickets.length,
-      parlayLegs: parlayLegs.length,
-      tickets,
-      message: `Processed ${tickets.length} of ${fixtures.length} fixtures in the next ${scanDays} days`,
-    });
+    const job: BatchJob = {
+      id: randomUUID(),
+      status: "running",
+      scanDays,
+      total: 0,
+      completed: 0,
+      currentMatch: null,
+      tickets: [],
+      parlayId: null,
+      error: null,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+    };
+    batchJobs.set(job.id, job);
+    trimBatchJobs();
+    void runBatchJob(job, fixtures as typeof fixtures)
+      .then(() => {
+        job.status = "completed";
+        job.finishedAt = new Date().toISOString();
+      })
+      .catch((err) => {
+        job.status = "failed";
+        job.error = err instanceof Error ? err.message : "Batch scanner failed";
+        job.finishedAt = new Date().toISOString();
+        logger.error({ err, jobId: job.id }, "BATCH SCANNER failed");
+      });
+    res.status(202).json(publicBatchJob(job));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     logger.error({ err }, "BATCH SCANNER failed");
     res.status(500).json({ error: message });
   }
+});
+
+router.get("/analyze/batch/:jobId", requireAdmin, (req, res) => {
+  const job = batchJobs.get(String(req.params.jobId));
+  if (!job) {
+    res.status(404).json({ error: "Batch job not found or expired" });
+    return;
+  }
+  res.json(publicBatchJob(job));
 });
 
 /**

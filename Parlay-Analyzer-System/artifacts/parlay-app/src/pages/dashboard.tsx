@@ -45,6 +45,11 @@ export default function Dashboard() {
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
   const [scanState, setScanState] = useState<"idle" | "scanning">("idle");
   const [scanError, setScanError] = useState<string | null>(null);
+  const [scanProgress, setScanProgress] = useState<{
+    completed: number;
+    total: number;
+    currentMatch: string | null;
+  } | null>(null);
   const [scanResult, setScanResult] = useState<{
     scanned: number;
     validTickets: number;
@@ -66,6 +71,7 @@ export default function Dashboard() {
     setScanState("scanning");
     setScanError(null);
     setScanResult(null);
+    setScanProgress(null);
     try {
       const res = await fetch("/api/analyze/batch", {
         method: "POST",
@@ -75,11 +81,18 @@ export default function Dashboard() {
         const body = await res.json().catch(() => ({ error: `API ${res.status}` }));
         throw new Error(body.error ?? `API ${res.status}`);
       }
-      const result = (await res.json()) as {
-        scanned?: number;
-        validTickets?: number;
-        parlayLegs?: number;
-        message?: string;
+      const started = await res.json() as { jobId?: string };
+      if (!started.jobId) throw new Error("Batch scanner tidak mengembalikan job ID");
+
+      type BatchStatus = {
+        status: "running" | "completed" | "failed";
+        completed: number;
+        total: number;
+        currentMatch: string | null;
+        scanned: number;
+        parlayLegs: number;
+        parlayId?: string | null;
+        error?: string | null;
         tickets?: Array<{
           home_team: string;
           away_team: string;
@@ -90,13 +103,35 @@ export default function Dashboard() {
           is_parlay_leg: boolean;
         }>;
       };
-      setScanResult({
-        scanned: result.scanned ?? 0,
-        validTickets: result.validTickets ?? 0,
-        parlayLegs: result.parlayLegs ?? 0,
-        message: result.message,
-        tickets: result.tickets,
-      });
+      let result: BatchStatus;
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        const statusResponse = await fetch(`/api/analyze/batch/${started.jobId}`, {
+          headers: { "x-admin-password": pwd },
+        });
+        if (!statusResponse.ok) {
+          const body = await statusResponse.json().catch(() => ({ error: `API ${statusResponse.status}` }));
+          throw new Error(body.error ?? `API ${statusResponse.status}`);
+        }
+        result = await statusResponse.json() as BatchStatus;
+        setScanProgress({
+          completed: result.completed,
+          total: result.total,
+          currentMatch: result.currentMatch,
+        });
+        setScanResult({
+          scanned: result.scanned,
+          validTickets: result.tickets?.filter((ticket) => ticket.confidence >= 6.5 && ticket.status === "scanned").length ?? 0,
+          parlayLegs: result.parlayLegs,
+          message: result.status === "running"
+            ? `Memproses ${result.completed} dari ${result.total} fixture${result.currentMatch ? ` — ${result.currentMatch}` : ""}`
+            : result.parlayId
+              ? "Scanning selesai dan parlay otomatis berhasil dibuat."
+              : "Scanning selesai. Minimal dua leg confidence tinggi diperlukan untuk membuat parlay.",
+          tickets: result.tickets,
+        });
+        if (result.status === "failed") throw new Error(result.error ?? "Batch scanner gagal");
+      } while (result.status === "running");
       setScanState("idle");
       await queryClient.invalidateQueries({ queryKey: getListSupabaseParlaysQueryKey({ status: "active" }) });
     } catch (err) {
@@ -128,6 +163,30 @@ export default function Dashboard() {
           {scanState === "scanning" ? `Scanning ${scanDays} hari...` : `SCANNING ${scanDays} HARI & BUAT PARLAY`}
         </Button>
       </div>
+
+      {scanState === "scanning" && scanProgress && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardContent className="py-4 space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium text-primary">Batch Scanner sedang berjalan</span>
+              <span className="tabular-nums text-muted-foreground">
+                {scanProgress.completed}/{scanProgress.total}
+              </span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-primary/15">
+              <div
+                className="h-full rounded-full bg-primary transition-all"
+                style={{
+                  width: `${scanProgress.total > 0 ? Math.round((scanProgress.completed / scanProgress.total) * 100) : 5}%`,
+                }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {scanProgress.currentMatch ?? "Menyiapkan fixture..."} — request diproses berurutan untuk menjaga batas API.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {scanError && (
         <Card className="border-red-500/20 bg-red-500/5">

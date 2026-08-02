@@ -770,6 +770,78 @@ export interface AnalysisResult {
   away_team: string;
   prediction_text: string;
   created_at: string;
+  prediction_id?: string | number;
+  market_bet?: string | null;
+  odds?: number;
+  confidence?: number;
+  ev_percent?: number;
+  ev_at_analysis?: number;
+}
+
+export interface PredictionRecommendation {
+  marketBet: string | null;
+  odds: number;
+  confidence: number;
+  evPercent: number;
+}
+
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function extractJsonObjects(text: string): Record<string, unknown>[] {
+  const objects: Record<string, unknown>[] = [];
+  for (let start = text.indexOf("{"); start >= 0 && start < text.length; start = text.indexOf("{", start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let end = start; end < text.length; end++) {
+      const char = text[end]!;
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === "\"") inString = false;
+        continue;
+      }
+      if (char === "\"") {
+        inString = true;
+      } else if (char === "{") {
+        depth++;
+      } else if (char === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(text.slice(start, end + 1)) as unknown;
+            if (parsed && typeof parsed === "object") objects.push(parsed as Record<string, unknown>);
+          } catch {
+            /* Continue searching for the next balanced JSON object. */
+          }
+          break;
+        }
+      }
+    }
+  }
+  return objects;
+}
+
+export function extractPredictionRecommendation(text: string): PredictionRecommendation {
+  const objects = extractJsonObjects(text);
+  const root = objects.find((candidate) => Array.isArray(candidate.selections)) ?? objects[objects.length - 1] ?? {};
+  const selections = Array.isArray(root.selections) ? root.selections : [];
+  const selected = (selections.find((item) => item && typeof item === "object") ?? root) as Record<string, unknown>;
+  const explicitSelection = String(selected.selection ?? "").trim();
+  const market = String(selected.market ?? selected.market_bet ?? root.market_bet ?? "").trim();
+  const marketBet = explicitSelection && explicitSelection.toLowerCase() !== "no_bet"
+    ? explicitSelection
+    : market && market.toLowerCase() !== "no_bet"
+      ? market
+      : null;
+  const confidence = Math.max(0, Math.min(10, toFiniteNumber(selected.confidence ?? root.confidence)));
+  const odds = Math.max(0, toFiniteNumber(selected.odds ?? root.odds));
+  const rawEv = toFiniteNumber(selected.ev_percent ?? selected.ev ?? root.ev_percent ?? root.expected_value);
+  const evPercent = Math.abs(rawEv) <= 1 ? rawEv * 100 : rawEv;
+  return { marketBet, odds, confidence, evPercent };
 }
 
 export class StatsEmptyError extends Error {
@@ -810,7 +882,7 @@ async function generateWithGroq(
   return text;
 }
 
-async function generateAIResponse(apiKey: string | undefined, systemInstruction: string, prompt: string): Promise<{ text: string; provider: string; model: string }> {
+export async function generateAIResponse(apiKey: string | undefined, systemInstruction: string, prompt: string): Promise<{ text: string; provider: string; model: string }> {
   const groqKey = process.env["GROQ_API_KEY"];
   const provider = (process.env["AI_PROVIDER"] ?? "auto").toLowerCase();
   if (provider === "groq" || (provider === "auto" && !apiKey && groqKey)) {
@@ -951,20 +1023,24 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
    const aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
    const predictionText = aiResult.text;
+   const recommendation = extractPredictionRecommendation(predictionText);
+   const evAtAnalysis = recommendation.evPercent / 100;
 
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
 
   /* ── 6. Simpan ke ai_predictions ── */
-  const { error: insertError } = await supabase.from("ai_predictions").insert({
+  const { data: savedPrediction, error: insertError } = await supabase.from("ai_predictions").insert({
     fixture_id: parseInt(fixtureId) || fixtureId,
     prediction_text: predictionText,
     home_team: homeTeam,
     away_team: awayTeam,
     league: leagueName,
+    market_bet: recommendation.marketBet,
+    ev_at_analysis: evAtAnalysis,
     status: "active",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  });
+  }).select("id").single();
 
   if (insertError) {
     logger.warn({ insertError }, "Failed to save prediction — returning result anyway");
@@ -976,5 +1052,11 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     away_team: awayTeam,
     prediction_text: predictionText,
     created_at: new Date().toISOString(),
+    prediction_id: savedPrediction?.id,
+    market_bet: recommendation.marketBet,
+    odds: recommendation.odds,
+    confidence: recommendation.confidence,
+    ev_percent: recommendation.evPercent,
+    ev_at_analysis: evAtAnalysis,
   };
 }
