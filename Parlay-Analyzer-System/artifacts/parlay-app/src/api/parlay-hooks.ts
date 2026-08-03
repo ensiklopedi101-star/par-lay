@@ -217,6 +217,49 @@ export function useListTeamStats(params?: { leagueSlug?: string; season?: string
   });
 }
 
+/* ─── Team Stats Health ─── */
+export interface StatsLeagueHealth {
+  slug: string;
+  name: string;
+  statsRows: number;
+  teamsCovered: number;
+  latestUpdatedAt: string | null;
+  ageDays: number | null;
+  status: "missing" | "stale" | "current";
+}
+
+export interface StatsParlayReminder {
+  parlayId: string;
+  parlayName: string;
+  legsCount: number;
+  createdAt: string;
+  leagues: string[];
+  missingLeagues: string[];
+  staleLeagues: string[];
+  needsUpdate: boolean;
+}
+
+export interface StatsHealth {
+  scanDays: number;
+  staleAfterDays: number;
+  totalLeagues: number;
+  coveredLeagues: number;
+  missingLeagues: StatsLeagueHealth[];
+  staleLeagues: StatsLeagueHealth[];
+  leagues: StatsLeagueHealth[];
+  parlayReminders: StatsParlayReminder[];
+  checkedAt: string;
+}
+
+export const getStatsHealthQueryKey = () => ["stats/health"];
+export function useGetStatsHealth() {
+  return useQuery<StatsHealth>({
+    queryKey: getStatsHealthQueryKey(),
+    queryFn: () => apiGet<StatsHealth>(`${API_BASE}/stats/health`),
+    refetchInterval: 60_000,
+  });
+}
+
 /* ─── Standings ─── */
 export const getListStandingsQueryKey = (params?: { league_slug?: string; season?: string }) => [
   "supabase/standings",

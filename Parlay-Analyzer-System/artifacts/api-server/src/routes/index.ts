@@ -8,6 +8,7 @@ import supabaseRouter from "./supabase";
 import analyzeRouter from "./analyze";
 import statsIngestRouter from "./stats-ingest";
 import cronRouter from "./cron";
+import statsHealthRouter from "./stats-health";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use(supabaseRouter);
 router.use(analyzeRouter);
 router.use(statsIngestRouter);
 router.use(cronRouter);
+router.use(statsHealthRouter);
 
 export default router;

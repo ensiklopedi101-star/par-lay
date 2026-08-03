@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { addDays, formatISO } from "date-fns";
-import { useGetConfig, useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth, getListSupabaseParlaysQueryKey } from "@/api/parlay-hooks";
+import { useGetConfig, useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth, useGetStatsHealth, getListSupabaseParlaysQueryKey } from "@/api/parlay-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Activity, Clock, Database, Server, BrainCircuit, CalendarDays, Zap, Shield } from "lucide-react";
+import { Activity, Clock, Database, Server, BrainCircuit, CalendarDays, Zap, Shield, CircleAlert, RefreshCw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { formatLeagueName } from "@/utils/format-league";
@@ -43,6 +43,7 @@ export default function Dashboard() {
     limit: 500,
   });
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
+  const { data: statsHealth, isLoading: isStatsHealthLoading } = useGetStatsHealth();
   const [scanState, setScanState] = useState<"idle" | "scanning">("idle");
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<{
@@ -425,6 +426,90 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="bg-card border-border">
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="text-lg font-semibold flex items-center gap-2">
+              <Database className="w-5 h-5 text-primary" />
+              Team Stats Health
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Coverage liga dan pengingat update statistik untuk parlay aktif.
+            </p>
+          </div>
+          {statsHealth && (
+            <div className="text-sm tabular-nums text-muted-foreground">
+              {statsHealth.coveredLeagues}/{statsHealth.totalLeagues} liga memiliki stats
+            </div>
+          )}
+        </CardHeader>
+        <CardContent>
+          {isStatsHealthLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : statsHealth ? (
+            <div className="space-y-4">
+              {statsHealth.parlayReminders.length > 0 && (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                  <div className="flex items-center gap-2 font-semibold text-amber-500">
+                    <CircleAlert className="w-4 h-4" />
+                    Reminder update stats
+                  </div>
+                  <div className="mt-2 space-y-2 text-sm">
+                    {statsHealth.parlayReminders.map((reminder) => (
+                      <div key={reminder.parlayId} className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <span>{reminder.parlayName} · {reminder.legsCount} legs</span>
+                        <span className="text-amber-500">
+                          {[
+                            ...reminder.missingLeagues.map((league) => `${league} belum ada`),
+                            ...reminder.staleLeagues.map((league) => `${league} perlu update`),
+                          ].join(" · ")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-md border border-red-500/20 bg-red-500/5 p-3">
+                  <div className="flex items-center gap-2 font-semibold text-red-500">
+                    <CircleAlert className="w-4 h-4" />
+                    Liga belum ada stats ({statsHealth.missingLeagues.length})
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    {statsHealth.missingLeagues.length > 0
+                      ? statsHealth.missingLeagues.map((league) => league.name).join(", ")
+                      : "Semua liga sudah memiliki data."}
+                  </p>
+                </div>
+                <div className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3">
+                  <div className="flex items-center gap-2 font-semibold text-amber-500">
+                    <RefreshCw className="w-4 h-4" />
+                    Liga perlu update ({statsHealth.staleLeagues.length})
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    {statsHealth.staleLeagues.length > 0
+                      ? statsHealth.staleLeagues.map((league) => `${league.name} (${league.ageDays ?? "?"} hari)`).join(", ")
+                      : `Tidak ada stats lebih lama dari ${statsHealth.staleAfterDays} hari.`}
+                  </p>
+                </div>
+              </div>
+
+              {statsHealth.parlayReminders.length === 0 &&
+                statsHealth.missingLeagues.length === 0 &&
+                statsHealth.staleLeagues.length === 0 && (
+                  <p className="text-sm text-emerald-500">Stats sudah siap untuk liga yang dipantau.</p>
+                )}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Status stats belum tersedia.</p>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
