@@ -151,6 +151,49 @@ interface StructuredOdds {
   other: { bookmaker: string; market: string; odds_1?: number; odds_2?: number; odds_draw?: number }[];
 }
 
+export type OddsAvailabilityStatus = "valid" | "stale" | "missing";
+
+export interface OddsAvailability {
+  status: OddsAvailabilityStatus;
+  latestCapturedAt: string | null;
+  rowCount: number;
+}
+
+export function assessOddsAvailability(rows: OddsRow[]): OddsAvailability {
+  const usableRows = rows.filter((row) =>
+    [row.odds_1, row.odds_2, row.odds_draw].some((value) => Number(value) > 1),
+  );
+  if (usableRows.length === 0) {
+    return { status: "missing", latestCapturedAt: null, rowCount: 0 };
+  }
+  const latestCapturedAt = usableRows
+    .map((row) => row.captured_at)
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
+  const isStale = latestCapturedAt
+    ? Date.now() - new Date(latestCapturedAt).getTime() > 24 * 60 * 60 * 1000
+    : false;
+  return {
+    status: isStale ? "stale" : "valid",
+    latestCapturedAt,
+    rowCount: usableRows.length,
+  };
+}
+
+export class OddsUnavailableError extends Error {
+  constructor(message = "Data odds belum tersedia untuk fixture ini.") {
+    super(message);
+    this.name = "OddsUnavailableError";
+  }
+}
+
+export class PredictionAlreadyExistsError extends Error {
+  constructor() {
+    super("Fixture ini sudah memiliki prediksi. Analisis ulang tidak dijalankan untuk mencegah duplikasi dan pemborosan quota AI.");
+    this.name = "PredictionAlreadyExistsError";
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════
    HELPER: IMPLIED PROBABILITY
    ═══════════════════════════════════════════════════════════════ */
@@ -776,6 +819,8 @@ export interface AnalysisResult {
   confidence?: number;
   ev_percent?: number;
   ev_at_analysis?: number;
+  odds_status?: OddsAvailabilityStatus;
+  odds_captured_at?: string | null;
 }
 
 export interface PredictionRecommendation {
@@ -922,9 +967,6 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
   const apiKey = process.env["GEMINI_API_KEY"];
   const groqKey = process.env["GROQ_API_KEY"];
   const provider = (process.env["AI_PROVIDER"] ?? "auto").toLowerCase();
-  if (!apiKey && !(provider === "groq" && groqKey) && !(provider === "auto" && groqKey)) {
-    throw new Error("GEMINI_API_KEY is not set and Groq fallback is unavailable");
-  }
   if (!supabase) throw new Error("Supabase client not initialised");
 
   /* ── 1. Fetch fixture ── */
@@ -946,6 +988,17 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     throw new Error("Fixture record is missing home_team or away_team fields");
   }
 
+  const { data: existingPrediction, error: existingPredictionError } = await supabase
+    .from("ai_predictions")
+    .select("id")
+    .eq("fixture_id", fixtureId)
+    .maybeSingle();
+  if (existingPredictionError) {
+    logger.warn({ fixtureId, existingPredictionError }, "[AI-ANALYSIS] Could not check existing prediction");
+  } else if (existingPrediction) {
+    throw new PredictionAlreadyExistsError();
+  }
+
   /* ── 2. Fetch & parse odds ── */
   const { data: oddsRows } = await supabase
     .from("odds_history")
@@ -955,6 +1008,14 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     .limit(60);
 
   const structuredOdds = extractStructuredOdds((oddsRows ?? []) as OddsRow[]);
+  const oddsAvailability = assessOddsAvailability((oddsRows ?? []) as OddsRow[]);
+  if (oddsAvailability.status === "missing") {
+    logger.info({ fixtureId }, "[AI-ANALYSIS] Menunggu data odds; AI tidak dipanggil");
+    throw new OddsUnavailableError();
+  }
+  if (!apiKey && !(provider === "groq" && groqKey) && !(provider === "auto" && groqKey)) {
+    throw new Error("GEMINI_API_KEY is not set and Groq fallback is unavailable");
+  }
   const oddsBlock = formatOddsBlock(homeTeam, awayTeam, structuredOdds);
 
   /* ── 3. Fetch odds movement trend + lessons + performance log + relational context (parallel) ── */
@@ -1029,7 +1090,7 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
 
   /* ── 6. Simpan ke ai_predictions ── */
-  const { data: savedPrediction, error: insertError } = await supabase.from("ai_predictions").insert({
+  const { data: savedPrediction, error: insertError } = await supabase.from("ai_predictions").upsert({
     fixture_id: parseInt(fixtureId) || fixtureId,
     prediction_text: predictionText,
     home_team: homeTeam,
@@ -1040,7 +1101,7 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     status: "active",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  }).select("id").single();
+  }, { onConflict: "fixture_id" }).select("id").single();
 
   if (insertError) {
     logger.warn({ insertError }, "Failed to save prediction — returning result anyway");
@@ -1058,5 +1119,7 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     confidence: recommendation.confidence,
     ev_percent: recommendation.evPercent,
     ev_at_analysis: evAtAnalysis,
+    odds_status: oddsAvailability.status,
+    odds_captured_at: oddsAvailability.latestCapturedAt,
   };
 }

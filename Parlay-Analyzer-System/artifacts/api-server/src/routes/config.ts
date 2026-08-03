@@ -50,7 +50,7 @@ async function getOrCreateConfig() {
       leagues: ["serie-a"],
       bookmakers: ["Bet365"],
       markets: ["ML", "Totals", "BTTS", "Asian Handicap"],
-      cron_expression: "0 */3 * * *",
+      cron_expression: "0 */6 * * *",
     })
     .select()
     .single();

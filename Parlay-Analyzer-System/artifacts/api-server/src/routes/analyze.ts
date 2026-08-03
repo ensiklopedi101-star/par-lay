@@ -1,5 +1,12 @@
 import { Router, type IRouter } from "express";
-import { analyzeFixture, extractPredictionRecommendation, StatsEmptyError } from "../services/ai-analysis";
+import {
+  analyzeFixture,
+  assessOddsAvailability,
+  extractPredictionRecommendation,
+  OddsUnavailableError,
+  PredictionAlreadyExistsError,
+  StatsEmptyError,
+} from "../services/ai-analysis";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 import { calculateKelly, extractProbFromPrediction } from "../lib/kelly-criterion";
@@ -20,10 +27,11 @@ type BatchTicket = {
   market: string;
   odds: number;
   ev_percent: number;
+  odds_status?: "valid" | "stale";
   kelly_stake: string;
   kelly_edge: number;
   prediction_text: string;
-  status: "scanned" | "skipped" | "error";
+  status: "scanned" | "waiting_odds" | "skipped" | "error";
   is_parlay_leg: boolean;
 };
 
@@ -36,6 +44,7 @@ type BatchJob = {
   currentMatch: string | null;
   tickets: BatchTicket[];
   parlayId: string | null;
+  waitingOdds: number;
   error: string | null;
   startedAt: string;
   finishedAt: string | null;
@@ -62,6 +71,8 @@ function publicBatchJob(job: BatchJob) {
     currentMatch: job.currentMatch,
     scanned: job.tickets.length,
     parlayLegs: job.tickets.filter((ticket) => ticket.is_parlay_leg).length,
+    waitingOdds: job.tickets.filter((ticket) => ticket.status === "waiting_odds").length,
+    noBet: job.tickets.filter((ticket) => ticket.status === "scanned" && ticket.selection === "NO_BET").length,
     tickets: job.status === "running" ? job.tickets : job.tickets,
     parlayId: job.parlayId,
     error: job.error,
@@ -81,11 +92,61 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
   const existing = await supabase
     .from("ai_predictions")
     .select("fixture_id")
-    .eq("status", "active")
-    .gte("created_at", job.startedAt);
+    .in("fixture_id", fixtures.map((fixture) => fixture.fixture_id));
   const existingSet = new Set((existing.data ?? []).map((row) => String(row.fixture_id)));
-  const toScan = fixtures.filter((fixture) => !existingSet.has(String(fixture.fixture_id))).slice(0, 10);
-  job.total = toScan.length;
+  const pendingFixtures = fixtures.filter((fixture) => !existingSet.has(String(fixture.fixture_id)));
+  const oddsResult = await supabase
+    .from("odds_history")
+    .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+    .in("match_id", pendingFixtures.map((fixture) => String(fixture.fixture_id)));
+  const oddsByFixture = new Map<string, Array<{
+    bookmaker: string;
+    market_type: string;
+    odds_1: number | null;
+    odds_2: number | null;
+    odds_draw: number | null;
+    captured_at?: string;
+  }>>();
+  for (const row of oddsResult.data ?? []) {
+    const key = String(row.match_id);
+    const rows = oddsByFixture.get(key) ?? [];
+    rows.push({
+      bookmaker: String(row.bookmaker ?? ""),
+      market_type: String(row.market_type ?? ""),
+      odds_1: row.odds_1,
+      odds_2: row.odds_2,
+      odds_draw: row.odds_draw,
+      captured_at: row.captured_at,
+    });
+    oddsByFixture.set(key, rows);
+  }
+  const waitingFixtures = pendingFixtures.filter((fixture) =>
+    assessOddsAvailability(oddsByFixture.get(String(fixture.fixture_id)) ?? []).status === "missing",
+  );
+  const toScan = pendingFixtures
+    .filter((fixture) => !waitingFixtures.some((waiting) => waiting.fixture_id === fixture.fixture_id))
+    .slice(0, 10);
+  job.total = waitingFixtures.length + toScan.length;
+  job.completed = waitingFixtures.length;
+  job.waitingOdds = waitingFixtures.length;
+  for (const fx of waitingFixtures) {
+    job.tickets.push({
+      fixture_id: String(fx.fixture_id),
+      home_team: fx.home_team_name,
+      away_team: fx.away_team_name,
+      league: fx.league_name ?? "",
+      confidence: 0,
+      selection: "WAITING_FOR_ODDS",
+      market: "",
+      odds: 0,
+      ev_percent: 0,
+      kelly_stake: "N/A",
+      kelly_edge: 0,
+      prediction_text: "Menunggu data odds dari provider. AI belum dipanggil.",
+      status: "waiting_odds",
+      is_parlay_leg: false,
+    });
+  }
 
   for (let index = 0; index < toScan.length; index++) {
     const fx = toScan[index]!;
@@ -103,6 +164,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
         ? calculateKelly(recommendation.odds, prob)
         : { recommendedUnit: "N/A", edge: 0, isPositiveEdge: false };
       const isParlayLeg = Boolean(
+        result.odds_status !== "stale" &&
         recommendation.marketBet &&
         recommendation.odds > 1 &&
         recommendation.confidence >= 8 &&
@@ -120,6 +182,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
         market: recommendation.marketBet ?? "",
         odds: recommendation.odds,
         ev_percent: recommendation.evPercent,
+        odds_status: result.odds_status === "stale" ? "stale" : "valid",
         kelly_stake: kelly.recommendedUnit,
         kelly_edge: kelly.edge,
         prediction_text: result.prediction_text.substring(0, 500),
@@ -144,6 +207,26 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown";
+      if (err instanceof OddsUnavailableError) {
+        job.waitingOdds++;
+        job.tickets.push({
+          fixture_id: String(fx.fixture_id),
+          home_team: fx.home_team_name,
+          away_team: fx.away_team_name,
+          league: fx.league_name ?? "",
+          confidence: 0,
+          selection: "WAITING_FOR_ODDS",
+          market: "",
+          odds: 0,
+          ev_percent: 0,
+          kelly_stake: "N/A",
+          kelly_edge: 0,
+          prediction_text: "Menunggu data odds dari provider. AI belum dipanggil.",
+          status: "waiting_odds",
+          is_parlay_leg: false,
+        });
+        continue;
+      }
       job.tickets.push({
         fixture_id: String(fx.fixture_id),
         home_team: fx.home_team_name,
@@ -161,7 +244,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
         is_parlay_leg: false,
       });
     } finally {
-      job.completed = index + 1;
+      job.completed = waitingFixtures.length + index + 1;
     }
   }
 
@@ -240,6 +323,7 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
         currentMatch: null,
         tickets: [],
         parlayId: null,
+        waitingOdds: 0,
         error: null,
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
@@ -262,6 +346,7 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
       currentMatch: null,
       tickets: [],
       parlayId: null,
+      waitingOdds: 0,
       error: null,
       startedAt: new Date().toISOString(),
       finishedAt: null,
@@ -313,6 +398,22 @@ router.post("/analyze/:fixtureId", async (req, res) => {
     const result = await analyzeFixture(fixtureId);
     res.json(result);
   } catch (err) {
+    if (err instanceof OddsUnavailableError) {
+      res.status(409).json({
+        code: "WAITING_FOR_ODDS",
+        status: "waiting_odds",
+        error: err.message,
+      });
+      return;
+    }
+    if (err instanceof PredictionAlreadyExistsError) {
+      res.status(409).json({
+        code: "ALREADY_ANALYZED",
+        status: "already_analyzed",
+        error: err.message,
+      });
+      return;
+    }
     if (err instanceof StatsEmptyError) {
       res.status(400).json({ error: err.message });
       return;

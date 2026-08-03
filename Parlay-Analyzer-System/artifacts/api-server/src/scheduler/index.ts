@@ -24,16 +24,13 @@ async function loadConfigAndSync() {
         if (matched.length > 0) leagues = matched;
       }
       if (Array.isArray(cfg.bookmakers) && cfg.bookmakers.length > 0) {
-        // 1xBet is not accepted by the current Odds-API free-plan catalogue.
-        // Keep the user's two-bookmaker configuration bounded, but replace only
-        // this known invalid legacy value for the outbound request.
-        bookmakers = cfg.bookmakers
-          .map((name: unknown) => String(name).trim())
-          .filter(Boolean)
-          .map((name: string) => name.toLowerCase() === "1xbet" ? "Betano" : name)
-          .filter((name: string, index: number, all: string[]) => all.indexOf(name) === index)
-          .slice(0, 2)
-          .join(",");
+        // The current free plan rejects sharp/exchange books (including
+        // Sbobet) and rejects legacy 1xBet/Betano selections. Keep outbound
+        // requests on the known-free recreational bookmaker.
+        const freeBookmakers = cfg.bookmakers
+          .map((name: unknown) => String(name).trim().toLowerCase())
+          .filter((name: string) => name === "bet365");
+        bookmakers = freeBookmakers.length > 0 ? "Bet365" : DEFAULT_BOOKMAKERS;
       }
     }
   } catch (err) {
@@ -78,7 +75,7 @@ export function startScheduler() {
   if (currentSettlementTask) { currentSettlementTask.stop(); }
 
   /* The initial run loads scheduler_config; reconfigure from there. */
-  let configuredExpression = "0 */3 * * *";
+  let configuredExpression = "0 */6 * * *";
   supabase
     .from("scheduler_config")
     .select("cron_expression")

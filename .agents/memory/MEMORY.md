@@ -3,6 +3,7 @@
 - [Cron Keep-Alive](cron-keep-alive.md) — Replit workspace sleep bisa dijaga dengan external cron ping ke endpoint aman; sync setiap 30 menit boros quota Odds-API, gunakan keep-alive untuk menjaga server hidup.
 - [Sync Runs Source of Truth](sync-runs-source.md) — `lastSyncAt` berasal dari tabel `sync_runs`, bukan `fixtures.updated_at`.
 - [Odds-API Rate Limit](odds-api-rate-limit.md) — Free plan 100 req/jam; sync dibatasi 80 events per cycle; cron keep-alive jangan pakai sync tiap 30 menit.
+- [Odds-API Free Bookmaker](odds-api-free-bookmaker.md) — Akun free saat ini hanya berhasil memakai Bet365; Betano/1xBet ditolak dan Sbobet perlu plan berbayar.
 - [AI Predictions Schema](ai-predictions-schema.md) — Kolom baru: prediction_text, home_team, away_team, league, home_score, away_score, ev_at_analysis, market_bet, settled_at
 - [RAG Architecture](rag-architecture.md) — lessons_learned → diinject ke Gemini prompt sebelum analisis; odds_movement_history → trend data; settlement cron jam 06:00 harian
 - [Replit Import](replit-import.md) — Proyek sudah di-import ke Replit. Semua secrets (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, GEMINI_API_KEY, ODDS_API_KEY, SUPABASE_ACCESS_TOKEN, GITHUB_ACCESS_TOKEN, GITHUB_REPO_URL) tersedia di Replit Secrets. Workflow: `Start Backend` (8080), `Start application` (5000), `Project` (parallel). GitHub repo: `https://github.com/free2vps/par-lay`

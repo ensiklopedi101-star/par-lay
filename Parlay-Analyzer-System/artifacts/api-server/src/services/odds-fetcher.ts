@@ -6,9 +6,19 @@ const BASE_URL = "https://api.odds-api.io/v3";
 let syncRunning = false;
 export function isSyncRunning(): boolean { return syncRunning; }
 
-const MAX_EVENTS_PER_SYNC = 80;
+const MAX_EVENTS_PER_SYNC = 40;
 const UPCOMING_WINDOW_DAYS = 10;
-export const DEFAULT_BOOKMAKERS = "Bet365,Betano";
+// The current free Odds-API plan accepts Bet365 as a recreational bookmaker.
+// Sbobet may be selectable on the account but requires a paid plan.
+export const DEFAULT_BOOKMAKERS = "Bet365";
+const ODDS_REFRESH_HOURS = 12;
+const ACTIVE_LEAGUE_CACHE_MS = 6 * 60 * 60 * 1000;
+
+let activeLeagueCache: { slugs: Set<string>; expiresAt: number } | null = null;
+
+function normalizeBookmakerName(name: string): string {
+  return name.toLowerCase().replace(/\s*\(no latency\)\s*/g, "").trim();
+}
 
 function redactApiKey(url: string): string {
   return url.replace(/([?&]apiKey=)[^&]*/i, "$1[REDACTED]");
@@ -194,6 +204,10 @@ async function apiGet<T>(url: string, label: string): Promise<T> {
 }
 
 export async function fetchActiveLeagueSlugs(apiKey: string): Promise<Set<string>> {
+  if (activeLeagueCache && activeLeagueCache.expiresAt > Date.now()) {
+    logger.info({ count: activeLeagueCache.slugs.size }, "RADAR: Using cached active leagues");
+    return activeLeagueCache.slugs;
+  }
   try {
     const url = `${BASE_URL}/leagues?apiKey=${apiKey}&sport=football&all=true`;
      logger.info({ url: redactApiKey(url) }, "RADAR: Fetching active leagues from Odds-API");
@@ -201,7 +215,9 @@ export async function fetchActiveLeagueSlugs(apiKey: string): Promise<Set<string
     logger.info({ rawData: data, dataLength: data?.length }, "RADAR: Response from Odds-API leagues");
     const filtered = data.filter((l) => l.eventsCount > 0);
     logger.info({ filteredCount: filtered.length, slugs: filtered.map((l) => l.slug) }, "RADAR: Active leagues after filtering");
-    return new Set(filtered.map((l) => l.slug));
+    const slugs = new Set(filtered.map((l) => l.slug));
+    activeLeagueCache = { slugs, expiresAt: Date.now() + ACTIVE_LEAGUE_CACHE_MS };
+    return slugs;
   } catch (err) {
     if (err instanceof RateLimitError) throw err;
     logger.error({ err }, "RADAR: Failed to fetch active leagues");
@@ -433,28 +449,29 @@ async function getAlreadySyncedEventIds(
   if (eventIds.length === 0) return new Set();
   const { data, error } = await supabase
     .from("odds_history")
-    .select("match_id, bookmaker")
+    .select("match_id, bookmaker, captured_at")
     .in("match_id", eventIds.map((id) => String(id)));
   if (error) {
     logger.error({ error }, "Failed to fetch already synced odds");
     return new Set();
   }
-  const configured = new Set(requestedBookmakers.map((name) => name.trim()).filter(Boolean));
+  const configured = new Set(requestedBookmakers.map(normalizeBookmakerName).filter(Boolean));
+  const freshCutoff = Date.now() - ODDS_REFRESH_HOURS * 60 * 60 * 1000;
   const bookmakersByEvent = new Map<number, Set<string>>();
   for (const row of data ?? []) {
     const eventId = Number(row.match_id);
     if (!Number.isFinite(eventId)) continue;
+    if (!row.captured_at || new Date(row.captured_at).getTime() < freshCutoff) continue;
     if (!bookmakersByEvent.has(eventId)) bookmakersByEvent.set(eventId, new Set());
-    bookmakersByEvent.get(eventId)!.add(String(row.bookmaker));
+    bookmakersByEvent.get(eventId)!.add(normalizeBookmakerName(String(row.bookmaker)));
   }
 
-  // A fixture is complete only when every configured bookmaker has at least
-  // one saved market. This allows a later sync to fill a newly selected
-  // bookmaker without re-fetching fixtures that are already complete.
+  // One fresh bookmaker is enough to avoid re-fetching the same fixture on
+  // every scheduler tick. A later run can still refresh once the TTL expires.
   return new Set(
     Array.from(bookmakersByEvent.entries())
       .filter(([, bookmakers]) =>
-        configured.size === 0 || Array.from(configured).every((name) => bookmakers.has(name)),
+        configured.size === 0 || Array.from(configured).some((name) => bookmakers.has(name)),
       )
       .map(([eventId]) => eventId),
   );

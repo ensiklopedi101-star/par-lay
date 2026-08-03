@@ -54,6 +54,8 @@ export default function Dashboard() {
     scanned: number;
     validTickets: number;
     parlayLegs: number;
+    waitingOdds: number;
+    noBet: number;
     message?: string;
     tickets?: Array<{
       home_team: string;
@@ -63,6 +65,7 @@ export default function Dashboard() {
       selection: string;
       prediction_text: string;
       is_parlay_leg: boolean;
+      odds_status?: "valid" | "stale";
     }>;
   } | null>(null);
   const { open, withPassword, onSubmit, onCancel } = useAdminPassword();
@@ -91,6 +94,8 @@ export default function Dashboard() {
         currentMatch: string | null;
         scanned: number;
         parlayLegs: number;
+        waitingOdds: number;
+        noBet: number;
         parlayId?: string | null;
         error?: string | null;
         tickets?: Array<{
@@ -101,6 +106,7 @@ export default function Dashboard() {
           selection: string;
           prediction_text: string;
           is_parlay_leg: boolean;
+          odds_status?: "valid" | "stale";
         }>;
       };
       let result: BatchStatus;
@@ -123,8 +129,12 @@ export default function Dashboard() {
           scanned: result.scanned,
           validTickets: result.tickets?.filter((ticket) => ticket.confidence >= 6.5 && ticket.status === "scanned").length ?? 0,
           parlayLegs: result.parlayLegs,
+          waitingOdds: result.waitingOdds,
+          noBet: result.noBet,
           message: result.status === "running"
             ? `Memproses ${result.completed} dari ${result.total} fixture${result.currentMatch ? ` — ${result.currentMatch}` : ""}`
+            : result.waitingOdds > 0
+              ? `Scanning selesai. ${result.waitingOdds} fixture menunggu data odds; ${result.noBet} fixture memiliki odds tetapi tidak memenuhi value.`
             : result.parlayId
               ? "Scanning selesai dan parlay otomatis berhasil dibuat."
               : "Scanning selesai. Minimal dua leg confidence tinggi diperlukan untuk membuat parlay.",
@@ -210,6 +220,8 @@ export default function Dashboard() {
                 <span>Scanned: <strong>{scanResult.scanned}</strong></span>
                 <span>Valid: <strong>{scanResult.validTickets}</strong></span>
                 <span>Parlay legs: <strong>{scanResult.parlayLegs}</strong></span>
+                <span className="text-amber-500">Waiting odds: <strong>{scanResult.waitingOdds}</strong></span>
+                <span className="text-muted-foreground">No bet: <strong>{scanResult.noBet}</strong></span>
               </div>
             </div>
             {scanResult.tickets && scanResult.tickets.length > 0 && (
@@ -222,10 +234,12 @@ export default function Dashboard() {
                     <span className="font-medium">
                       {ticket.home_team} vs {ticket.away_team}
                     </span>
-                    <span className="text-muted-foreground">
-                      {ticket.status === "error"
-                        ? ticket.prediction_text
-                        : `${ticket.selection || "NO_BET"} · confidence ${ticket.confidence}${ticket.is_parlay_leg ? " · parlay leg" : ""}`}
+                      <span className={ticket.status === "waiting_odds" ? "text-amber-500" : "text-muted-foreground"}>
+                        {ticket.status === "error"
+                          ? ticket.prediction_text
+                          : ticket.status === "waiting_odds"
+                            ? "WAITING FOR ODDS · AI belum dipanggil"
+                            : `${ticket.selection || "NO_BET"} · confidence ${ticket.confidence}${ticket.odds_status === "stale" ? " · stale odds" : ""}${ticket.is_parlay_leg ? " · parlay leg" : ""}`}
                     </span>
                   </div>
                 ))}

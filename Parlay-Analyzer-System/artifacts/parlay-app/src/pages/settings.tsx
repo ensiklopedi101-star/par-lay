@@ -203,7 +203,7 @@ export default function SettingsPage() {
   const [leagues, setLeagues] = useState<string[]>([]);
   const [bookmakers, setBookmakers] = useState<string[]>([]);
   const [markets, setMarkets] = useState<string[]>([]);
-  const [cronExpression, setCronExpression] = useState("0 */3 * * *");
+  const [cronExpression, setCronExpression] = useState("0 */6 * * *");
   const [scanDays, setScanDays] = useState(11);
   const [aiPersona, setAiPersona] = useState("");
   const [agentInstructions, setAgentInstructions] = useState("");
@@ -216,7 +216,7 @@ export default function SettingsPage() {
       setLeagues(config.leagues ?? []);
       setBookmakers(config.bookmakers ?? []);
       setMarkets(config.markets ?? []);
-      setCronExpression(config.cronExpression ?? "0 */3 * * *");
+      setCronExpression(config.cronExpression ?? "0 */6 * * *");
       setScanDays(config.scanDays ?? 11);
       setAiPersona(config.aiPersona ?? "");
       setAgentInstructions(config.agentInstructions ?? "");
@@ -399,7 +399,7 @@ export default function SettingsPage() {
                 label="Bookmakers"
                 items={bookmakers}
                 onChange={setBookmakers}
-                placeholder="Bet365"
+                 placeholder="Bet365"
                 testId="bookmakers"
               />
 
@@ -409,13 +409,13 @@ export default function SettingsPage() {
                   id="cron"
                   value={cronExpression}
                   onChange={(e) => setCronExpression(e.target.value)}
-                  placeholder="0 */3 * * *"
+                   placeholder="0 */6 * * *"
                   className="font-mono"
                   data-testid="input-cron"
                 />
                 <p className="text-xs text-muted-foreground">
                   Default:{" "}
-                  <code className="text-primary">0 */3 * * *</code> — setiap 3 jam
+                   <code className="text-primary">0 */6 * * *</code> — setiap 6 jam
                 </p>
               </div>
 
