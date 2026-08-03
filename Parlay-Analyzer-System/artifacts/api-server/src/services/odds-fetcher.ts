@@ -11,13 +11,33 @@ const UPCOMING_WINDOW_DAYS = 10;
 // The current free Odds-API plan accepts Bet365 as a recreational bookmaker.
 // Sbobet may be selectable on the account but requires a paid plan.
 export const DEFAULT_BOOKMAKERS = "Bet365";
-const ODDS_REFRESH_HOURS = 12;
+const ODDS_REFRESH_HOURS = 6;
 const ACTIVE_LEAGUE_CACHE_MS = 6 * 60 * 60 * 1000;
 
 let activeLeagueCache: { slugs: Set<string>; expiresAt: number } | null = null;
 
 function normalizeBookmakerName(name: string): string {
   return name.toLowerCase().replace(/\s*\(no latency\)\s*/g, "").trim();
+}
+
+export function normalizeScanDays(value: unknown, fallback = UPCOMING_WINDOW_DAYS): number {
+  const days = Number(value);
+  return Number.isInteger(days) && days >= 1 && days <= 90 ? days : fallback;
+}
+
+export async function getConfiguredScanDays(): Promise<number> {
+  try {
+    const { data, error } = await supabase
+      .from("scheduler_config")
+      .select("scan_days")
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return normalizeScanDays(data?.scan_days);
+  } catch (err) {
+    logger.warn({ err }, "RADAR: Failed to load scan_days — using default odds window");
+    return UPCOMING_WINDOW_DAYS;
+  }
 }
 
 function redactApiKey(url: string): string {
@@ -482,9 +502,9 @@ export async function fetchAndSaveLeagueOdds(
   apiKey: string,
   bookmakers: string,
   leagueIdMap: Map<string, number>,
-  options: { syncRunId?: number | null; maxEvents?: number } = {},
+  options: { syncRunId?: number | null; maxEvents?: number; upcomingWindowDays?: number } = {},
 ): Promise<{ league: string; saved: number; skipped: boolean; errors: number; eventsFetched: number; oddsFetched: number }> {
-  const { syncRunId, maxEvents } = options;
+  const { syncRunId, maxEvents, upcomingWindowDays = UPCOMING_WINDOW_DAYS } = options;
   let saved = 0;
   let errors = 0;
   let eventsFetched = 0;
@@ -501,7 +521,7 @@ export async function fetchAndSaveLeagueOdds(
     }
 
     const now = Date.now();
-    const windowEnd = now + UPCOMING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const windowEnd = now + upcomingWindowDays * 24 * 60 * 60 * 1000;
     const upcomingEvents = events.filter((e) => {
       const eventTime = new Date(e.date).getTime();
       return Number.isFinite(eventTime) && eventTime >= now && eventTime <= windowEnd;
@@ -558,6 +578,7 @@ export async function fetchAndSaveLeagueOdds(
 export async function fetchAndSaveAllLeagues(
   leagues: LeagueConfig[] = DEFAULT_LEAGUES,
   bookmakers = DEFAULT_BOOKMAKERS,
+  scanDays?: number,
 ): Promise<void> {
   if (syncRunning) {
     logger.warn("Sync already running — skipping");
@@ -571,6 +592,7 @@ export async function fetchAndSaveAllLeagues(
   }
 
   syncRunning = true;
+  const upcomingWindowDays = normalizeScanDays(scanDays ?? await getConfiguredScanDays());
   logger.info({ leagueCount: leagues.length }, "RADAR: Starting odds sync — checking active leagues");
 
   let activeSlugs: Set<string>;
@@ -640,6 +662,7 @@ export async function fetchAndSaveAllLeagues(
       const result = await fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, {
         syncRunId,
         maxEvents: remainingSlots,
+        upcomingWindowDays,
       });
       totalEventsFetched += result.eventsFetched;
       totalEventsInserted += result.saved;

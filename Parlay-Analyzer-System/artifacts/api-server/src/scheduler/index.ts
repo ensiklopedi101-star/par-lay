@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { logger } from "../lib/logger";
-import { fetchAndSaveAllLeagues, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, type LeagueConfig } from "../services/odds-fetcher";
+import { fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, type LeagueConfig } from "../services/odds-fetcher";
 import { runSettlement } from "../services/settlement";
 import { supabase } from "../lib/supabase-client";
 
@@ -11,6 +11,7 @@ let currentSettlementTask: ReturnType<typeof cron.schedule> | null = null;
 async function loadConfigAndSync() {
   let leagues: LeagueConfig[] = DEFAULT_LEAGUES;
   let bookmakers = DEFAULT_BOOKMAKERS;
+  let scanDays: number | undefined;
   try {
     const { data, error } = await supabase
       .from("scheduler_config")
@@ -32,12 +33,16 @@ async function loadConfigAndSync() {
           .filter((name: string) => name === "bet365");
         bookmakers = freeBookmakers.length > 0 ? "Bet365" : DEFAULT_BOOKMAKERS;
       }
+      scanDays = Number.isInteger(Number(cfg.scan_days)) && Number(cfg.scan_days) >= 1 && Number(cfg.scan_days) <= 90
+        ? Number(cfg.scan_days)
+        : undefined;
     }
   } catch (err) {
     logger.error({ err }, "Failed to load scheduler config — using defaults");
   }
-  logger.info({ leagues: leagues.map((l) => l.slug), bookmakers }, "Cron triggered: odds sync");
-  await fetchAndSaveAllLeagues(leagues, bookmakers);
+  scanDays ??= await getConfiguredScanDays();
+  logger.info({ leagues: leagues.map((l) => l.slug), bookmakers, scanDays }, "Cron triggered: odds sync");
+  await fetchAndSaveAllLeagues(leagues, bookmakers, scanDays);
 }
 
 function scheduleOddsTask(expression: string) {

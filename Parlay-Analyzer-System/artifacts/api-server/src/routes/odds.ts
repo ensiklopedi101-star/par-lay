@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
-import { fetchAndSaveAllLeagues, DEFAULT_LEAGUES } from "../services/odds-fetcher";
+import { fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES } from "../services/odds-fetcher";
 import { logger } from "../lib/logger";
 import { requireAdmin } from "../middlewares/admin";
 
@@ -17,8 +17,9 @@ router.post("/sync/trigger", requireAdmin, (req, res) => {
 router.get("/odds/events", async (req, res) => {
   try {
     const { league, limit } = req.query;
+    const scanDays = await getConfiguredScanDays();
     const now = new Date();
-    const radarEnd = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
+    const radarEnd = new Date(now.getTime() + scanDays * 24 * 60 * 60 * 1000);
     let q = supabase
       .from("fixtures")
       .select("*")
@@ -53,6 +54,7 @@ router.get("/odds/events", async (req, res) => {
 
 router.get("/odds/events/:eventId", async (req, res) => {
   try {
+    const scanDays = await getConfiguredScanDays();
     const eventId = Number(req.params["eventId"]);
     if (isNaN(eventId)) {
       res.status(400).json({ error: "Invalid eventId" });
@@ -134,7 +136,7 @@ router.get("/odds/events/:eventId", async (req, res) => {
       date: event.fixture_date,
       status: event.status_short,
        isUpcomingRadar: new Date(event.fixture_date).getTime() <=
-         Date.now() + 10 * 24 * 60 * 60 * 1000,
+         Date.now() + scanDays * 24 * 60 * 60 * 1000,
       updatedAt: event.updated_at,
       bookmakers,
     });
