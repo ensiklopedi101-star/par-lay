@@ -3,6 +3,7 @@ import {
   analyzeFixture,
   assessOddsAvailability,
   extractPredictionRecommendation,
+  loadAIConfig,
   OddsUnavailableError,
   PredictionAlreadyExistsError,
   StatsEmptyError,
@@ -126,6 +127,13 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
   const toScan = pendingFixtures
     .filter((fixture) => !waitingFixtures.some((waiting) => waiting.fixture_id === fixture.fixture_id))
     .slice(0, 10);
+
+  // Load the scheduler persona once for the whole batch instead of on every
+  // fixture, and share one team-stats cache across fixtures so a team that
+  // appears more than once in the batch is only queried once.
+  const { persona, agentInstructions } = await loadAIConfig();
+  const statsCache = new Map<string, Record<string, unknown>>();
+
   job.total = waitingFixtures.length + toScan.length;
   job.completed = waitingFixtures.length;
   job.waitingOdds = waitingFixtures.length;
@@ -148,16 +156,34 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
     });
   }
 
+  // Adaptive throttling: only wait between fixtures when the AI provider has
+  // actually signalled rate limiting (429/503) on the previous call. On a
+  // clean run there is no artificial delay at all; after a rate-limit hit the
+  // wait backs off exponentially (capped at 20s) and resets to 0 as soon as a
+  // call succeeds cleanly again.
+  let backoffMs = 0;
   for (let index = 0; index < toScan.length; index++) {
     const fx = toScan[index]!;
     job.currentMatch = `${fx.home_team_name} vs ${fx.away_team_name}`;
     try {
-      if (index > 0) {
-        logger.info("[AI-BATCH] Menunggu 5 detik (API Throttling)...");
-        await new Promise((resolve) => setTimeout(resolve, 5_000));
+      if (index > 0 && backoffMs > 0) {
+        logger.info({ backoffMs }, "[AI-BATCH] Throttling — provider signalled rate limiting on previous call");
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
       }
       logger.info({ matchNumber: index + 1, total: toScan.length }, `[AI-BATCH] Menganalisa pertandingan ${index + 1}...`);
-      const result = await analyzeFixture(String(fx.fixture_id));
+      const result = await analyzeFixture(String(fx.fixture_id), {
+        persona,
+        agentInstructions,
+        skipExistingPredictionCheck: true,
+        fixture: {
+          home_team_name: fx.home_team_name,
+          away_team_name: fx.away_team_name,
+          league_name: fx.league_name,
+        },
+        oddsRows: oddsByFixture.get(String(fx.fixture_id)) ?? [],
+        statsCache,
+      });
+      backoffMs = result.rateLimited ? Math.min(backoffMs === 0 ? 5_000 : backoffMs * 2, 20_000) : 0;
       const recommendation = extractPredictionRecommendation(result.prediction_text);
       const prob = extractProbFromPrediction(result.prediction_text);
       const kelly = prob && recommendation.odds > 1

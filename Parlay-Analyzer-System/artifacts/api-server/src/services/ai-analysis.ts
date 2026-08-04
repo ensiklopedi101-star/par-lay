@@ -78,7 +78,7 @@ Jika confidence < 6.5, selection: "NO_BET" dan JSON tidak wajib.`;
    LOAD AI CONFIG dari Supabase
    Mengembalikan persona aktif + instruksi tambahan.
    ═══════════════════════════════════════════════════════════════ */
-async function loadAIConfig(): Promise<{ persona: string; agentInstructions: string | null }> {
+export async function loadAIConfig(): Promise<{ persona: string; agentInstructions: string | null }> {
   try {
     const { data } = await supabase
       .from("scheduler_config")
@@ -100,7 +100,7 @@ async function loadAIConfig(): Promise<{ persona: string; agentInstructions: str
 /* ═══════════════════════════════════════════════════════════════
    TIPE DATA
    ═══════════════════════════════════════════════════════════════ */
-interface OddsRow {
+export interface OddsRow {
   bookmaker: string;
   market_type: string;
   odds_1: number | null;
@@ -479,6 +479,32 @@ function teamMatchScore(requested: string, candidate: string): number {
 
 const STATS_COLUMNS = "stats_xg, stats_fts, stats_btts, stats_goals_conceded, stats_goals_scored, stats_shots, stats_over_25, stats_over_35, stats_under, stats_team_form, stats_ht, season, team_name, league_slug";
 
+function teamStatsCacheKey(teamName: string, leagueSlug: string): string {
+  return `${normalizeTeamForMatch(teamName)}::${leagueSlug.trim().toLowerCase()}`;
+}
+
+/**
+ * Cache-aware wrapper around findTeamStats. When a shared `cache` (scoped to
+ * one batch run) is supplied, each team+league combination is fetched from
+ * team_season_stats at most once per batch instead of once per fixture —
+ * previously a team appearing in several fixtures within the same batch (or
+ * used for both the AI prompt and the standings context) triggered a fresh
+ * Supabase round-trip every time.
+ */
+async function findTeamStatsCached(
+  teamName: string,
+  leagueSlug: string,
+  cache?: Map<string, Record<string, unknown>>,
+): Promise<Record<string, unknown>> {
+  if (!cache) return findTeamStats(teamName, leagueSlug);
+  const key = teamStatsCacheKey(teamName, leagueSlug);
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const stats = await findTeamStats(teamName, leagueSlug);
+  cache.set(key, stats);
+  return stats;
+}
+
 async function findTeamStats(teamName: string, leagueSlug: string): Promise<Record<string, unknown>> {
   const { data, error } = await supabase
     .from("team_season_stats")
@@ -555,13 +581,15 @@ async function fetchHeadToHead(
   }
 }
 
-async function fetchStandingContext(
-  teamName: string,
-  leagueSlug: string,
-  season: string,
-): Promise<StandingContext | null> {
+/**
+ * Derive standings/form context from team stats already fetched elsewhere
+ * in the analysis flow (via findTeamStatsCached). This used to re-query
+ * team_season_stats on its own (up to 2 extra Supabase round-trips per
+ * fixture on top of the direct findTeamStats calls) — it is now a pure,
+ * synchronous helper operating on data the caller already has in hand.
+ */
+function buildStandingContext(teamName: string, data: Record<string, unknown>): StandingContext | null {
   try {
-    const data = await findTeamStats(teamName, leagueSlug);
     const stats = (data.current_season && typeof data.current_season === "object"
       ? data.current_season
       : data) as Record<string, unknown>;
@@ -821,6 +849,34 @@ export interface AnalysisResult {
   ev_at_analysis?: number;
   odds_status?: OddsAvailabilityStatus;
   odds_captured_at?: string | null;
+  /** True if the AI provider had to be retried due to 429/503 rate limiting. */
+  rateLimited?: boolean;
+}
+
+/**
+ * Batch-scoped context that lets a caller (e.g. the batch scanner) share
+ * data it already loaded for the whole batch — fixture row, the
+ * "already analyzed" guard, odds history, resolved team stats, and the
+ * scheduler persona — instead of analyzeFixture re-fetching each of these
+ * per fixture.
+ */
+export interface BatchAnalysisContext {
+  /** Persona text already loaded once for the batch (skips loadAIConfig()). */
+  persona?: string;
+  agentInstructions?: string | null;
+  /** Batch already filtered out fixtures with an existing prediction. */
+  skipExistingPredictionCheck?: boolean;
+  /** Fixture fields already loaded by the batch's own fixtures query. */
+  fixture?: {
+    home_team_name?: string | null;
+    away_team_name?: string | null;
+    league_name?: string | null;
+    league_slug?: string | null;
+  };
+  /** Odds rows already loaded by the batch for this fixture. */
+  oddsRows?: OddsRow[];
+  /** Shared team-stats cache, scoped to a single batch run. */
+  statsCache?: Map<string, Record<string, unknown>>;
 }
 
 export interface PredictionRecommendation {
@@ -927,12 +983,12 @@ async function generateWithGroq(
   return text;
 }
 
-export async function generateAIResponse(apiKey: string | undefined, systemInstruction: string, prompt: string): Promise<{ text: string; provider: string; model: string }> {
+export async function generateAIResponse(apiKey: string | undefined, systemInstruction: string, prompt: string): Promise<{ text: string; provider: string; model: string; rateLimited: boolean }> {
   const groqKey = process.env["GROQ_API_KEY"];
   const provider = (process.env["AI_PROVIDER"] ?? "auto").toLowerCase();
   if (provider === "groq" || (provider === "auto" && !apiKey && groqKey)) {
     if (!groqKey) throw new Error("GROQ_API_KEY is not set");
-    return { text: await generateWithGroq(groqKey, systemInstruction, prompt), provider: "groq", model: process.env["GROQ_MODEL"] ?? "llama-3.3-70b-versatile" };
+    return { text: await generateWithGroq(groqKey, systemInstruction, prompt), provider: "groq", model: process.env["GROQ_MODEL"] ?? "llama-3.3-70b-versatile", rateLimited: false };
   }
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
@@ -942,20 +998,25 @@ export async function generateAIResponse(apiKey: string | undefined, systemInstr
     systemInstruction,
   });
   let lastError: unknown;
+  // Tracks whether Gemini actually returned 429/503 during this call, so the
+  // caller (batch scanner) can throttle adaptively instead of always waiting
+  // a fixed delay regardless of whether the provider is under load.
+  let rateLimited = false;
   for (let attempt = 0; attempt <= 2; attempt++) {
     try {
       const result = await model.generateContent(prompt);
-      return { text: result.response.text(), provider: "gemini", model: modelName };
+      return { text: result.response.text(), provider: "gemini", model: modelName, rateLimited };
     } catch (error) {
       lastError = error;
       if (!isRetryableAIError(error) || attempt === 2) break;
+      rateLimited = true;
       logger.warn({ attempt: attempt + 1, model: modelName }, "[AI-RETRY] Gemini 429/503; waiting 15 seconds");
       await sleep(15_000);
     }
   }
   if (groqKey && provider === "auto") {
     logger.warn("[AI-FALLBACK] Gemini unavailable; trying Groq");
-    return { text: await generateWithGroq(groqKey, systemInstruction, prompt), provider: "groq", model: process.env["GROQ_MODEL"] ?? "llama-3.3-70b-versatile" };
+    return { text: await generateWithGroq(groqKey, systemInstruction, prompt), provider: "groq", model: process.env["GROQ_MODEL"] ?? "llama-3.3-70b-versatile", rateLimited: true };
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
@@ -963,52 +1024,79 @@ export async function generateAIResponse(apiKey: string | undefined, systemInstr
 /* ═══════════════════════════════════════════════════════════════
    MAIN: analyzeFixture
    ═══════════════════════════════════════════════════════════════ */
-export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult> {
+export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisContext): Promise<AnalysisResult> {
   const apiKey = process.env["GEMINI_API_KEY"];
   const groqKey = process.env["GROQ_API_KEY"];
   const provider = (process.env["AI_PROVIDER"] ?? "auto").toLowerCase();
   if (!supabase) throw new Error("Supabase client not initialised");
 
-  /* ── 1. Fetch fixture ── */
-  const { data: fixture, error: fixtureError } = await supabase
-    .from("fixtures")
-    .select("*")
-    .eq("fixture_id", fixtureId)
-    .single();
+  /* ── 1. Fetch fixture (or reuse the row the batch already loaded) ── */
+  let homeTeam: string;
+  let awayTeam: string;
+  let leagueName: string;
+  let leagueSlug: string;
 
-  if (fixtureError || !fixture) {
-    throw new Error(`Fixture not found: ${fixtureError?.message ?? "no data"}`);
+  if (context?.fixture) {
+    homeTeam = context.fixture.home_team_name ?? "";
+    awayTeam = context.fixture.away_team_name ?? "";
+    leagueName = context.fixture.league_name ?? "";
+    leagueSlug = context.fixture.league_slug ?? context.fixture.league_name ?? "";
+  } else {
+    const { data: fixture, error: fixtureError } = await supabase
+      .from("fixtures")
+      .select("*")
+      .eq("fixture_id", fixtureId)
+      .single();
+
+    if (fixtureError || !fixture) {
+      throw new Error(`Fixture not found: ${fixtureError?.message ?? "no data"}`);
+    }
+
+    homeTeam = fixture.home_team ?? fixture.home_name ?? fixture.home_team_name ?? fixture.team_home ?? "";
+    awayTeam = fixture.away_team ?? fixture.away_name ?? fixture.away_team_name ?? fixture.team_away ?? "";
+    leagueName = fixture.league_name ?? fixture.league ?? "";
+    leagueSlug = fixture.league_slug ?? fixture.league_name ?? "";
   }
-
-  const homeTeam: string = fixture.home_team ?? fixture.home_name ?? fixture.home_team_name ?? fixture.team_home ?? "";
-  const awayTeam: string = fixture.away_team ?? fixture.away_name ?? fixture.away_team_name ?? fixture.team_away ?? "";
-  const leagueName: string = fixture.league_name ?? fixture.league ?? "";
 
   if (!homeTeam || !awayTeam) {
     throw new Error("Fixture record is missing home_team or away_team fields");
   }
 
-  const { data: existingPrediction, error: existingPredictionError } = await supabase
-    .from("ai_predictions")
-    .select("id")
-    .eq("fixture_id", fixtureId)
-    .maybeSingle();
-  if (existingPredictionError) {
-    logger.warn({ fixtureId, existingPredictionError }, "[AI-ANALYSIS] Could not check existing prediction");
-  } else if (existingPrediction) {
-    throw new PredictionAlreadyExistsError();
+  // Batch scanner already excludes fixtures with an existing prediction
+  // before calling analyzeFixture — skip the redundant per-fixture lookup.
+  if (!context?.skipExistingPredictionCheck) {
+    const { data: existingPrediction, error: existingPredictionError } = await supabase
+      .from("ai_predictions")
+      .select("id")
+      .eq("fixture_id", fixtureId)
+      .maybeSingle();
+    if (existingPredictionError) {
+      logger.warn({ fixtureId, existingPredictionError }, "[AI-ANALYSIS] Could not check existing prediction");
+    } else if (existingPrediction) {
+      throw new PredictionAlreadyExistsError();
+    }
   }
 
-  /* ── 2. Fetch & parse odds ── */
-  const { data: oddsRows } = await supabase
-    .from("odds_history")
-    .select("bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
-    .eq("match_id", fixtureId)
-    .order("captured_at", { ascending: false })
-    .limit(60);
+  /* ── 2. Fetch & parse odds (or reuse rows the batch already loaded) ── */
+  let oddsRows: OddsRow[];
+  if (context?.oddsRows) {
+    // Batch's odds query has no per-fixture order/limit; replicate the
+    // single-fixture query's "most recent 60" semantics client-side.
+    oddsRows = [...context.oddsRows]
+      .sort((a, b) => new Date(b.captured_at ?? 0).getTime() - new Date(a.captured_at ?? 0).getTime())
+      .slice(0, 60);
+  } else {
+    const { data } = await supabase
+      .from("odds_history")
+      .select("bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+      .eq("match_id", fixtureId)
+      .order("captured_at", { ascending: false })
+      .limit(60);
+    oddsRows = (data ?? []) as OddsRow[];
+  }
 
-  const structuredOdds = extractStructuredOdds((oddsRows ?? []) as OddsRow[]);
-  const oddsAvailability = assessOddsAvailability((oddsRows ?? []) as OddsRow[]);
+  const structuredOdds = extractStructuredOdds(oddsRows);
+  const oddsAvailability = assessOddsAvailability(oddsRows);
   if (oddsAvailability.status === "missing") {
     logger.info({ fixtureId }, "[AI-ANALYSIS] Menunggu data odds; AI tidak dipanggil");
     throw new OddsUnavailableError();
@@ -1018,18 +1106,23 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
   }
   const oddsBlock = formatOddsBlock(homeTeam, awayTeam, structuredOdds);
 
-  /* ── 3. Fetch odds movement trend + lessons + performance log + relational context (parallel) ── */
-  // Ekstrak league slug dari fixture untuk RAG filtering
-   const leagueSlug: string = fixture.league_slug ?? fixture.league_name ?? "";
-   const currentSeason = String(new Date().getFullYear());
-  const [movementRows, lessons, perfLog, h2h, homeStandings, awayStandings] = await Promise.all([
+  /* ── 3. Fetch odds movement trend + lessons + performance log + relational
+     context + team stats (parallel). Team stats are fetched once per team
+     here (via the shared batch cache when available) and reused both for
+     the standings block below and the AI prompt — previously findTeamStats
+     could run up to 4x per fixture (twice via the old fetchStandingContext,
+     twice directly). ── */
+  const [movementRows, lessons, perfLog, h2h, homeStats, awayStats] = await Promise.all([
     fetchOddsMovementTrend(fixtureId),
     fetchRelevantLessons(homeTeam, awayTeam, leagueSlug),
     fetchPerformanceLog(),
     fetchHeadToHead(homeTeam, awayTeam, leagueName, leagueSlug),
-    fetchStandingContext(homeTeam, leagueSlug, currentSeason),
-    fetchStandingContext(awayTeam, leagueSlug, currentSeason),
+    findTeamStatsCached(homeTeam, leagueSlug, context?.statsCache),
+    findTeamStatsCached(awayTeam, leagueSlug, context?.statsCache),
   ]);
+
+  const homeStandings = buildStandingContext(homeTeam, homeStats);
+  const awayStandings = buildStandingContext(awayTeam, awayStats);
 
   const trendBlock = formatOddsMovementTrend(movementRows);
   const lessonsBlock = formatLessonsBlock(lessons);
@@ -1039,12 +1132,6 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     formatStandingContextBlock("KLASEMEN HOME", homeStandings),
     formatStandingContextBlock("KLASEMEN AWAY", awayStandings),
   ].join("\n");
-
-   /* ── 4. Fetch team stats with league/name/season resolver ── */
-   const [homeStats, awayStats] = await Promise.all([
-     findTeamStats(homeTeam, leagueSlug),
-     findTeamStats(awayTeam, leagueSlug),
-   ]);
 
   /* ── Terminal monitoring ── */
   const STAT_KEYS = ["stats_xg","stats_fts","stats_btts","stats_goals_conceded","stats_goals_scored","stats_shots","stats_over_25","stats_over_35","stats_under","stats_team_form","stats_ht"] as const;
@@ -1074,8 +1161,10 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
    console.log(`[AI-ANALYSIS] Mengirim prompt ke AI provider...\n`);
   logger.info({ fixtureId, homeTeam, awayTeam, trendSnapshots: movementRows.length, ragLessons: lessons.length }, "Calling Gemini for analysis");
 
-  /* ── 5. Load persona dari Supabase → Call Gemini ── */
-  const { persona, agentInstructions } = await loadAIConfig();
+  /* ── 5. Load persona dari Supabase (atau reuse persona batch) → Call Gemini ── */
+  const { persona, agentInstructions } = context?.persona
+    ? { persona: context.persona, agentInstructions: context.agentInstructions ?? null }
+    : await loadAIConfig();
   const finalPersona = agentInstructions
     ? `${persona}\n\nINSTRUKSI TAMBAHAN:\n${agentInstructions}`
     : persona;
@@ -1121,5 +1210,6 @@ export async function analyzeFixture(fixtureId: string): Promise<AnalysisResult>
     ev_at_analysis: evAtAnalysis,
     odds_status: oddsAvailability.status,
     odds_captured_at: oddsAvailability.latestCapturedAt,
+    rateLimited: aiResult.rateLimited,
   };
 }
