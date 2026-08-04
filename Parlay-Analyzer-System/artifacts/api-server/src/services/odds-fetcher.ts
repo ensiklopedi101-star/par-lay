@@ -13,6 +13,8 @@ const UPCOMING_WINDOW_DAYS = 10;
 export const DEFAULT_BOOKMAKERS = "Bet365";
 const ODDS_REFRESH_HOURS = 6;
 const ACTIVE_LEAGUE_CACHE_MS = 6 * 60 * 60 * 1000;
+const MAX_RATE_LIMIT_RETRIES = 2;
+const MAX_RATE_LIMIT_BACKOFF_SECONDS = 300;
 
 let activeLeagueCache: { slugs: Set<string>; expiresAt: number } | null = null;
 
@@ -104,26 +106,19 @@ async function finishSyncRun(
   }
 }
 
-async function incrementSyncRunStats(
-  id: number | null | undefined,
-  stats: Partial<Pick<SyncRunRecord, "events_fetched" | "events_inserted" | "odds_fetched" | "errors">>,
-) {
+async function updateSyncRunStats(
+  id: number | null,
+  stats: Pick<SyncRunRecord, "events_fetched" | "events_inserted" | "odds_fetched" | "errors">,
+): Promise<void> {
   if (!id) return;
   try {
-    const { data } = await supabase.from("sync_runs").select("*").eq("id", id).single();
-    if (!data) return;
-    const current = data as SyncRunRecord;
-    await supabase
+    const { error } = await supabase
       .from("sync_runs")
-      .update({
-        events_fetched: (current.events_fetched ?? 0) + (stats.events_fetched ?? 0),
-        events_inserted: (current.events_inserted ?? 0) + (stats.events_inserted ?? 0),
-        odds_fetched: (current.odds_fetched ?? 0) + (stats.odds_fetched ?? 0),
-        errors: (current.errors ?? 0) + (stats.errors ?? 0),
-      })
+      .update(stats)
       .eq("id", id);
+    if (error) throw error;
   } catch (err) {
-    logger.warn({ err, id }, "sync_runs increment failed");
+    logger.warn({ err, id }, "sync_runs per-league update failed");
   }
 }
 
@@ -200,7 +195,13 @@ interface ApiEvent {
   bookmakers?: Record<string, ApiMarket[]>;
 }
 
-function parseRetryAfter(body: string): number {
+function parseRetryAfter(body: string, headerValue?: string | null): number {
+  if (headerValue != null && headerValue.trim() !== "") {
+    const headerSeconds = Number(headerValue);
+    if (Number.isFinite(headerSeconds) && headerSeconds >= 0) {
+      return Math.ceil(headerSeconds);
+    }
+  }
   const match = body.match(/resets in (\d+) minutes? and (\d+) seconds?/);
   if (match) return parseInt(match[1]!) * 60 + parseInt(match[2]!);
   return 3600;
@@ -212,8 +213,9 @@ async function apiGet<T>(url: string, label: string): Promise<T> {
   logger.info({ status: res.status, statusText: res.statusText, label, ok: res.ok }, "RADAR: HTTP response from Odds-API");
   if (res.status === 429) {
     const body = await res.text().catch(() => "");
-    logger.warn({ body, retryAfter: parseRetryAfter(body) }, "RADAR: Rate limited by Odds-API");
-    throw new RateLimitError(parseRetryAfter(body));
+    const retryAfterSeconds = parseRetryAfter(body, res.headers.get("retry-after"));
+    logger.warn({ body, retryAfter: retryAfterSeconds, label }, "RADAR: Rate limited by Odds-API");
+    throw new RateLimitError(retryAfterSeconds);
   }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -271,15 +273,16 @@ async function fetchEventOdds(eventId: number, apiKey: string, bookmakers: strin
   return result;
 }
 
-async function insertOddsMovementSnapshot(
+function buildOddsMovementRow(
   fixtureId: number,
   bookmaker: string,
   market: ApiMarket,
-): Promise<void> {
+  capturedAt: string,
+): Record<string, unknown> | null {
   const name = (market.name ?? "").toLowerCase();
   const o = market.odds[0] ?? {};
 
-  let newOdds: Record<string, number | null> = {};
+  let newOdds: Record<string, number | null>;
 
   if (name === "ml" || name === "1x2" || name === "match_winner" || name === "h2h") {
     newOdds = {
@@ -303,46 +306,58 @@ async function insertOddsMovementSnapshot(
       away_odds: o.away  ? parseFloat(o.away  as string) : null,
     };
   } else {
-    return; /* market tidak dikenal — skip */
+    return null; /* market tidak dikenal — skip */
   }
 
-  /* Deduplication: cek snapshot terakhir untuk fixture+bookmaker+market ini.
-     Jika odds identik → tidak ada perubahan → skip insert untuk hemat storage. */
-  try {
-    const { data: latest } = await supabase
-      .from("odds_movement_history")
-      .select("home_odds, away_odds, draw_odds, over_odds, under_odds, btts_yes, btts_no")
-      .eq("fixture_id", String(fixtureId))
-      .eq("bookmaker", bookmaker)
-      .eq("market_type", market.name)
-      .order("captured_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (latest) {
-      const isDuplicate = Object.entries(newOdds).every(([key, val]) => {
-        const prev = latest[key as keyof typeof latest] as number | null;
-        if (val === null && prev === null) return true;
-        if (val === null || prev === null) return false;
-        return Math.abs(val - prev) < 0.005; /* toleransi floating point */
-      });
-      if (isDuplicate) return; /* odds tidak berubah — skip */
-    }
-  } catch {
-    /* Jika cek gagal, tetap insert untuk keamanan */
-  }
-
-  const row: Record<string, unknown> = {
+  return {
     fixture_id: String(fixtureId),
     bookmaker,
     market_type: market.name,
-    captured_at: new Date().toISOString(),
+    captured_at: capturedAt,
     ...newOdds,
   };
+}
 
-  const { error } = await supabase.from("odds_movement_history").insert(row);
-  if (error) {
-    logger.debug({ error, fixtureId, bookmaker, market: market.name }, "odds_movement_history insert skipped");
+async function saveOddsMovementBatch(
+  fixtureId: number,
+  movementRows: Array<{ bookmaker: string; market: ApiMarket; row: Record<string, unknown> }>,
+): Promise<void> {
+  if (movementRows.length === 0) return;
+  try {
+    const { data: latestRows, error: latestError } = await supabase
+      .from("odds_movement_history")
+      .select("bookmaker, market_type, captured_at, home_odds, away_odds, draw_odds, over_odds, under_odds, btts_yes, btts_no")
+      .eq("fixture_id", String(fixtureId))
+      .order("captured_at", { ascending: false });
+    if (latestError) throw latestError;
+
+    const latestByKey = new Map<string, Record<string, unknown>>();
+    for (const latest of (latestRows ?? []) as Array<Record<string, unknown>>) {
+      const key = `${String(latest.bookmaker)}::${String(latest.market_type)}`;
+      if (!latestByKey.has(key)) latestByKey.set(key, latest);
+    }
+
+    const changedRows = movementRows.filter(({ bookmaker, market, row }) => {
+      const latest = latestByKey.get(`${bookmaker}::${market.name}`);
+      if (!latest) return true;
+      return Object.entries(row).some(([key, value]) => {
+        if (key === "fixture_id" || key === "bookmaker" || key === "market_type" || key === "captured_at") return false;
+        const previous = latest[key];
+        if (value === null && previous === null) return false;
+        if (value === null || previous === null || value === undefined || previous === undefined) return true;
+        return Math.abs(Number(value) - Number(previous)) >= 0.005;
+      });
+    });
+
+    if (changedRows.length === 0) return;
+    const { error } = await supabase
+      .from("odds_movement_history")
+      .insert(changedRows.map(({ row }) => row));
+    if (error) throw error;
+    logger.info({ fixtureId, inserted: changedRows.length }, "RADAR: Odds movement batch saved");
+  } catch (error) {
+    // Movement history is auxiliary; preserve the previous fail-open behavior.
+    logger.debug({ error, fixtureId }, "odds_movement_history batch skipped");
   }
 }
 
@@ -405,61 +420,73 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
 
   if (!event.bookmakers) return;
 
-  // 2. Upsert odds to Supabase + 3. Insert odds movement snapshot
+  // 2. Collect all odds rows for this event before touching Supabase.
+  const capturedAt = new Date().toISOString();
+  const oddsPayloads: Array<Record<string, unknown>> = [];
+  const movementPayloads: Array<{ bookmaker: string; market: ApiMarket; row: Record<string, unknown> }> = [];
   for (const [bookmaker, markets] of Object.entries(event.bookmakers)) {
     for (const market of markets) {
-      if (market.odds.length >= 1) {
-        const odds = market.odds[0];
-        const oddsPayload = {
-          match_id: String(event.id),
-          home_team: event.home,
-          away_team: event.away,
-          commence_time: event.date,
-          bookmaker,
-          market_type: market.name,
-          odds_1: odds.home ? parseFloat(odds.home) : null,
-          odds_2: odds.away ? parseFloat(odds.away) : null,
-          odds_draw: odds.draw ? parseFloat(odds.draw) : null,
-          captured_at: new Date().toISOString(),
-        };
-        logger.info({ oddsPayload }, "RADAR: Attempting odds save");
-        // The live database does not define a unique constraint on
-        // (match_id, bookmaker, market_type), so save the latest row
-        // explicitly instead of relying on PostgREST onConflict.
-        const { data: existingOdds, error: existingOddsErr } = await supabase
-          .from("odds_history")
-          .select("id")
-          .eq("match_id", String(event.id))
-          .eq("bookmaker", bookmaker)
-          .eq("market_type", market.name)
-          .order("captured_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        let oddsErr = existingOddsErr;
-        if (!oddsErr && existingOdds?.id != null) {
-          const result = await supabase
-            .from("odds_history")
-            .update(oddsPayload)
-            .eq("id", existingOdds.id);
-          oddsErr = result.error;
-        } else if (!oddsErr) {
-          const result = await supabase
-            .from("odds_history")
-            .insert(oddsPayload);
-          oddsErr = result.error;
-        }
-        if (oddsErr) {
-          logger.error({ error: oddsErr, errorMessage: oddsErr.message, errorDetails: oddsErr.details, eventId: event.id, bookmaker, market: market.name }, "RADAR: Supabase odds save ERROR");
-        } else {
-          logger.info({ eventId: event.id, bookmaker, market: market.name }, "RADAR: Odds save SUCCESS");
-        }
-
-        // 3. Record snapshot to odds_movement_history
-        await insertOddsMovementSnapshot(event.id, bookmaker, market);
-      }
+      if (market.odds.length < 1) continue;
+      const odds = market.odds[0]!;
+      oddsPayloads.push({
+        match_id: String(event.id),
+        home_team: event.home,
+        away_team: event.away,
+        commence_time: event.date,
+        bookmaker,
+        market_type: market.name,
+        odds_1: odds.home ? parseFloat(odds.home) : null,
+        odds_2: odds.away ? parseFloat(odds.away) : null,
+        odds_draw: odds.draw ? parseFloat(odds.draw) : null,
+        captured_at: capturedAt,
+      });
+      const movementRow = buildOddsMovementRow(event.id, bookmaker, market, capturedAt);
+      if (movementRow) movementPayloads.push({ bookmaker, market, row: movementRow });
     }
   }
+  if (oddsPayloads.length === 0) return;
+
+  // The live database has no unique constraint for odds_history. Preserve the
+  // existing latest-row update behavior, but reduce reads to one query and
+  // insert all new market rows in one batch.
+  const { data: existingOddsRows, error: existingOddsError } = await supabase
+    .from("odds_history")
+    .select("id, match_id, bookmaker, market_type, captured_at")
+    .eq("match_id", String(event.id))
+    .order("captured_at", { ascending: false });
+  if (existingOddsError) {
+    logger.error({ error: existingOddsError, eventId: event.id }, "RADAR: Existing odds lookup ERROR");
+  }
+
+  const existingByKey = new Map<string, Record<string, unknown>>();
+  for (const row of (existingOddsRows ?? []) as Array<Record<string, unknown>>) {
+    const key = `${String(row.bookmaker)}::${String(row.market_type)}`;
+    if (!existingByKey.has(key)) existingByKey.set(key, row);
+  }
+  const rowsToInsert: Array<Record<string, unknown>> = [];
+  const rowsToUpdate: Array<{ id: unknown; payload: Record<string, unknown> }> = [];
+  for (const payload of oddsPayloads) {
+    const key = `${String(payload.bookmaker)}::${String(payload.market_type)}`;
+    const existing = existingByKey.get(key);
+    if (existing?.id != null) rowsToUpdate.push({ id: existing.id, payload });
+    else rowsToInsert.push(payload);
+  }
+
+  if (rowsToInsert.length > 0) {
+    const { error } = await supabase.from("odds_history").insert(rowsToInsert);
+    if (error) logger.error({ error, eventId: event.id, count: rowsToInsert.length }, "RADAR: Odds batch insert ERROR");
+  }
+  if (rowsToUpdate.length > 0) {
+    const updateResults = await Promise.all(rowsToUpdate.map(({ id, payload }) =>
+      supabase.from("odds_history").update(payload).eq("id", id),
+    ));
+    const updateError = updateResults.find((result) => result.error)?.error;
+    if (updateError) logger.error({ error: updateError, eventId: event.id }, "RADAR: Odds batch update ERROR");
+  }
+  logger.info({ eventId: event.id, inserted: rowsToInsert.length, updated: rowsToUpdate.length }, "RADAR: Odds batch saved");
+
+  // One read + one insert for all movement snapshots belonging to this event.
+  await saveOddsMovementBatch(event.id, movementPayloads);
 }
 
 async function getAlreadySyncedEventIds(
@@ -502,13 +529,22 @@ export async function fetchAndSaveLeagueOdds(
   apiKey: string,
   bookmakers: string,
   leagueIdMap: Map<string, number>,
-  options: { syncRunId?: number | null; maxEvents?: number; upcomingWindowDays?: number } = {},
-): Promise<{ league: string; saved: number; skipped: boolean; errors: number; eventsFetched: number; oddsFetched: number }> {
-  const { syncRunId, maxEvents, upcomingWindowDays = UPCOMING_WINDOW_DAYS } = options;
+  options: { maxEvents?: number; upcomingWindowDays?: number } = {},
+): Promise<{
+  league: string;
+  saved: number;
+  skipped: boolean;
+  errors: number;
+  eventsFetched: number;
+  oddsFetched: number;
+  rateLimitedSeconds?: number;
+}> {
+  const { maxEvents, upcomingWindowDays = UPCOMING_WINDOW_DAYS } = options;
   let saved = 0;
   let errors = 0;
   let eventsFetched = 0;
   let oddsFetched = 0;
+  let rateLimitedSeconds = 0;
 
   try {
     logger.info({ league: league.slug, bookmakers }, "RADAR: Fetching events for league");
@@ -542,8 +578,6 @@ export async function fetchAndSaveLeagueOdds(
       "Events found",
     );
 
-    await incrementSyncRunStats(syncRunId, { events_fetched: eventsFetched, events_inserted: toFetch.length });
-
     for (const event of toFetch) {
       try {
         await new Promise((r) => setTimeout(r, 300));
@@ -553,9 +587,9 @@ export async function fetchAndSaveLeagueOdds(
         oddsFetched++;
       } catch (err) {
         if (err instanceof RateLimitError) {
-          logger.warn({ retryAfter: err.retryAfterSeconds, saved }, "Rate limited — stopping sync early");
-          await incrementSyncRunStats(syncRunId, { odds_fetched: oddsFetched, errors });
-          return { league: league.slug, saved, skipped: false, errors, eventsFetched, oddsFetched };
+          rateLimitedSeconds = err.retryAfterSeconds;
+          logger.warn({ retryAfter: rateLimitedSeconds, saved }, "Rate limited — returning partial league result for retry");
+          break;
         }
         errors++;
         logger.error({ err, eventId: event.id }, "Failed to fetch/save odds for event");
@@ -563,16 +597,25 @@ export async function fetchAndSaveLeagueOdds(
     }
   } catch (err) {
     if (err instanceof RateLimitError) {
-      logger.warn({ retryAfter: err.retryAfterSeconds }, "Rate limited on league events fetch");
-      throw err;
+      rateLimitedSeconds = err.retryAfterSeconds;
+      logger.warn({ retryAfter: rateLimitedSeconds }, "Rate limited on league events fetch");
     }
-    logger.error({ err, league: league.slug }, "Failed to process league");
-    errors++;
+    else {
+      logger.error({ err, league: league.slug }, "Failed to process league");
+      errors++;
+    }
   }
 
-  await incrementSyncRunStats(syncRunId, { odds_fetched: oddsFetched, errors });
-  logger.info({ league: league.slug, saved, errors }, "League sync done");
-  return { league: league.slug, saved, skipped: false, errors, eventsFetched, oddsFetched };
+  logger.info({ league: league.slug, saved, errors, rateLimitedSeconds }, "League sync attempt done");
+  return {
+    league: league.slug,
+    saved,
+    skipped: false,
+    errors,
+    eventsFetched,
+    oddsFetched,
+    ...(rateLimitedSeconds > 0 && { rateLimitedSeconds }),
+  };
 }
 
 export async function fetchAndSaveAllLeagues(
@@ -595,16 +638,33 @@ export async function fetchAndSaveAllLeagues(
   const upcomingWindowDays = normalizeScanDays(scanDays ?? await getConfiguredScanDays());
   logger.info({ leagueCount: leagues.length }, "RADAR: Starting odds sync — checking active leagues");
 
-  let activeSlugs: Set<string>;
-  try {
-    activeSlugs = await fetchActiveLeagueSlugs(apiKey);
-  } catch (err) {
-    syncRunning = false;
-    if (err instanceof RateLimitError) {
-      logger.warn({ retryAfter: err.retryAfterSeconds }, "Rate limited fetching leagues — will retry next cycle");
-      return;
+  let activeSlugs: Set<string> = new Set();
+  for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+    try {
+      activeSlugs = await fetchActiveLeagueSlugs(apiKey);
+      break;
+    } catch (err) {
+      if (!(err instanceof RateLimitError)) {
+        syncRunning = false;
+        throw err;
+      }
+      rateLimitWait: {
+        const waitSeconds = Math.min(
+          Math.max(1, err.retryAfterSeconds),
+          MAX_RATE_LIMIT_BACKOFF_SECONDS,
+        );
+        logger.warn(
+          { attempt: attempt + 1, retryAfterSeconds: err.retryAfterSeconds, waitSeconds },
+          "RADAR: Rate limited fetching active leagues — backing off",
+        );
+        if (attempt >= MAX_RATE_LIMIT_RETRIES) {
+          syncRunning = false;
+          logger.warn("RADAR: Active league fetch permanently skipped for this sync run");
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+      }
     }
-    throw err;
   }
 
   logger.info({ activeCount: activeSlugs.size, activeSlugs: Array.from(activeSlugs) }, "RADAR: Active leagues fetched from API");
@@ -631,6 +691,8 @@ export async function fetchAndSaveAllLeagues(
   let rateLimitedSeconds = 0;
   let status: "completed" | "partial" | "failed" = "completed";
   let errorMessage = "";
+  const retriedLeagues: string[] = [];
+  const permanentlySkippedLeagues: string[] = [];
 
   // Build league_id map from Supabase
   let leagueIdMap: Map<string, number>;
@@ -650,37 +712,93 @@ export async function fetchAndSaveAllLeagues(
     leagueIdMap = new Map();
   }
 
-  try {
-    let remainingSlots = MAX_EVENTS_PER_SYNC;
-    for (const league of leaguesToSync) {
-      if (remainingSlots <= 0) {
-        logger.info({ maxEvents: MAX_EVENTS_PER_SYNC }, "RADAR: Reached per-sync event cap — pausing until next cycle");
-        status = "partial";
+  let remainingSlots = MAX_EVENTS_PER_SYNC;
+  for (const league of leaguesToSync) {
+    if (remainingSlots <= 0) {
+      logger.info({ maxEvents: MAX_EVENTS_PER_SYNC }, "RADAR: Reached per-sync event cap — pausing until next cycle");
+      status = "partial";
+      break;
+    }
+
+    let leagueSaved = 0;
+    let leagueOddsFetched = 0;
+    let leagueErrors = 0;
+    let leagueEventsFetched = 0;
+    let leagueRateLimitedSeconds = 0;
+    let leagueCompleted = false;
+
+    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+      logger.info({ league: league.slug, remainingSlots, attempt: attempt + 1 }, "RADAR: Processing league");
+      let result;
+      try {
+        result = await fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, {
+          maxEvents: remainingSlots,
+          upcomingWindowDays,
+        });
+      } catch (err) {
+        status = "failed";
+        errorMessage = err instanceof Error ? err.message : "Unknown error";
+        logger.error({ err, league: league.slug }, "RADAR: Sync failed");
         break;
       }
-      logger.info({ league: league.slug, remainingSlots }, "RADAR: Processing league");
-      const result = await fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, {
-        syncRunId,
-        maxEvents: remainingSlots,
-        upcomingWindowDays,
-      });
-      totalEventsFetched += result.eventsFetched;
-      totalEventsInserted += result.saved;
-      totalOddsFetched += result.oddsFetched;
-      totalErrors += result.errors;
-      remainingSlots -= result.saved;
-      await new Promise((r) => setTimeout(r, 500));
+
+      if (attempt === 0) leagueEventsFetched = result.eventsFetched;
+      leagueSaved += result.saved;
+      leagueOddsFetched += result.oddsFetched;
+      leagueErrors += result.errors;
+
+      if (!result.rateLimitedSeconds) {
+        leagueCompleted = true;
+        break;
+      }
+
+      leagueRateLimitedSeconds = result.rateLimitedSeconds;
+      rateLimitedSeconds = Math.max(rateLimitedSeconds, leagueRateLimitedSeconds);
+      if (attempt >= MAX_RATE_LIMIT_RETRIES) {
+        status = "partial";
+        permanentlySkippedLeagues.push(league.slug);
+        logger.warn(
+          { league: league.slug, retryAfterSeconds: leagueRateLimitedSeconds },
+          "RADAR: League permanently skipped after rate-limit retries",
+        );
+        break;
+      }
+
+      if (!retriedLeagues.includes(league.slug)) retriedLeagues.push(league.slug);
+      const waitSeconds = Math.min(
+        Math.max(1, leagueRateLimitedSeconds),
+        MAX_RATE_LIMIT_BACKOFF_SECONDS,
+      );
+      logger.warn(
+        { league: league.slug, attempt: attempt + 1, retryAfterSeconds: leagueRateLimitedSeconds, waitSeconds },
+        "RADAR: Backing off before retrying league",
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
     }
-  } catch (err) {
-    if (err instanceof RateLimitError) {
-      logger.warn("Rate limited mid-sync — stopping. Next cycle will continue from unsynced events.");
-      status = "partial";
-      rateLimitedSeconds = err.retryAfterSeconds;
-    } else {
-      status = "failed";
-      errorMessage = err instanceof Error ? err.message : "Unknown error";
-      logger.error({ err }, "RADAR: Sync failed");
-    }
+
+    totalEventsFetched += leagueEventsFetched;
+    totalEventsInserted += leagueSaved;
+    totalOddsFetched += leagueOddsFetched;
+    totalErrors += leagueErrors;
+    remainingSlots -= leagueSaved;
+
+    // One absolute stats update per league, rather than a read/update during
+    // and after every league.
+    await updateSyncRunStats(syncRunId, {
+      events_fetched: totalEventsFetched,
+      events_inserted: totalEventsInserted,
+      odds_fetched: totalOddsFetched,
+      errors: totalErrors,
+    });
+
+    if (!leagueCompleted && status === "failed") break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  if (permanentlySkippedLeagues.length > 0) {
+    errorMessage = `Rate-limit retried leagues: ${retriedLeagues.join(", ") || "none"}; permanently skipped: ${permanentlySkippedLeagues.join(", ")}`;
+  } else if (retriedLeagues.length > 0) {
+    errorMessage = `Rate-limit retried leagues: ${retriedLeagues.join(", ")}; all retries recovered`;
   }
 
   await finishSyncRun(syncRunId, status, {
