@@ -1,0 +1,19 @@
+#4 - Add real rate-limit backoff to odds sync
+What & Why
+artifacts/api-server/src/services/odds-fetcher.ts detects 429 responses and parses the retry-after duration (203-216), but never actually waits or retries — it just aborts the current league (555-559) or the whole sync loop (564-568, 674-679) and moves on. The parsed rateLimitedSeconds is only recorded in sync_runs (686-692) for visibility, it isn't used to pace the next attempt. This means a rate-limited sync can leave leagues unsynced with no automatic recovery until the next scheduled run, which can look like "the sync just stopped" with no obvious cause.
+Done looks like
+When a 429 is received, the sync backs off for the server-provided retry duration (with a sane cap) and resumes remaining leagues instead of abandoning them.
+sync_runs reflects which leagues were retried vs. permanently skipped for that run.
+Existing safeguards stay intact: still respects MAX_EVENTS_PER_SYNC, still only syncs fixtures inside the configured scan window, and doesn't increase Odds-API request volume beyond current limits.
+Relevant files
+artifacts/api-server/src/services/odds-fetcher.ts (rate-limit detection ~203-216, league loop ~655-679, event loop ~547-568)
+#5 - Batch the per-event/per-market writes in odds sync
+What & Why
+In artifacts/api-server/src/services/odds-fetcher.ts, saveEventAndOdds does one fixture upsert per event (396-399), then for every bookmaker/market combination it does a separate existence check, then an update-or-insert, then a separate "latest movement" read/insert in insertOddsMovementSnapshot (312-320, 343). That's 3-4 sequential Supabase round-trips per event-market pair, which adds up across a league with many events/markets and directly extends how long each sync cycle takes (and how long the workspace/backend needs to stay awake for it).
+Done looks like
+Odds rows are written with a single batched upsert per event (using a unique constraint on match/bookmaker/market) instead of a select-then-branch per row.
+Movement-snapshot inserts are batched or computed from the batch upsert result instead of one lookup per row.
+incrementSyncRunStats (called both mid-league and again at league end) is consolidated to one update per league instead of two.
+Total sync wall-clock time for a full cycle drops, with no change to which odds/events end up stored.
+Relevant files
+artifacts/api-server/src/services/odds-fetcher.ts (saveEventAndOdds ~396-461, insertOddsMovementSnapshot ~312-343, incrementSyncRunStats ~113-124)
