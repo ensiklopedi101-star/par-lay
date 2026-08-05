@@ -20,3 +20,9 @@ The confirmed Eredivisie aliases `SC Heerenveen → Heerenveen` and `FC Utrecht 
 **Why:** These identities were confirmed by the user’s example and live rows showed complementary or empty fields rather than conflicting values.
 
 **How to apply:** Keep future alias additions conservative and require an explicit mapping plus conflict guard; do not infer arbitrary clubs from fuzzy similarity alone.
+
+Odds history currently has no exact duplicate rows at the full provider/bookmaker/market/timestamp/price identity; repeated prices at different timestamps are retained as valid market history. Runtime consumers collapse to the newest snapshot per match/bookmaker/market, while movement history remains append-only.
+
+**Why:** Removing same-price snapshots would destroy the timing signal needed for market movement and baseline analysis.
+
+**How to apply:** Keep cleanup non-destructive; enforce idempotent latest-row sync, use the latest-snapshot index for reads, and reserve full-history endpoints for audit/trend views.

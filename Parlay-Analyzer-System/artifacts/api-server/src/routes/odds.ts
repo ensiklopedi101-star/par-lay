@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase-client";
 import { fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES } from "../services/odds-fetcher";
 import { logger } from "../lib/logger";
 import { requireAdmin } from "../middlewares/admin";
+import { latestOddsByMarket } from "../services/odds-history";
 
 const router: IRouter = Router();
 
@@ -82,7 +83,7 @@ router.get("/odds/events/:eventId", async (req, res) => {
     }
 
     const bookmakers: Record<string, { name: string; odds: Record<string, unknown>[] }[]> = {};
-    for (const row of oddsRows ?? []) {
+    for (const row of latestOddsByMarket(oddsRows ?? [])) {
       const bm = (row.bookmaker as string) ?? "Unknown";
       const mt = String(row.market_type ?? "").toLowerCase();
       if (!bookmakers[bm]) bookmakers[bm] = [];

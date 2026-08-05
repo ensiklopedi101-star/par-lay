@@ -22,6 +22,7 @@
 
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { latestOddsByMarket } from "./odds-history";
 
 export type RevalidationStatus = "keep" | "review" | "invalidated";
 
@@ -212,6 +213,9 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
     const list = oddsByFixture.get(key) ?? [];
     list.push(row);
     oddsByFixture.set(key, list);
+  }
+  for (const [key, rows] of oddsByFixture) {
+    oddsByFixture.set(key, latestOddsByMarket(rows));
   }
 
   const updates: Array<{ id: string; revalidation_status: RevalidationStatus; revalidation_note: string }> = [];

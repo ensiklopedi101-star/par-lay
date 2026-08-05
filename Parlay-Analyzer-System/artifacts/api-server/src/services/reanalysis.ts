@@ -1,5 +1,6 @@
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
+import { latestOddsByMarket } from "./odds-history";
 import {
   analyzeFixture,
   type OddsRow,
@@ -38,7 +39,7 @@ async function loadOddsRows(candidate: RevalidationCandidate): Promise<OddsRow[]
     .eq("match_id", String(candidate.fixtureId))
     .order("captured_at", { ascending: false })
     .limit(60);
-  if (direct.data?.length) return direct.data as OddsRow[];
+  if (direct.data?.length) return latestOddsByMarket(direct.data as OddsRow[]);
 
   const fallback = await supabase
     .from("odds_history")
@@ -47,7 +48,7 @@ async function loadOddsRows(candidate: RevalidationCandidate): Promise<OddsRow[]
     .eq("away_team", candidate.awayTeam)
     .order("captured_at", { ascending: false })
     .limit(60);
-  if (fallback.data?.length) return fallback.data as OddsRow[];
+  if (fallback.data?.length) return latestOddsByMarket(fallback.data as OddsRow[]);
 
   // Provider names sometimes carry FC/SC suffixes. A bounded read gives the
   // service one last safe matching opportunity without guessing by odds alone.
@@ -55,10 +56,10 @@ async function loadOddsRows(candidate: RevalidationCandidate): Promise<OddsRow[]
     .from("odds_history")
     .select(fields)
     .limit(5000);
-  return ((broad.data ?? []) as Array<OddsRow & { home_team?: string; away_team?: string }>).filter((row) =>
+  return latestOddsByMarket(((broad.data ?? []) as Array<OddsRow & { home_team?: string; away_team?: string }>).filter((row) =>
     normalizeTeamName(String(row.home_team ?? "")) === normalizeTeamName(candidate.homeTeam) &&
     normalizeTeamName(String(row.away_team ?? "")) === normalizeTeamName(candidate.awayTeam),
-  ).slice(0, 60);
+  )).slice(0, 60);
 }
 
 function isTrigger(candidate: RevalidationCandidate): candidate is RevalidationCandidate & { trigger: ReanalysisTrigger } {

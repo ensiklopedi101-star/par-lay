@@ -13,6 +13,7 @@ import { supabase } from "../lib/supabase-client";
 import { calculateKelly, extractProbFromPrediction } from "../lib/kelly-criterion";
 import { requireAdmin } from "../middlewares/admin";
 import { createParlayFromCandidates, type ParlayCandidate } from "../services/parlay-builder";
+import { latestOddsByMarket } from "../services/odds-history";
 import { randomUUID } from "node:crypto";
 
 const router: IRouter = Router();
@@ -108,7 +109,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
     odds_draw: number | null;
     captured_at?: string;
   }>>();
-  for (const row of oddsResult.data ?? []) {
+  for (const row of latestOddsByMarket(oddsResult.data ?? [])) {
     const key = String(row.match_id);
     const rows = oddsByFixture.get(key) ?? [];
     rows.push({

@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { cleanTeamName } from "../lib/team-name-cleaner";
+import { latestOddsByMarket } from "./odds-history";
 import { getGeminiModel } from "./model-discovery";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -101,6 +102,7 @@ export async function loadAIConfig(): Promise<{ persona: string; agentInstructio
    TIPE DATA
    ═══════════════════════════════════════════════════════════════ */
 export interface OddsRow {
+  match_id?: string | number;
   bookmaker: string;
   market_type: string;
   odds_1: number | null;
@@ -1086,17 +1088,15 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
   if (context?.oddsRows) {
     // Batch's odds query has no per-fixture order/limit; replicate the
     // single-fixture query's "most recent 60" semantics client-side.
-    oddsRows = [...context.oddsRows]
-      .sort((a, b) => new Date(b.captured_at ?? 0).getTime() - new Date(a.captured_at ?? 0).getTime())
-      .slice(0, 60);
+    oddsRows = latestOddsByMarket(context.oddsRows).slice(0, 60);
   } else {
     const { data } = await supabase
       .from("odds_history")
-      .select("bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+      .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
       .eq("match_id", fixtureId)
       .order("captured_at", { ascending: false })
       .limit(60);
-    oddsRows = (data ?? []) as OddsRow[];
+    oddsRows = latestOddsByMarket((data ?? []) as OddsRow[]).slice(0, 60);
   }
 
   const structuredOdds = extractStructuredOdds(oddsRows);
