@@ -49,6 +49,20 @@ export interface RiskCenterItem {
   lastRevalidatedAt: string | null;
   inParlay: boolean;
   parlayCount: number;
+  latestRevision: {
+    triggerType: string;
+    triggerReason: string;
+    predictionText: string | null;
+    marketBet: string | null;
+    bestOdds: number | null;
+    evAtAnalysis: number | null;
+    confidence: number | null;
+    provider: string | null;
+    modelVersion: string | null;
+    status: string;
+    errorMessage: string | null;
+    createdAt: string;
+  } | null;
 }
 
 export interface RiskCenterResponse {

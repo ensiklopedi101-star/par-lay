@@ -26,6 +26,22 @@ type FixtureRow = {
   fixture_date: string;
 };
 
+type RevisionRow = {
+  prediction_id: string;
+  trigger_type: string;
+  trigger_reason: string;
+  prediction_text: string | null;
+  market_bet: string | null;
+  best_odds: number | null;
+  ev_at_analysis: number | null;
+  confidence_score: number | null;
+  provider: string | null;
+  model_version: string | null;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+};
+
 /**
  * Read-only operational view of active predictions that need attention before
  * kickoff. Settlement status remains separate; this endpoint never mutates
@@ -97,6 +113,26 @@ router.get("/risk-center", async (_req, res) => {
       logger.warn({ error: parlayLegError }, "[RISK-CENTER] Failed to load parlay links");
     }
 
+    const { data: revisionRows, error: revisionError } = await supabase
+      .from("ai_prediction_revisions")
+      .select(
+        "prediction_id, trigger_type, trigger_reason, prediction_text, market_bet, best_odds, ev_at_analysis, confidence_score, provider, model_version, status, error_message, created_at",
+      )
+      .in("prediction_id", upcomingPredictions.map((prediction) => prediction.id))
+      .order("created_at", { ascending: false })
+      .limit(250);
+
+    if (revisionError) {
+      logger.warn({ error: revisionError }, "[RISK-CENTER] Failed to load AI revisions");
+    }
+
+    const latestRevisionByPrediction = new Map<string, RevisionRow>();
+    for (const revision of (revisionRows ?? []) as RevisionRow[]) {
+      if (!latestRevisionByPrediction.has(String(revision.prediction_id))) {
+        latestRevisionByPrediction.set(String(revision.prediction_id), revision);
+      }
+    }
+
     const parlayByFixture = new Map<number, Set<string>>();
     for (const row of parlayLegRows ?? []) {
       const fixtureId = Number(row.fixture_id);
@@ -111,6 +147,7 @@ router.get("/risk-center", async (_req, res) => {
         const fixture = fixtureById.get(Number(prediction.fixture_id))!;
         const status = prediction.revalidation_status ?? "review";
         const parlayIds = parlayByFixture.get(Number(prediction.fixture_id)) ?? new Set<string>();
+        const latestRevision = latestRevisionByPrediction.get(String(prediction.id));
         return {
           predictionId: prediction.id,
           fixtureId: Number(prediction.fixture_id),
@@ -129,6 +166,22 @@ router.get("/risk-center", async (_req, res) => {
           lastRevalidatedAt: prediction.last_revalidated_at,
           inParlay: parlayIds.size > 0,
           parlayCount: parlayIds.size,
+          latestRevision: latestRevision
+            ? {
+                triggerType: latestRevision.trigger_type,
+                triggerReason: latestRevision.trigger_reason,
+                predictionText: latestRevision.prediction_text,
+                marketBet: latestRevision.market_bet,
+                bestOdds: latestRevision.best_odds,
+                evAtAnalysis: latestRevision.ev_at_analysis,
+                confidence: latestRevision.confidence_score,
+                provider: latestRevision.provider,
+                modelVersion: latestRevision.model_version,
+                status: latestRevision.status,
+                errorMessage: latestRevision.error_message,
+                createdAt: latestRevision.created_at,
+              }
+            : null,
         };
       })
       .sort((a, b) => {

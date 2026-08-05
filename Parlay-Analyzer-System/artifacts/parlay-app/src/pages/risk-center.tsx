@@ -1,4 +1,4 @@
-import { AlertTriangle, ExternalLink } from "lucide-react";
+import { AlertTriangle, BrainCircuit, ExternalLink } from "lucide-react";
 import { Link } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -89,6 +89,48 @@ export default function RiskCenter() {
                         <p className={`mt-2 text-sm ${isInvalidated ? "text-red-300" : "text-amber-300"}`}>
                           {item.revalidationNote}
                         </p>
+                        {item.latestRevision && (
+                          <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-3">
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
+                              <BrainCircuit className="h-3.5 w-3.5 text-primary" />
+                              <span className="font-semibold text-primary">AI re-analysis terbaru</span>
+                              <Badge variant="outline" className="border-primary/30 text-primary">
+                                {item.latestRevision.status}
+                              </Badge>
+                              <span className="text-muted-foreground">
+                                {new Date(item.latestRevision.createdAt).toLocaleString()}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Trigger: {item.latestRevision.triggerType} — {item.latestRevision.triggerReason}
+                            </p>
+                            {item.latestRevision.status === "completed" ? (
+                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-foreground">
+                                <span>Market: {item.latestRevision.marketBet ?? "N/A"}</span>
+                                <span>
+                                  Odds baru:{" "}
+                                  {item.latestRevision.bestOdds != null
+                                    ? item.latestRevision.bestOdds.toFixed(2)
+                                    : "N/A"}
+                                </span>
+                                <span>
+                                  EV baru:{" "}
+                                  {item.latestRevision.evAtAnalysis != null
+                                    ? `${(item.latestRevision.evAtAnalysis * 100).toFixed(1)}%`
+                                    : "N/A"}
+                                </span>
+                                <span>
+                                  {item.latestRevision.provider ?? "AI"}
+                                  {item.latestRevision.modelVersion ? `/${item.latestRevision.modelVersion}` : ""}
+                                </span>
+                              </div>
+                            ) : (
+                              <p className="mt-2 text-xs text-red-300">
+                                {item.latestRevision.errorMessage ?? "Re-analysis gagal; prediksi asli tetap dipakai."}
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div className="flex shrink-0 flex-row items-center gap-3 text-xs text-muted-foreground lg:flex-col lg:items-end">
                         <span>Odds: {item.bestOdds != null ? item.bestOdds.toFixed(2) : "N/A"}</span>

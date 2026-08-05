@@ -1,5 +1,5 @@
 /**
- * Revalidation Service (Lite)
+ * Revalidation Service
  *
  * Problem it solves: the batch scanner permanently skips a fixture the
  * moment `ai_predictions` has a row for it. A leg scanned days before
@@ -10,9 +10,8 @@
  *   - Re-check odds/EV against the market price recorded at analysis
  *     time and tag a `revalidation_status` (`keep` / `review` /
  *     `invalidated`) with a human-readable `revalidation_note`.
- *   - NO Gemini/AI re-call here — that is a larger follow-up (would need
- *     versioning + quota budgeting). This pass only flags what a human
- *     (or a future automated trigger) should look at again.
+ *   - AI re-analysis is intentionally delegated to reanalysis.ts after this
+ *     service has produced explicit trigger context.
  *   - NEVER mutates `parlays` / `parlay_legs`. If a prediction backs an
  *     already-created parlay, it is treated as placed history — we only
  *     tag the underlying `ai_predictions` row so the UI can surface a
@@ -36,21 +35,47 @@ interface PendingPrediction {
   expected_value: number | null;
   home_team: string | null;
   away_team: string | null;
+  created_at: string | null;
 }
 
 interface FixtureRow {
   fixture_id: number;
   fixture_date: string;
+  league_name?: string | null;
+  home_team_name?: string | null;
+  away_team_name?: string | null;
 }
 
 interface OddsRow {
   match_id: string;
+  home_team?: string | null;
+  away_team?: string | null;
+  commence_time?: string | null;
   bookmaker?: string;
   market_type: string;
   odds_1: number | null;
   odds_2: number | null;
   odds_draw: number | null;
   captured_at: string;
+}
+
+export interface RevalidationCandidate {
+  predictionId: string;
+  fixtureId: number;
+  fixtureDate: string;
+  leagueName: string;
+  homeTeam: string;
+  awayTeam: string;
+  marketBet: string | null;
+  analysisOdds: number | null;
+  currentOdds: number | null;
+  oddsDelta: number | null;
+  evAtAnalysis: number | null;
+  currentEV: number | null;
+  evDrop: number | null;
+  status: RevalidationStatus;
+  trigger: "odds_drift" | "ev_deterioration" | "final_window" | "missing_baseline" | null;
+  triggerReason: string;
 }
 
 /** Thresholds — tuned conservatively; revisit once real data accumulates. */
@@ -60,7 +85,7 @@ const FINAL_WINDOW_HOURS = 3; // force a last look this close to kickoff
 const EV_DROP_REVIEW = 0.05; // absolute EV drop vs analysis time
 const EV_DROP_INVALIDATE = 0.15;
 
-function marketKey(marketBet: string | null): { type: "home" | "away" | "draw" | "over" | "under" | "btts_yes" | "btts_no" | "unknown" } {
+export function marketKey(marketBet: string | null): { type: "home" | "away" | "draw" | "over" | "under" | "btts_yes" | "btts_no" | "unknown" } {
   const m = (marketBet ?? "").toLowerCase();
   if (m.includes("home") || m === "1") return { type: "home" };
   if (m.includes("away") || m === "2") return { type: "away" };
@@ -73,7 +98,7 @@ function marketKey(marketBet: string | null): { type: "home" | "away" | "draw" |
 }
 
 /** Extract the current best price for the tracked selection from live odds rows. */
-function currentPriceFor(marketBet: string | null, rows: OddsRow[]): number | null {
+export function currentPriceFor(marketBet: string | null, rows: OddsRow[]): number | null {
   const { type } = marketKey(marketBet);
   if (type === "unknown" || rows.length === 0) return null;
 
@@ -117,15 +142,16 @@ export interface RevalidationSummary {
   review: number;
   invalidated: number;
   skippedNoOdds: number;
+  candidates?: RevalidationCandidate[];
 }
 
 export async function runRevalidation(): Promise<RevalidationSummary> {
   const now = Date.now();
-  const summary: RevalidationSummary = { checked: 0, kept: 0, review: 0, invalidated: 0, skippedNoOdds: 0 };
+  const summary: RevalidationSummary = { checked: 0, kept: 0, review: 0, invalidated: 0, skippedNoOdds: 0, candidates: [] };
 
   const { data: predictions, error: predErr } = await supabase
     .from("ai_predictions")
-    .select("id, fixture_id, market_bet, best_market, best_odds, ev_at_analysis, expected_value, home_team, away_team")
+    .select("id, fixture_id, market_bet, best_market, best_odds, ev_at_analysis, expected_value, home_team, away_team, created_at")
     .eq("status", "active")
     .limit(500);
 
@@ -142,7 +168,7 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
   const fixtureIds = active.map((p) => p.fixture_id);
   const { data: fixtures } = await supabase
     .from("fixtures")
-    .select("fixture_id, fixture_date")
+    .select("fixture_id, fixture_date, league_name, home_team_name, away_team_name")
     .in("fixture_id", fixtureIds);
   const fixtureById = new Map((fixtures ?? []).map((f) => [Number((f as FixtureRow).fixture_id), f as FixtureRow]));
 
@@ -157,19 +183,38 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
     return summary;
   }
 
+  const fixtureByTeamAndDate = new Map(
+    (fixtures ?? []).map((f) => [
+      fixtureMatchKey(
+        String((f as FixtureRow & { home_team_name?: string }).home_team_name),
+        String((f as FixtureRow & { away_team_name?: string }).away_team_name),
+        String((f as FixtureRow & { fixture_date?: string }).fixture_date),
+      ),
+      f,
+    ]),
+  );
   const { data: oddsRowsRaw } = await supabase
     .from("odds_history")
-    .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
-    .in("match_id", upcoming.map((p) => String(p.fixture_id)));
+    .select("match_id, home_team, away_team, commence_time, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+    .limit(5000);
   const oddsByFixture = new Map<string, OddsRow[]>();
   for (const row of (oddsRowsRaw ?? []) as OddsRow[]) {
-    const key = String(row.match_id);
+    const directFixture = fixtureById.get(Number(row.match_id));
+    const matchingFixture = directFixture ?? fixtureByTeamAndDate.get(
+      fixtureMatchKey(
+        String((row as OddsRow & { home_team?: string }).home_team),
+        String((row as OddsRow & { away_team?: string }).away_team),
+        String((row as OddsRow & { commence_time?: string }).commence_time),
+      ),
+    ) as FixtureRow | undefined;
+    const key = matchingFixture ? String(matchingFixture.fixture_id) : String(row.match_id);
     const list = oddsByFixture.get(key) ?? [];
     list.push(row);
     oddsByFixture.set(key, list);
   }
 
   const updates: Array<{ id: string; revalidation_status: RevalidationStatus; revalidation_note: string }> = [];
+  const candidates: RevalidationCandidate[] = [];
 
   for (const prediction of upcoming) {
     summary.checked++;
@@ -189,6 +234,24 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
         revalidation_status: "review",
         revalidation_note: "Odds terkini untuk pasaran ini tidak ditemukan — perlu pengecekan manual sebelum kickoff.",
       });
+      candidates.push({
+        predictionId: prediction.id,
+        fixtureId: prediction.fixture_id,
+        fixtureDate: fx.fixture_date,
+        leagueName: String((fx as FixtureRow & { league_name?: string }).league_name ?? ""),
+        homeTeam: prediction.home_team ?? "",
+        awayTeam: prediction.away_team ?? "",
+        marketBet,
+        analysisOdds,
+        currentOdds,
+        oddsDelta: null,
+        evAtAnalysis,
+        currentEV: null,
+        evDrop: null,
+        status: "review",
+        trigger: null,
+        triggerReason: "Tidak ada baseline atau odds terkini yang dapat dicocokkan secara aman.",
+      });
       continue;
     }
 
@@ -201,15 +264,18 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
     const evDrop = evAtAnalysis !== null ? evAtAnalysis - currentEV : 0;
 
     let status: RevalidationStatus = "keep";
+    let trigger: RevalidationCandidate["trigger"] = null;
     const reasons: string[] = [];
 
     const adverseOddsDrop = oddsDelta < 0 ? Math.abs(oddsDelta) : 0;
     if (adverseOddsDrop >= INVALIDATED_ODDS_DELTA || currentEV < 0 && evDrop >= EV_DROP_INVALIDATE) {
       status = "invalidated";
+      trigger = adverseOddsDrop >= INVALIDATED_ODDS_DELTA ? "odds_drift" : "ev_deterioration";
       reasons.push(`Odds bergerak ${(oddsDelta * 100).toFixed(1)}% dari saat analisis (${analysisOdds} → ${currentOdds}).`);
       if (currentEV < 0) reasons.push(`EV kini negatif (${(currentEV * 100).toFixed(1)}%) vs saat analisis (${((evAtAnalysis ?? 0) * 100).toFixed(1)}%).`);
     } else if (adverseOddsDrop >= REVIEW_ODDS_DELTA || evDrop >= EV_DROP_REVIEW) {
       status = "review";
+      trigger = adverseOddsDrop >= REVIEW_ODDS_DELTA ? "odds_drift" : "ev_deterioration";
       reasons.push(`Odds bergerak ${(oddsDelta * 100).toFixed(1)}% (${analysisOdds} → ${currentOdds}), EV bergeser ${(evDrop * 100).toFixed(1)}pp.`);
     } else if (oddsDelta > REVIEW_ODDS_DELTA) {
       reasons.push(`Odds membaik ${(oddsDelta * 100).toFixed(1)}% (${analysisOdds} → ${currentOdds}); EV meningkat berdasarkan harga pasar.`);
@@ -217,6 +283,7 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
 
     if (hoursToKickoff <= FINAL_WINDOW_HOURS && status === "keep") {
       status = "review";
+      trigger = "final_window";
       reasons.push(`Kickoff dalam ${hoursToKickoff.toFixed(1)} jam — pengecekan akhir sebelum pertandingan dimulai.`);
     }
 
@@ -225,6 +292,24 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
     }
 
     updates.push({ id: prediction.id, revalidation_status: status, revalidation_note: reasons.join(" ") });
+    candidates.push({
+      predictionId: prediction.id,
+      fixtureId: prediction.fixture_id,
+      fixtureDate: fx.fixture_date,
+      leagueName: String((fx as FixtureRow & { league_name?: string }).league_name ?? ""),
+      homeTeam: prediction.home_team ?? "",
+      awayTeam: prediction.away_team ?? "",
+      marketBet,
+      analysisOdds,
+      currentOdds,
+      oddsDelta,
+      evAtAnalysis,
+      currentEV,
+      evDrop,
+      status,
+      trigger,
+      triggerReason: reasons.join(" "),
+    });
     if (status === "keep") summary.kept++;
     else if (status === "review") summary.review++;
     else summary.invalidated++;
@@ -246,6 +331,21 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
     ),
   );
 
+  summary.candidates = candidates;
   logger.info(summary, "[REVALIDATION] Selesai");
   return summary;
+}
+
+function normalizeTeamName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\b(fc|cf|sc|afc)\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function fixtureMatchKey(home: string, away: string, date: string): string {
+  const parsed = date ? new Date(date) : null;
+  const day = parsed && Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : "";
+  return `${normalizeTeamName(home)}::${normalizeTeamName(away)}::${day}`;
 }

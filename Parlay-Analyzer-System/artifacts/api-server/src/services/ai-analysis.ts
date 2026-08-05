@@ -851,6 +851,8 @@ export interface AnalysisResult {
   odds_captured_at?: string | null;
   /** True if the AI provider had to be retried due to 429/503 rate limiting. */
   rateLimited?: boolean;
+  provider?: string;
+  model?: string;
 }
 
 /**
@@ -877,6 +879,8 @@ export interface BatchAnalysisContext {
   oddsRows?: OddsRow[];
   /** Shared team-stats cache, scoped to a single batch run. */
   statsCache?: Map<string, Record<string, unknown>>;
+  /** Generate a result without mutating ai_predictions; used by re-analysis revisions. */
+  persistPrediction?: boolean;
 }
 
 export interface PredictionRecommendation {
@@ -1179,7 +1183,10 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
 
   /* ── 6. Simpan ke ai_predictions ── */
-  const { data: savedPrediction, error: insertError } = await supabase.from("ai_predictions").upsert({
+   let savedPrediction: { id?: string } | null = null;
+   let insertError: { message: string } | null = null;
+   if (context?.persistPrediction !== false) {
+     const result = await supabase.from("ai_predictions").upsert({
     fixture_id: parseInt(fixtureId) || fixtureId,
     prediction_text: predictionText,
     home_team: homeTeam,
@@ -1191,7 +1198,10 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     status: "active",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  }, { onConflict: "fixture_id" }).select("id").single();
+     }, { onConflict: "fixture_id" }).select("id").single();
+     savedPrediction = result.data;
+     insertError = result.error;
+   }
 
   if (insertError) {
     logger.warn({ insertError }, "Failed to save prediction — returning result anyway");
@@ -1212,5 +1222,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     odds_status: oddsAvailability.status,
     odds_captured_at: oddsAvailability.latestCapturedAt,
     rateLimited: aiResult.rateLimited,
+    provider: aiResult.provider,
+    model: aiResult.model,
   };
 }

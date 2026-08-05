@@ -2,6 +2,8 @@ import { Router, type IRouter } from "express";
 import { fetchAndSaveAllLeagues } from "../services/odds-fetcher";
 import { logger } from "../lib/logger";
 import { runRevalidation } from "../services/revalidation";
+import { runBaselineBackfill } from "../services/baseline-backfill";
+import { runRevalidationAndTriggeredReanalysis } from "../services/reanalysis";
 
 const router: IRouter = Router();
 
@@ -20,6 +22,7 @@ function isAuthorized(req: any): boolean {
  * GET /api/cron?token=<CRON_SECRET>&action=keep-alive  -> lightweight ping, no odds API calls
  * GET /api/cron?token=<CRON_SECRET>&action=sync        -> trigger full odds sync
  * GET /api/cron?token=<CRON_SECRET>&action=revalidate  -> refresh active pre-kickoff prediction tags
+ * GET /api/cron?token=<CRON_SECRET>&action=reanalyze  -> backfill + revalidate + trigger bounded AI revisions
  *
  * Keep-alive is recommended for 30-minute pings to keep a Replit workspace alive
  * without burning the Odds-API free-plan quota.
@@ -56,6 +59,28 @@ function handleCron(req: any, res: any) {
     runRevalidation().catch((err) =>
       logger.error({ err }, "Cron-triggered prediction revalidation failed"),
     );
+    return;
+  }
+
+  if (action === "backfill") {
+    res.json({
+      message: "Baseline odds backfill started in background",
+      timestamp: new Date().toISOString(),
+    });
+    runBaselineBackfill({ dryRun: false }).catch((err) =>
+      logger.error({ err }, "Cron-triggered baseline backfill failed"),
+    );
+    return;
+  }
+
+  if (action === "reanalyze") {
+    res.json({
+      message: "Triggered AI re-analysis started in background",
+      timestamp: new Date().toISOString(),
+    });
+    runBaselineBackfill({ dryRun: false })
+      .then(() => runRevalidationAndTriggeredReanalysis({ maxPerRun: 5 }))
+      .catch((err) => logger.error({ err }, "Cron-triggered AI re-analysis failed"));
     return;
   }
 

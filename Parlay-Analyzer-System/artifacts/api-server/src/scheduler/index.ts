@@ -2,7 +2,8 @@ import cron from "node-cron";
 import { logger } from "../lib/logger";
 import { fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, type LeagueConfig } from "../services/odds-fetcher";
 import { runSettlement } from "../services/settlement";
-import { runRevalidation } from "../services/revalidation";
+import { runBaselineBackfill } from "../services/baseline-backfill";
+import { runRevalidationAndTriggeredReanalysis } from "../services/reanalysis";
 import { supabase } from "../lib/supabase-client";
 
 let currentOddsTask:         ReturnType<typeof cron.schedule> | null = null;
@@ -68,19 +69,21 @@ async function runDailySettlement() {
   }
 }
 
-/* ─── Revalidation runner — re-check odds/EV on already-scanned,
-   not-yet-kicked-off fixtures so a leg scanned days ago doesn't go
-   stale silently before the batch scanner would otherwise touch it
-   again. Lite scope: tagging only, no AI re-call. ─── */
+/* ─── Revalidation runner — backfill safe legacy baselines, then re-check
+   odds/EV and run bounded AI revisions on explicit triggers. ─── */
 async function runScheduledRevalidation() {
-  logger.info("[REVALIDATION] Cron dimulai — mengecek prediksi aktif yang belum kickoff...");
+  logger.info("[REVALIDATION] Cron dimulai — baseline backfill + revalidasi + AI trigger...");
   try {
-    const result = await runRevalidation();
-    logger.info(result, "[REVALIDATION] Cron selesai");
+    const backfill = await runBaselineBackfill({ dryRun: false, limit: 500 });
+    const result = await runRevalidationAndTriggeredReanalysis({ maxPerRun: 5 });
+    logger.info({ backfill, ...result }, "[REVALIDATION] Cron selesai");
   } catch (err) {
     logger.error({ err }, "[REVALIDATION] Cron gagal");
   }
 }
+
+/* Revalidation runs after odds sync so it sees the latest stored prices.
+   Baseline backfill only uses historical snapshots at or before analysis time. */
 
 /* ─── Export: start all schedulers ─── */
 export function startScheduler() {

@@ -179,6 +179,34 @@ router.post("/sync/revalidate", requireAdmin, async (_req, res) => {
   }
 });
 
+router.post("/sync/backfill-baseline", requireAdmin, async (req, res) => {
+  try {
+    const { runBaselineBackfill } = await import("../services/baseline-backfill");
+    const dryRun = req.body?.dryRun !== false;
+    const result = await runBaselineBackfill({
+      dryRun,
+      limit: Number(req.body?.limit ?? 500),
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "Baseline odds backfill failed");
+    res.status(500).json({ error: "Baseline odds backfill failed" });
+  }
+});
+
+router.post("/sync/reanalyze", requireAdmin, async (req, res) => {
+  try {
+    const { runRevalidationAndTriggeredReanalysis } = await import("../services/reanalysis");
+    const result = await runRevalidationAndTriggeredReanalysis({
+      maxPerRun: Number(req.body?.maxPerRun ?? 5),
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "Triggered AI re-analysis failed");
+    res.status(500).json({ error: "Triggered AI re-analysis failed" });
+  }
+});
+
 router.get("/sync/status", async (_req, res) => {
   try {
     const { data: schedulerConfig } = await supabase
