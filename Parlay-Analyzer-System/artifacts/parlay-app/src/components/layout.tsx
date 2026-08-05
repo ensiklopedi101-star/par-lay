@@ -12,7 +12,7 @@ import {
   SidebarProvider,
   SidebarTrigger
 } from "@/components/ui/sidebar";
-import { Activity, CalendarDays, BarChart2, Trophy, Upload, Settings, BrainCircuit } from "lucide-react";
+import { Activity, CalendarDays, BarChart2, Trophy, Upload, Settings, BrainCircuit, AlertTriangle } from "lucide-react";
 import { ReactNode } from "react";
 
 interface LayoutProps {
@@ -25,6 +25,7 @@ const navItems = [
   { title: "Team Stats", url: "/teams", icon: BarChart2 },
   { title: "Standings", url: "/standings", icon: Trophy },
   { title: "AI Parlays", url: "/parlays", icon: BrainCircuit },
+  { title: "Risk Center", url: "/risk-center", icon: AlertTriangle },
   { title: "CSV Upload", url: "/upload", icon: Upload },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
