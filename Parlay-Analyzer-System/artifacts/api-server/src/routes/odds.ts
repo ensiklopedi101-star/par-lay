@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
-import { fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES } from "../services/odds-fetcher";
+import { classifyOddsMarket, fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES } from "../services/odds-fetcher";
 import { logger } from "../lib/logger";
 import { requireAdmin } from "../middlewares/admin";
 import { latestOddsByMarket } from "../services/odds-history";
@@ -86,40 +86,25 @@ router.get("/odds/events/:eventId", async (req, res) => {
     for (const row of latestOddsByMarket(oddsRows ?? [])) {
       const bm = (row.bookmaker as string) ?? "Unknown";
       const mt = String(row.market_type ?? "").toLowerCase();
+      const marketClass = classifyOddsMarket(mt);
       if (!bookmakers[bm]) bookmakers[bm] = [];
 
       const entry: Record<string, unknown> = {};
-      if (
-        mt === "h2h" ||
-        mt === "1x2" ||
-        mt === "match_winner" ||
-        mt === "match winner" ||
-        mt === "ml"
-      ) {
+      if (marketClass === "ML" || marketClass === "HT") {
         entry.home = row.odds_1;
         entry.draw = row.odds_draw;
         entry.away = row.odds_2;
-      } else if (
-        mt === "totals" ||
-        mt === "over_under" ||
-        mt === "over/under" ||
-        mt.includes("over") ||
-        mt.includes("total")
-      ) {
+      } else if (marketClass === "Totals") {
         entry.over = row.odds_1;
         entry.under = row.odds_2;
-      } else if (
-        mt === "btts" ||
-        mt === "both_teams_to_score" ||
-        mt === "both teams to score" ||
-        mt.includes("both teams")
-      ) {
+        entry.line = row.odds_draw;
+      } else if (marketClass === "BTTS") {
         entry.yes = row.odds_1;
         entry.no = row.odds_2;
-      } else if (mt.includes("handicap") || mt.includes("ah") || mt.includes("spread")) {
+      } else if (marketClass === "AH") {
         entry.home = row.odds_1;
         entry.away = row.odds_2;
-        entry.hdp = row.odds_draw;
+        entry.line = row.odds_draw;
       } else {
         entry.odds_1 = row.odds_1;
         entry.odds_2 = row.odds_2;

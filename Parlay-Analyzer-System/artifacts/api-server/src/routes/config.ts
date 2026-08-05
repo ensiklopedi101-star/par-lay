@@ -49,7 +49,7 @@ async function getOrCreateConfig() {
     .insert({
       leagues: ["serie-a"],
       bookmakers: ["Bet365"],
-      markets: ["ML", "Totals", "BTTS", "Asian Handicap"],
+      markets: ["ML", "Totals", "AH", "HT", "BTTS"],
       cron_expression: "0 */6 * * *",
     })
     .select()

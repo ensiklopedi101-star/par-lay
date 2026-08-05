@@ -4,6 +4,7 @@ import { logger } from "../lib/logger";
 import { cleanTeamName } from "../lib/team-name-cleaner";
 import { latestOddsByMarket } from "./odds-history";
 import { getGeminiModel } from "./model-discovery";
+import { classifyOddsMarket } from "./odds-fetcher";
 
 /* ═══════════════════════════════════════════════════════════════
    DEFAULT SYSTEM INSTRUCTION — Quant Sniper v4
@@ -149,7 +150,9 @@ interface MarketOdds {
 
 interface StructuredOdds {
   matchWinner: MarketOdds[];
+  halfTime: MarketOdds[];
   overUnder: MarketOdds[];
+  asianHandicap: MarketOdds[];
   btts: MarketOdds[];
   other: {
     bookmaker: string;
@@ -643,7 +646,7 @@ function formatStandingContextBlock(label: string, ctx: StandingContext | null):
    EKSTRAK & STRUKTURISASI ODDS
    ═══════════════════════════════════════════════════════════════ */
 function extractStructuredOdds(rows: OddsRow[]): StructuredOdds {
-  const result: StructuredOdds = { matchWinner: [], overUnder: [], btts: [], other: [] };
+  const result: StructuredOdds = { matchWinner: [], halfTime: [], overUnder: [], asianHandicap: [], btts: [], other: [] };
   const seen = new Map<string, OddsRow>();
   for (const row of rows) {
     const key = `${row.bookmaker}::${row.market_type}`;
@@ -651,9 +654,10 @@ function extractStructuredOdds(rows: OddsRow[]): StructuredOdds {
   }
 
   for (const row of seen.values()) {
-    const mt = (row.market_type ?? "").toLowerCase();
-    if (mt === "h2h" || mt === "1x2" || mt === "match_winner" || mt === "match winner" || mt === "ml") {
-      result.matchWinner.push({
+    const marketClass = classifyOddsMarket(row.market_type);
+    if (marketClass === "ML" || marketClass === "HT") {
+      const target = marketClass === "HT" ? result.halfTime : result.matchWinner;
+      target.push({
         bookmaker: row.bookmaker,
         capturedAt: row.captured_at ?? null,
         home: row.odds_1 ?? undefined,
@@ -665,25 +669,31 @@ function extractStructuredOdds(rows: OddsRow[]): StructuredOdds {
           away: impliedProb(row.odds_2),
         },
       });
-    } else if (
-      mt === "ou"
-      || mt === "totals"
-      || mt === "over_under"
-      || mt.includes("over")
-      || mt.includes("under")
-      || mt.includes("total")
-    ) {
+    } else if (marketClass === "Totals") {
       result.overUnder.push({
         bookmaker: row.bookmaker,
         capturedAt: row.captured_at ?? null,
         over: row.odds_1 ?? undefined,
         under: row.odds_2 ?? undefined,
+        line: row.odds_draw ?? undefined,
         impliedProb: {
           over: impliedProb(row.odds_1),
           under: impliedProb(row.odds_2),
         },
       });
-    } else if (mt === "btts" || mt === "both_teams_to_score" || mt.includes("both teams")) {
+    } else if (marketClass === "AH") {
+      result.asianHandicap.push({
+        bookmaker: row.bookmaker,
+        capturedAt: row.captured_at ?? null,
+        home: row.odds_1 ?? undefined,
+        away: row.odds_2 ?? undefined,
+        line: row.odds_draw ?? undefined,
+        impliedProb: {
+          home: impliedProb(row.odds_1),
+          away: impliedProb(row.odds_2),
+        },
+      });
+    } else if (marketClass === "BTTS") {
       result.btts.push({
         bookmaker: row.bookmaker,
         capturedAt: row.captured_at ?? null,
@@ -715,7 +725,7 @@ function formatOddsBlock(homeTeam: string, awayTeam: string, odds: StructuredOdd
   const lines: string[] = [
     "--- DATA HARGA PASAR (ODDS BANDAR) ---",
     "KONTRAK PEMBACAAN: setiap row memakai odds_1/odds_2 sebagai selection pertama/kedua sesuai market.",
-    "1X2: odds_1=Home, odds_draw=Draw, odds_2=Away | TOTALS: odds_1=Over, odds_2=Under | BTTS: odds_1=Yes, odds_2=No.",
+    "1X2/HT: odds_1=Home, odds_draw=Draw, odds_2=Away | TOTALS: odds_1=Over, odds_2=Under, odds_draw=line | AH: odds_1=Home, odds_2=Away, odds_draw=line | BTTS: odds_1=Yes, odds_2=No.",
     "Gunakan hanya angka yang tersedia, jangan memindahkan nilai antar market, dan perhatikan bookmaker serta timestamp snapshot.",
   ];
   if (odds.matchWinner.length > 0) {
@@ -730,16 +740,40 @@ function formatOddsBlock(homeTeam: string, awayTeam: string, odds: StructuredOdd
   } else {
     lines.push(`\n▪ Match Winner / 1X2: Tidak ada data odds tersedia.`);
   }
+  if (odds.halfTime.length > 0) {
+    lines.push(`\n▪ Half Time Result / HT (${homeTeam} | Draw | ${awayTeam}):`);
+    for (const o of odds.halfTime) {
+      lines.push(
+        `  [${o.bookmaker} @ ${o.capturedAt ?? "timestamp unavailable"}]  Home: ${o.home ?? "N/A"} (impl. ${o.impliedProb?.home})` +
+        `  |  Draw: ${o.draw ?? "N/A"} (impl. ${o.impliedProb?.draw})` +
+        `  |  Away: ${o.away ?? "N/A"} (impl. ${o.impliedProb?.away})`,
+      );
+    }
+  } else {
+    lines.push(`\n▪ Half Time Result / HT: Tidak ada data odds tersedia.`);
+  }
   if (odds.overUnder.length > 0) {
     lines.push(`\n▪ Over/Under Goals (Totals):`);
     for (const o of odds.overUnder) {
       lines.push(
-        `  [${o.bookmaker} @ ${o.capturedAt ?? "timestamp unavailable"}]  Over: ${o.over ?? "N/A"} (impl. ${o.impliedProb?.over})` +
+        `  [${o.bookmaker} @ ${o.capturedAt ?? "timestamp unavailable"}]  Line: ${o.line ?? "N/A"} | Over: ${o.over ?? "N/A"} (impl. ${o.impliedProb?.over})` +
         `  |  Under: ${o.under ?? "N/A"} (impl. ${o.impliedProb?.under})`,
       );
     }
   } else {
     lines.push(`\n▪ Over/Under Goals (Totals): Tidak ada data odds tersedia.`);
+  }
+  if (odds.asianHandicap.length > 0) {
+    lines.push(`\n▪ Asian Handicap / Alternate Spread:`);
+    for (const o of odds.asianHandicap) {
+      lines.push(
+        `  [${o.bookmaker} @ ${o.capturedAt ?? "timestamp unavailable"}]  Line: ${o.line ?? "N/A"} | ` +
+        `${homeTeam}: ${o.home ?? "N/A"} (impl. ${o.impliedProb?.home}) | ` +
+        `${awayTeam}: ${o.away ?? "N/A"} (impl. ${o.impliedProb?.away})`,
+      );
+    }
+  } else {
+    lines.push(`\n▪ Asian Handicap / Alternate Spread: Tidak ada data odds tersedia.`);
   }
   if (odds.btts.length > 0) {
     lines.push(`\n▪ Both Teams to Score (BTTS):`);

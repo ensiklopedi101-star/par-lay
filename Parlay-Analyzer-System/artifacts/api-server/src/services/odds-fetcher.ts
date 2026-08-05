@@ -11,6 +11,8 @@ const UPCOMING_WINDOW_DAYS = 10;
 // The current free Odds-API plan accepts Bet365 as a recreational bookmaker.
 // Sbobet may be selectable on the account but requires a paid plan.
 export const DEFAULT_BOOKMAKERS = "Bet365";
+export type SupportedOddsMarket = "ML" | "Totals" | "AH" | "HT" | "BTTS";
+export const DEFAULT_MARKETS: SupportedOddsMarket[] = ["ML", "Totals", "AH", "HT", "BTTS"];
 const ODDS_REFRESH_HOURS = 6;
 const ACTIVE_LEAGUE_CACHE_MS = 6 * 60 * 60 * 1000;
 const MAX_RATE_LIMIT_RETRIES = 2;
@@ -67,6 +69,92 @@ export async function getConfiguredScanDays(): Promise<number> {
   } catch (err) {
     logger.warn({ err }, "RADAR: Failed to load scan_days — using default odds window");
     return UPCOMING_WINDOW_DAYS;
+  }
+}
+
+function normalizeMarketToken(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[()\/]/g, "_")
+    .replace(/_+/g, "_");
+}
+
+export function classifyOddsMarket(value: unknown): SupportedOddsMarket | null {
+  const token = normalizeMarketToken(value);
+  if (!token) return null;
+  // Stored snapshots may append the provider line to market_type
+  // (for example "ou 2.5" or "ah -1.5").
+  const baseToken = token.replace(/[_:]+[-+]?\d+(?:\.\d+)?$/, "");
+  // Check HT before generic match-result aliases.
+  if (
+    baseToken === "ht"
+    || baseToken.includes("half_time")
+    || baseToken.includes("halftime")
+    || baseToken.includes("ht_result")
+    || baseToken.includes("first_half")
+  ) return "HT";
+  if (
+    baseToken === "btts"
+    || baseToken.includes("both_teams")
+    || baseToken.includes("both_team")
+    || baseToken.includes("both_teams_to_score")
+  ) return "BTTS";
+  if (
+    baseToken === "ah"
+    || baseToken.startsWith("ah_")
+    || baseToken.includes("asian_handicap")
+    || baseToken.includes("handicap")
+    || baseToken.includes("alternate_spread")
+    || baseToken.includes("spread")
+  ) return "AH";
+  if (
+    baseToken === "ou"
+    || baseToken.startsWith("ou_")
+    || baseToken === "totals"
+    || baseToken === "over_under"
+    || baseToken.includes("alternate_total")
+    || baseToken.includes("total")
+    || baseToken.includes("over")
+    || baseToken.includes("under")
+  ) return "Totals";
+  if (
+    baseToken === "ml"
+    || baseToken === "h2h"
+    || baseToken === "1x2"
+    || baseToken.includes("match_winner")
+    || baseToken.includes("match_result")
+  ) return "ML";
+  return null;
+}
+
+export function normalizeConfiguredMarkets(values: unknown): SupportedOddsMarket[] {
+  if (!Array.isArray(values)) return [...DEFAULT_MARKETS];
+  const normalized = new Set<SupportedOddsMarket>();
+  for (const value of values) {
+    const token = normalizeMarketToken(value);
+    if (token === "ml" || token === "1x2" || token.includes("match_result") || token.includes("match_winner")) normalized.add("ML");
+    else if (token === "totals" || token === "ou" || token.includes("over_under") || token.includes("alternate_total") || token.includes("total")) normalized.add("Totals");
+    else if (token === "ah" || token.includes("asian_handicap") || token.includes("alternate_spread") || token.includes("handicap") || token.includes("spread")) normalized.add("AH");
+    else if (token === "ht" || token.includes("half_time") || token.includes("halftime") || token.includes("ht_result") || token.includes("first_half")) normalized.add("HT");
+    else if (token === "btts" || token.includes("both_teams") || token.includes("both_team")) normalized.add("BTTS");
+  }
+  return normalized.size > 0 ? Array.from(normalized) : [...DEFAULT_MARKETS];
+}
+
+export async function getConfiguredMarkets(): Promise<SupportedOddsMarket[]> {
+  try {
+    const { data, error } = await supabase
+      .from("scheduler_config")
+      .select("markets")
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return normalizeConfiguredMarkets(data?.markets);
+  } catch (err) {
+    logger.warn({ err }, "RADAR: Failed to load markets — using all supported markets");
+    return [...DEFAULT_MARKETS];
   }
 }
 
@@ -183,7 +271,7 @@ interface ApiLeague {
 }
 
 interface ApiOddsEntry {
-  hdp?: number;
+  hdp?: number | string;
   over?: string;
   under?: string;
   home?: string;
@@ -309,26 +397,27 @@ function buildOddsMovementRow(
 ): Record<string, unknown> | null {
   const name = (market.name ?? "").toLowerCase();
   const o = market.odds[0] ?? {};
+  const marketClass = classifyOddsMarket(name);
 
   let newOdds: Record<string, number | null>;
 
-  if (name === "ml" || name === "1x2" || name === "match_winner" || name === "h2h") {
+  if (marketClass === "ML" || marketClass === "HT") {
     newOdds = {
       home_odds: o.home  ? parseFloat(o.home as string)  : null,
       away_odds: o.away  ? parseFloat(o.away as string)  : null,
       draw_odds: o.draw  ? parseFloat(o.draw as string)  : null,
     };
-  } else if (name === "ou" || name.includes("total") || name.includes("over") || name.includes("under")) {
+  } else if (marketClass === "Totals") {
     newOdds = {
       over_odds:  o.over  ? parseFloat(o.over  as string) : null,
       under_odds: o.under ? parseFloat(o.under as string) : null,
     };
-  } else if (name === "btts" || name.includes("both_teams") || name.includes("both teams")) {
+  } else if (marketClass === "BTTS") {
     newOdds = {
       btts_yes: o.yes ? parseFloat(o.yes as string) : null,
       btts_no:  o.no  ? parseFloat(o.no  as string) : null,
     };
-  } else if (name === "ah" || name.includes("handicap") || name.includes("spread")) {
+  } else if (marketClass === "AH") {
     newOdds = {
       home_odds: o.home  ? parseFloat(o.home  as string) : null,
       away_odds: o.away  ? parseFloat(o.away  as string) : null,
@@ -389,7 +478,12 @@ async function saveOddsMovementBatch(
   }
 }
 
-async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap: Map<string, number>): Promise<number> {
+async function saveEventAndOdds(
+  event: ApiEvent,
+  leagueSlug: string,
+  leagueIdMap: Map<string, number>,
+  requestedMarkets: SupportedOddsMarket[] = DEFAULT_MARKETS,
+): Promise<number> {
   logger.info({ eventId: event.id, home: event.home, away: event.away, leagueSlug, leagueIdMapKeys: Array.from(leagueIdMap.keys()) }, "RADAR: saveEventAndOdds called");
   const leagueId = leagueIdMap.get(leagueSlug);
   logger.info({ leagueSlug, leagueIdFound: leagueId }, "RADAR: leagueId lookup result");
@@ -452,39 +546,51 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
   const capturedAt = new Date().toISOString();
   const oddsPayloads: Array<Record<string, unknown>> = [];
   const movementPayloads: Array<{ bookmaker: string; market: ApiMarket; row: Record<string, unknown> }> = [];
+  const enabledMarkets = new Set(requestedMarkets);
   for (const [bookmaker, markets] of Object.entries(event.bookmakers)) {
     for (const market of markets) {
-      if (market.odds.length < 1) continue;
-      const odds = market.odds[0]!;
-      const marketName = (market.name ?? "").toLowerCase();
-      const isMatchWinner = marketName === "ml" || marketName === "1x2" || marketName === "match_winner" || marketName === "h2h";
-      const isTotals = marketName === "ou"
-        || marketName === "totals"
-        || marketName === "over_under"
-        || marketName.includes("total")
-        || marketName.includes("over")
-        || marketName.includes("under");
-      const isBtts = marketName === "btts" || marketName.includes("both_teams") || marketName.includes("both teams");
-      const odds1 = isTotals ? odds.over : isBtts ? odds.yes : odds.home;
-      const odds2 = isTotals ? odds.under : isBtts ? odds.no : odds.away;
-      const oddsDraw = isMatchWinner ? odds.draw : undefined;
-      if (!Number.isFinite(Number(odds1)) && !Number.isFinite(Number(odds2)) && !Number.isFinite(Number(oddsDraw))) continue;
-      oddsPayloads.push({
-        match_id: String(event.id),
-        home_team: event.home,
-        away_team: event.away,
-        commence_time: event.date,
-        bookmaker,
-        market_type: market.name,
-        // odds_history uses generic selection slots: 1/2 means
-        // home/away for 1X2, over/under for totals, and yes/no for BTTS.
-        odds_1: odds1 != null ? parseFloat(String(odds1)) : null,
-        odds_2: odds2 != null ? parseFloat(String(odds2)) : null,
-        odds_draw: oddsDraw != null ? parseFloat(String(oddsDraw)) : null,
-        captured_at: capturedAt,
-      });
-      const movementRow = buildOddsMovementRow(event.id, bookmaker, market, capturedAt);
-      if (movementRow) movementPayloads.push({ bookmaker, market, row: movementRow });
+      const marketClass = classifyOddsMarket(market.name);
+      if (!marketClass || !enabledMarkets.has(marketClass)) continue;
+      // Save all alternate lines. The live schema has no dedicated line
+      // column, so keep the provider line in odds_draw and include it in the
+      // market_type identity (e.g. "Alternate Totals 2.5").
+      for (const odds of market.odds) {
+        const line = Number(odds.hdp);
+        const hasLine = Number.isFinite(line);
+        const storedMarketType = hasLine ? `${market.name} ${line}` : market.name;
+        const odds1 =
+          marketClass === "Totals" ? odds.over :
+          marketClass === "BTTS" ? odds.yes :
+          odds.home;
+        const odds2 =
+          marketClass === "Totals" ? odds.under :
+          marketClass === "BTTS" ? odds.no :
+          odds.away;
+        const oddsDraw =
+          marketClass === "ML" || marketClass === "HT"
+            ? odds.draw
+            : hasLine
+              ? line
+              : null;
+        if (!Number.isFinite(Number(odds1)) && !Number.isFinite(Number(odds2)) && !Number.isFinite(Number(oddsDraw))) continue;
+        const storedMarket: ApiMarket = { ...market, name: storedMarketType, odds: [odds] };
+        oddsPayloads.push({
+          match_id: String(event.id),
+          home_team: event.home,
+          away_team: event.away,
+          commence_time: event.date,
+          bookmaker,
+          market_type: storedMarketType,
+          // Generic slots: ML/HT = home/draw/away, Totals = over/under/line,
+          // BTTS = yes/no, AH = home/away/line.
+          odds_1: odds1 != null ? parseFloat(String(odds1)) : null,
+          odds_2: odds2 != null ? parseFloat(String(odds2)) : null,
+          odds_draw: oddsDraw != null ? parseFloat(String(oddsDraw)) : null,
+          captured_at: capturedAt,
+        });
+        const movementRow = buildOddsMovementRow(event.id, bookmaker, storedMarket, capturedAt);
+        if (movementRow) movementPayloads.push({ bookmaker, market: storedMarket, row: movementRow });
+      }
     }
   }
   if (oddsPayloads.length === 0) return 0;
@@ -536,11 +642,12 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
 async function getAlreadySyncedEventIds(
   eventIds: number[],
   requestedBookmakers: string[],
+  requestedMarkets: SupportedOddsMarket[] = DEFAULT_MARKETS,
 ): Promise<Set<number>> {
   if (eventIds.length === 0) return new Set();
   const { data, error } = await supabase
     .from("odds_history")
-    .select("match_id, bookmaker, captured_at")
+    .select("match_id, bookmaker, market_type, captured_at")
     .in("match_id", eventIds.map((id) => String(id)));
   if (error) {
     logger.error({ error }, "Failed to fetch already synced odds");
@@ -548,23 +655,29 @@ async function getAlreadySyncedEventIds(
   }
   const configured = new Set(requestedBookmakers.map(normalizeBookmakerName).filter(Boolean));
   const freshCutoff = Date.now() - ODDS_REFRESH_HOURS * 60 * 60 * 1000;
-  const bookmakersByEvent = new Map<number, Set<string>>();
+  const marketsByEventAndBookmaker = new Map<string, Set<SupportedOddsMarket>>();
   for (const row of data ?? []) {
     const eventId = Number(row.match_id);
     if (!Number.isFinite(eventId)) continue;
     if (!row.captured_at || new Date(row.captured_at).getTime() < freshCutoff) continue;
-    if (!bookmakersByEvent.has(eventId)) bookmakersByEvent.set(eventId, new Set());
-    bookmakersByEvent.get(eventId)!.add(normalizeBookmakerName(String(row.bookmaker)));
+    const marketClass = classifyOddsMarket(row.market_type);
+    if (!marketClass) continue;
+    const key = `${eventId}::${normalizeBookmakerName(String(row.bookmaker))}`;
+    if (!marketsByEventAndBookmaker.has(key)) marketsByEventAndBookmaker.set(key, new Set());
+    marketsByEventAndBookmaker.get(key)!.add(marketClass);
   }
 
-  // One fresh bookmaker is enough to avoid re-fetching the same fixture on
-  // every scheduler tick. A later run can still refresh once the TTL expires.
+  const requiredMarkets = new Set(requestedMarkets);
+  // A fixture is considered fresh only when a configured bookmaker has a
+  // fresh snapshot for every configured market class. This also re-fetches a
+  // fixture after the admin enables a market that was not in the old sync.
   return new Set(
-    Array.from(bookmakersByEvent.entries())
-      .filter(([, bookmakers]) =>
-        configured.size === 0 || Array.from(configured).some((name) => bookmakers.has(name)),
-      )
-      .map(([eventId]) => eventId),
+    eventIds.filter((eventId) =>
+      Array.from(configured).some((bookmaker) => {
+        const classes = marketsByEventAndBookmaker.get(`${eventId}::${bookmaker}`);
+        return classes && Array.from(requiredMarkets).every((market) => classes.has(market));
+      }),
+    ),
   );
 }
 
@@ -573,7 +686,7 @@ export async function fetchAndSaveLeagueOdds(
   apiKey: string,
   bookmakers: string,
   leagueIdMap: Map<string, number>,
-  options: { maxEvents?: number; upcomingWindowDays?: number } = {},
+  options: { maxEvents?: number; upcomingWindowDays?: number; markets?: SupportedOddsMarket[] } = {},
 ): Promise<{
   league: string;
   saved: number;
@@ -608,7 +721,7 @@ export async function fetchAndSaveLeagueOdds(
     });
     const allIds = upcomingEvents.map((e) => e.id);
     const requestedBookmakers = bookmakers.split(",").map((name) => name.trim()).filter(Boolean);
-    const alreadySynced = await getAlreadySyncedEventIds(allIds, requestedBookmakers);
+    const alreadySynced = await getAlreadySyncedEventIds(allIds, requestedBookmakers, options.markets);
     let toFetch = upcomingEvents
       .filter((e) => !alreadySynced.has(e.id))
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -626,7 +739,7 @@ export async function fetchAndSaveLeagueOdds(
       try {
         await new Promise((r) => setTimeout(r, 300));
         const withOdds = await fetchEventOdds(event.id, apiKey, bookmakers);
-        const savedRows = await saveEventAndOdds(withOdds, league.slug, leagueIdMap);
+        const savedRows = await saveEventAndOdds(withOdds, league.slug, leagueIdMap, options.markets);
         if (savedRows > 0) {
           saved++;
           oddsFetched++;
@@ -682,7 +795,8 @@ export async function fetchAndSaveAllLeagues(
 
   syncRunning = true;
   const upcomingWindowDays = normalizeScanDays(scanDays ?? await getConfiguredScanDays());
-  logger.info({ leagueCount: leagues.length }, "RADAR: Starting odds sync — checking active leagues");
+  const markets = await getConfiguredMarkets();
+  logger.info({ leagueCount: leagues.length, markets }, "RADAR: Starting odds sync — checking active leagues");
 
   let activeSlugs: Set<string> = new Set();
   for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
@@ -780,6 +894,7 @@ export async function fetchAndSaveAllLeagues(
         result = await fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, {
           maxEvents: remainingSlots,
           upcomingWindowDays,
+          markets,
         });
       } catch (err) {
         status = "failed";

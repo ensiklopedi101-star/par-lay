@@ -24,3 +24,4 @@
 - [Odds Baseline and AI Revisions](odds-baseline-revisions.md) — Baseline legacy hanya dari snapshot historis yang cocok; re-analysis AI disimpan sebagai revision terpisah dan fail-closed saat matching tidak aman.
 - [Data Integrity Audit](data-integrity-audit.md) — Legacy odds duplicates and team-name alias rows require retention/merge policy; older parlays may lack matching legs.
 - [Odds Refresh Contract](odds-refresh-contract.md) — Three-hour verified freshness, rate-limited last-known odds stay unverified, and AI receives explicit market-slot mappings.
+- [Odds market selection](odds-refresh-contract.md) — Settings market filters sync; shared classification covers ML, HT, Totals, AH, BTTS and preserves alternate lines.
