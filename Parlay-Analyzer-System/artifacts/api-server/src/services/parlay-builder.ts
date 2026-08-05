@@ -15,11 +15,140 @@ export interface ParlayCandidate {
   evPercent: number;
 }
 
+export interface MergeParlayResult {
+  parlayId: string | null;
+  legs: ParlayCandidate[];
+  combinedOdds: number;
+  winProbability: number;
+  expectedValue: number;
+  riskScore: number;
+  riskLevel: "low" | "medium" | "high" | "very_high";
+  rejected: Array<{ fixtureId: number; reason: string }>;
+}
+
+export type ParlayRiskLevel = "low" | "medium" | "high" | "very_high";
+
 function probabilityFor(candidate: ParlayCandidate): number {
   const confidenceProbability = Math.max(0.01, Math.min(0.99, candidate.confidence / 10));
   return candidate.odds > 1
     ? Math.max(0.01, Math.min(0.99, Math.max(confidenceProbability, 1 / candidate.odds)))
     : confidenceProbability;
+}
+
+export function calculateParlayMetrics(candidates: ParlayCandidate[]) {
+  const combinedOdds = candidates.reduce(
+    (product, candidate) => product * Math.max(1.01, candidate.odds),
+    1,
+  );
+  const winProbability = candidates.reduce(
+    (product, candidate) => product * probabilityFor(candidate),
+    1,
+  );
+  const expectedValue = winProbability * combinedOdds - 1;
+  const avgConfidence = candidates.length > 0
+    ? candidates.reduce((sum, candidate) => sum + candidate.confidence, 0) / candidates.length
+    : 0;
+  const riskScore = Math.min(
+    100,
+    Math.round(
+      (1 - winProbability) * 65 +
+      Math.max(0, candidates.length - 2) * 6 +
+      Math.max(0, 8 - avgConfidence) * 4 +
+      Math.max(0, combinedOdds - 8) * 1.5,
+    ),
+  );
+  const riskLevel: ParlayRiskLevel = riskScore >= 75
+    ? "very_high"
+    : riskScore >= 55
+      ? "high"
+      : riskScore >= 30
+        ? "medium"
+        : "low";
+  return { combinedOdds, winProbability, expectedValue, avgConfidence, riskScore, riskLevel };
+}
+
+export async function createMergedParlay(
+  candidates: ParlayCandidate[],
+  sourceParlayIds: string[],
+): Promise<MergeParlayResult> {
+  const rejected: Array<{ fixtureId: number; reason: string }> = [];
+  const unique = new Map<string, ParlayCandidate>();
+  for (const candidate of candidates) {
+    const fixtureId = Number(candidate.fixtureId);
+    if (!Number.isFinite(fixtureId)) continue;
+    if (unique.has(String(fixtureId))) {
+      rejected.push({ fixtureId, reason: "Fixture duplikat; hanya satu leg per fixture yang diperbolehkan." });
+      continue;
+    }
+    if (candidate.odds <= 1 || candidate.confidence < 6.5) {
+      rejected.push({ fixtureId, reason: "Odds atau confidence tidak memenuhi batas minimum." });
+      continue;
+    }
+    if (unique.size >= 7) {
+      rejected.push({ fixtureId, reason: "Batas maksimum 7 leg tercapai." });
+      continue;
+    }
+    unique.set(String(fixtureId), candidate);
+  }
+  const legs = Array.from(unique.values());
+  if (legs.length < 2) {
+    return {
+      parlayId: null,
+      legs,
+      ...calculateParlayMetrics(legs),
+      rejected,
+    };
+  }
+
+  const metrics = calculateParlayMetrics(legs);
+  const leagues = new Set(legs.map((candidate) => candidate.league).filter(Boolean));
+  const sourceLabel = sourceParlayIds.length > 0 ? sourceParlayIds.slice(0, 3).join(", ") : "selected";
+  const { data: parlay, error: parlayError } = await supabase
+    .from("parlays")
+    .insert({
+      parlay_name: `Merged AI Parlay — ${new Date().toLocaleDateString("id-ID")}`,
+      legs_count: legs.length,
+      combined_odds: metrics.combinedOdds,
+      win_probability: metrics.winProbability,
+      expected_value: metrics.expectedValue,
+      risk_score: metrics.riskScore,
+      avg_confidence: metrics.avgConfidence,
+      status: "active",
+      generated_by: "AI_MERGE",
+      leagues_count: leagues.size,
+      countries_count: leagues.size,
+      reasoning: `Gabungan parlay ${sourceLabel}. Maksimum 7 leg; dibuat setelah verifikasi readiness.`,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+  if (parlayError || !parlay?.id) {
+    logger.error({ error: parlayError }, "[PARLAY-MERGE] Failed to create merged parlay");
+    return { parlayId: null, legs, ...metrics, rejected };
+  }
+
+  const { error: legsError } = await supabase.from("parlay_legs").insert(
+    legs.map((candidate, index) => ({
+      parlay_id: parlay.id,
+      prediction_id: candidate.predictionId ?? null,
+      fixture_id: Number(candidate.fixtureId),
+      leg_order: index + 1,
+      market: candidate.market,
+      selection: candidate.selection,
+      odds: candidate.odds,
+      probability: probabilityFor(candidate),
+      confidence: candidate.confidence,
+      result: null,
+      created_at: new Date().toISOString(),
+    })),
+  );
+  if (legsError) {
+    await supabase.from("parlays").delete().eq("id", parlay.id);
+    logger.error({ error: legsError, parlayId: parlay.id }, "[PARLAY-MERGE] Failed to create legs");
+    return { parlayId: null, legs, ...metrics, rejected };
+  }
+  return { parlayId: String(parlay.id), legs, ...metrics, rejected };
 }
 
 export async function createParlayFromCandidates(candidates: ParlayCandidate[]): Promise<string | null> {

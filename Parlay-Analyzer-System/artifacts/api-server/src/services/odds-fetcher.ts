@@ -816,3 +816,60 @@ export async function fetchAndSaveAllLeagues(
     "RADAR: All leagues odds sync complete",
   );
 }
+
+/**
+ * Refresh only the provider events used by a bet slip. This is deliberately
+ * separate from the scheduled league sync: the user needs a point-in-time
+ * odds check immediately before placing a bet, even when the normal 6-hour
+ * sync TTL has not expired yet.
+ */
+export async function refreshOddsForFixtures(fixtureIds: number[]): Promise<{
+  requested: number;
+  refreshed: number;
+  failed: number;
+  skipped: number;
+}> {
+  const uniqueIds = Array.from(new Set(fixtureIds.filter((id) => Number.isFinite(id)))).slice(0, 20);
+  const summary = { requested: uniqueIds.length, refreshed: 0, failed: 0, skipped: 0 };
+  if (uniqueIds.length === 0) return summary;
+
+  const apiKey = process.env["ODDS_API_KEY"];
+  if (!apiKey) {
+    throw new Error("ODDS_API_KEY is not configured");
+  }
+
+  const { data: fixtures, error: fixturesError } = await supabase
+    .from("fixtures")
+    .select("fixture_id, league_name, fixture_date")
+    .in("fixture_id", uniqueIds)
+    .gt("fixture_date", new Date().toISOString());
+  if (fixturesError) throw fixturesError;
+
+  const { data: leagues } = await supabase
+    .from("leagues")
+    .select("id, slug, name")
+    .eq("is_active", true);
+  const leagueIdMap = new Map(
+    (leagues ?? []).map((league) => [String(league.slug ?? league.name), Number(league.id)]),
+  );
+  const fixtureById = new Map((fixtures ?? []).map((fixture) => [Number(fixture.fixture_id), fixture]));
+
+  for (const fixtureId of uniqueIds) {
+    const fixture = fixtureById.get(fixtureId);
+    if (!fixture) {
+      summary.skipped++;
+      continue;
+    }
+    try {
+      const event = await fetchEventOdds(fixtureId, apiKey, DEFAULT_BOOKMAKERS);
+      await saveEventAndOdds(event, String(fixture.league_name ?? ""), leagueIdMap);
+      summary.refreshed++;
+    } catch (error) {
+      summary.failed++;
+      logger.warn({ error, fixtureId }, "[ODDS-READINESS] Failed to refresh fixture odds");
+    }
+  }
+
+  logger.info(summary, "[ODDS-READINESS] Fixture odds refresh complete");
+  return summary;
+}

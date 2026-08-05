@@ -152,6 +152,67 @@ export interface Parlay {
   legs?: ParlayLeg[];
 }
 
+export type ParlayReadinessStatus =
+  | "ready"
+  | "review"
+  | "invalidated"
+  | "missing_odds"
+  | "stale"
+  | "missing_prediction"
+  | "started_or_finished";
+
+export interface ParlayReadinessLeg {
+  parlayId: string;
+  fixtureId: number;
+  homeTeam: string;
+  awayTeam: string;
+  fixtureDate: string | null;
+  market: string;
+  selection: string;
+  analysisOdds: number;
+  currentOdds: number | null;
+  confidence: number;
+  currentEV: number | null;
+  status: ParlayReadinessStatus;
+  reason: string;
+  aiRevision: {
+    status: string;
+    provider: string | null;
+    modelVersion: string | null;
+    createdAt: string;
+  } | null;
+}
+
+export interface ParlayReadiness {
+  ready: boolean;
+  generatedAt: string;
+  refresh: { requested: number; refreshed: number; failed: number; skipped: number } | null;
+  reanalysis: {
+    considered: number;
+    analyzed: number;
+    skippedCooldown: number;
+    skippedNoOdds: number;
+    failed: number;
+    revisions: string[];
+  };
+  selectedParlays: Array<{ id: string; name: string }>;
+  legs: ParlayReadinessLeg[];
+  mergePreview: {
+    combinedOdds: number;
+    winProbability: number;
+    expectedValue: number;
+    avgConfidence: number;
+    riskScore: number;
+    riskLevel: "low" | "medium" | "high" | "very_high";
+    legs: number;
+    rejected: Array<{ fixtureId: number; reason: string }>;
+    maxLegs: number;
+    stake?: number;
+    potentialReturn?: number;
+    potentialProfit?: number;
+  };
+}
+
 function getAdminPassword(): string | null {
   try {
     return localStorage.getItem("adminPassword");
@@ -203,6 +264,43 @@ export function useListSupabaseParlays(params?: { status?: string }) {
     queryFn: () => {
       const qs = params?.status ? `?status=${encodeURIComponent(params.status)}` : "";
       return apiGet<Parlay[]>(`${API_BASE}/supabase/parlays${qs}`);
+    },
+  });
+}
+
+export interface ParlayActionInput {
+  parlayIds: string[];
+  stake?: number;
+}
+
+export function useVerifyParlays() {
+  return useMutation<ParlayReadiness, Error, ParlayActionInput>({
+    mutationFn: (input) => apiPost<ParlayReadiness>(`${API_BASE}/parlays/readiness`, input),
+  });
+}
+
+export interface MergedParlayResponse {
+  parlayId: string;
+  legs: unknown[];
+  combinedOdds: number;
+  winProbability: number;
+  expectedValue: number;
+  avgConfidence: number;
+  riskScore: number;
+  riskLevel: "low" | "medium" | "high" | "very_high";
+  rejected: Array<{ fixtureId: number; reason: string }>;
+  readiness: ParlayReadiness;
+  stake?: number;
+  potentialReturn?: number;
+  potentialProfit?: number;
+}
+
+export function useMergeParlays() {
+  const queryClient = useQueryClient();
+  return useMutation<MergedParlayResponse, Error, ParlayActionInput>({
+    mutationFn: (input) => apiPost<MergedParlayResponse>(`${API_BASE}/parlays/merge`, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["supabase/parlays"] });
     },
   });
 }

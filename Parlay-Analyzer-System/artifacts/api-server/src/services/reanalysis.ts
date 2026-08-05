@@ -7,7 +7,7 @@ import {
 } from "./ai-analysis";
 import type { RevalidationCandidate, RevalidationSummary } from "./revalidation";
 
-export type ReanalysisTrigger = "odds_drift" | "ev_deterioration" | "final_window";
+export type ReanalysisTrigger = "odds_drift" | "ev_deterioration" | "final_window" | "pre_bet_refresh";
 
 export interface ReanalysisSummary {
   considered: number;
@@ -85,7 +85,7 @@ async function hasRecentRevision(predictionId: string, now: number): Promise<boo
 
 export async function runTriggeredReanalysis(
   candidates: RevalidationCandidate[],
-  options: { maxPerRun?: number } = {},
+  options: { maxPerRun?: number; force?: boolean; predictionIds?: string[] } = {},
 ): Promise<ReanalysisSummary> {
   const maxPerRun = Math.max(1, Math.min(20, options.maxPerRun ?? DEFAULT_MAX_PER_RUN));
   const summary: ReanalysisSummary = {
@@ -98,7 +98,11 @@ export async function runTriggeredReanalysis(
     revisions: [],
   };
 
-  const triggered = candidates.filter(isTrigger).filter((candidate) => candidate.status !== "keep");
+  const targetIds = options.predictionIds ? new Set(options.predictionIds) : null;
+  const triggered = candidates
+    .filter((candidate) => !targetIds || targetIds.has(candidate.predictionId))
+    .filter((candidate) => options.force || isTrigger(candidate))
+    .filter((candidate) => options.force || candidate.status !== "keep");
   summary.considered = triggered.length;
   let analyzedThisRun = 0;
 
@@ -116,6 +120,7 @@ export async function runTriggeredReanalysis(
     }
 
     try {
+      const triggerType: ReanalysisTrigger = isTrigger(candidate) ? candidate.trigger : "pre_bet_refresh";
       const result: AnalysisResult = await analyzeFixture(String(candidate.fixtureId), {
         skipExistingPredictionCheck: true,
         persistPrediction: false,
@@ -132,7 +137,7 @@ export async function runTriggeredReanalysis(
         .insert({
           prediction_id: candidate.predictionId,
           fixture_id: candidate.fixtureId,
-          trigger_type: candidate.trigger,
+          trigger_type: triggerType,
           trigger_reason: candidate.triggerReason,
           trigger_context: {
             oddsDelta: candidate.oddsDelta,
@@ -164,7 +169,7 @@ export async function runTriggeredReanalysis(
       await supabase.from("ai_prediction_revisions").insert({
         prediction_id: candidate.predictionId,
         fixture_id: candidate.fixtureId,
-        trigger_type: candidate.trigger,
+        trigger_type: isTrigger(candidate) ? candidate.trigger : "pre_bet_refresh",
         trigger_reason: candidate.triggerReason,
         trigger_context: {
           oddsDelta: candidate.oddsDelta,
@@ -186,6 +191,8 @@ export async function runTriggeredReanalysis(
 
 export async function runRevalidationAndTriggeredReanalysis(options: {
   maxPerRun?: number;
+  force?: boolean;
+  predictionIds?: string[];
 } = {}): Promise<{ revalidation: RevalidationSummary; reanalysis: ReanalysisSummary }> {
   const { runRevalidation } = await import("./revalidation");
   const revalidation = await runRevalidation();

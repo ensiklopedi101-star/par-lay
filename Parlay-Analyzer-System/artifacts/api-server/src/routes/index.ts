@@ -10,6 +10,7 @@ import statsIngestRouter from "./stats-ingest";
 import cronRouter from "./cron";
 import statsHealthRouter from "./stats-health";
 import riskCenterRouter from "./risk-center";
+import parlaysRouter from "./parlays";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(statsIngestRouter);
 router.use(cronRouter);
 router.use(statsHealthRouter);
 router.use(riskCenterRouter);
+router.use(parlaysRouter);
 
 export default router;

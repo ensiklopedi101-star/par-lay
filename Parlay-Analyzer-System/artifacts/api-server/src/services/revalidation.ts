@@ -69,6 +69,7 @@ export interface RevalidationCandidate {
   marketBet: string | null;
   analysisOdds: number | null;
   currentOdds: number | null;
+  oddsCapturedAt: string | null;
   oddsDelta: number | null;
   evAtAnalysis: number | null;
   currentEV: number | null;
@@ -244,6 +245,7 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
         marketBet,
         analysisOdds,
         currentOdds,
+        oddsCapturedAt: null,
         oddsDelta: null,
         evAtAnalysis,
         currentEV: null,
@@ -302,6 +304,7 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
       marketBet,
       analysisOdds,
       currentOdds,
+      oddsCapturedAt: latestCapturedAtFor(rows),
       oddsDelta,
       evAtAnalysis,
       currentEV,
@@ -334,6 +337,13 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
   summary.candidates = candidates;
   logger.info(summary, "[REVALIDATION] Selesai");
   return summary;
+}
+
+function latestCapturedAtFor(rows: OddsRow[]): string | null {
+  return rows
+    .map((row) => row.captured_at)
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
 }
 
 function normalizeTeamName(value: string): string {
