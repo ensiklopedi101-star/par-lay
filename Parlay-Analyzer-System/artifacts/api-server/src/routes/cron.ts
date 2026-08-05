@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { fetchAndSaveAllLeagues } from "../services/odds-fetcher";
 import { logger } from "../lib/logger";
+import { runRevalidation } from "../services/revalidation";
 
 const router: IRouter = Router();
 
@@ -18,6 +19,7 @@ function isAuthorized(req: any): boolean {
  *
  * GET /api/cron?token=<CRON_SECRET>&action=keep-alive  -> lightweight ping, no odds API calls
  * GET /api/cron?token=<CRON_SECRET>&action=sync        -> trigger full odds sync
+ * GET /api/cron?token=<CRON_SECRET>&action=revalidate  -> refresh active pre-kickoff prediction tags
  *
  * Keep-alive is recommended for 30-minute pings to keep a Replit workspace alive
  * without burning the Odds-API free-plan quota.
@@ -42,6 +44,17 @@ function handleCron(req: any, res: any) {
     });
     fetchAndSaveAllLeagues().catch((err) =>
       logger.error({ err }, "Cron-triggered odds sync failed"),
+    );
+    return;
+  }
+
+  if (action === "revalidate") {
+    res.json({
+      message: "Prediction revalidation started in background",
+      timestamp: new Date().toISOString(),
+    });
+    runRevalidation().catch((err) =>
+      logger.error({ err }, "Cron-triggered prediction revalidation failed"),
     );
     return;
   }

@@ -349,6 +349,9 @@ export interface AIAnalysisResult {
   away_team?: string;
   prediction_text: string;
   created_at: string;
+  revalidation_status?: "keep" | "review" | "invalidated" | null;
+  revalidation_note?: string | null;
+  last_revalidated_at?: string | null;
 }
 
 async function apiGetRaw(url: string): Promise<Response> {

@@ -2,10 +2,12 @@ import cron from "node-cron";
 import { logger } from "../lib/logger";
 import { fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, type LeagueConfig } from "../services/odds-fetcher";
 import { runSettlement } from "../services/settlement";
+import { runRevalidation } from "../services/revalidation";
 import { supabase } from "../lib/supabase-client";
 
-let currentOddsTask:       ReturnType<typeof cron.schedule> | null = null;
-let currentSettlementTask: ReturnType<typeof cron.schedule> | null = null;
+let currentOddsTask:         ReturnType<typeof cron.schedule> | null = null;
+let currentSettlementTask:   ReturnType<typeof cron.schedule> | null = null;
+let currentRevalidationTask: ReturnType<typeof cron.schedule> | null = null;
 
 /* ─── Load config & run odds sync ─── */
 async function loadConfigAndSync() {
@@ -66,9 +68,23 @@ async function runDailySettlement() {
   }
 }
 
+/* ─── Revalidation runner — re-check odds/EV on already-scanned,
+   not-yet-kicked-off fixtures so a leg scanned days ago doesn't go
+   stale silently before the batch scanner would otherwise touch it
+   again. Lite scope: tagging only, no AI re-call. ─── */
+async function runScheduledRevalidation() {
+  logger.info("[REVALIDATION] Cron dimulai — mengecek prediksi aktif yang belum kickoff...");
+  try {
+    const result = await runRevalidation();
+    logger.info(result, "[REVALIDATION] Cron selesai");
+  } catch (err) {
+    logger.error({ err }, "[REVALIDATION] Cron gagal");
+  }
+}
+
 /* ─── Export: start all schedulers ─── */
 export function startScheduler() {
-  logger.info("Scheduler starting — odds sync + daily settlement");
+  logger.info("Scheduler starting — odds sync + daily settlement + revalidation");
 
   /* Initial odds sync on startup */
   loadConfigAndSync().catch((err) =>
@@ -76,8 +92,9 @@ export function startScheduler() {
   );
 
   /* Stop existing tasks before re-creating */
-  if (currentOddsTask)       { currentOddsTask.stop(); }
-  if (currentSettlementTask) { currentSettlementTask.stop(); }
+  if (currentOddsTask)         { currentOddsTask.stop(); }
+  if (currentSettlementTask)   { currentSettlementTask.stop(); }
+  if (currentRevalidationTask) { currentRevalidationTask.stop(); }
 
   /* The initial run loads scheduler_config; reconfigure from there. */
   let configuredExpression = "0 */6 * * *";
@@ -108,5 +125,13 @@ export function startScheduler() {
     );
   });
 
-  logger.info("Scheduler running — odds sync uses scheduler_config | settlement daily at 06:00");
+  /* Revalidation: run after the regular 3-hour odds cadence so it sees the
+     latest stored prices. It only tags active, pre-kickoff predictions. */
+  currentRevalidationTask = cron.schedule("15 */3 * * *", () => {
+    runScheduledRevalidation().catch((err) =>
+      logger.error({ err }, "Scheduled revalidation failed"),
+    );
+  });
+
+  logger.info("Scheduler running — odds sync uses scheduler_config | settlement daily at 06:00 | revalidation every 3h");
 }

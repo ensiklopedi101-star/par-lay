@@ -18,3 +18,4 @@
 - [Cron and Market Movement](cron-and-market-movement.md) — Keep-alive memakai `/api/cron`; market movement tercatat saat fetch odds menghasilkan perubahan, bukan saat ping keep-alive.
 - [Batch Scanner Fixture Schema](batch-scanner-fixture-schema.md) — Batch analyzer harus memakai kolom live `fixture_date`, `home_team_name`, dan `away_team_name`.
 - [Cross-league Stats Resolver](stats-resolver.md) — Resolver stats toleran terhadap variasi slug liga, rentang musim, suffix nama tim, dan membaca MP dari JSONB form.
+- [Prediction Revalidation](prediction-revalidation.md) — Pisahkan sinyal risiko pre-kickoff dari status settlement; revalidasi odds tidak boleh mengubah histori parlay atau status active.

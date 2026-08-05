@@ -1186,6 +1186,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     away_team: awayTeam,
     league: leagueName,
     market_bet: recommendation.marketBet,
+    best_odds: recommendation.odds > 1 ? recommendation.odds : null,
     ev_at_analysis: evAtAnalysis,
     status: "active",
     created_at: new Date().toISOString(),

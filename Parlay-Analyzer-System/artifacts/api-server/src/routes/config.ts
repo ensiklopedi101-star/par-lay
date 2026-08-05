@@ -168,6 +168,17 @@ router.post("/sync/settle", requireAdmin, async (_req, res) => {
   }
 });
 
+router.post("/sync/revalidate", requireAdmin, async (_req, res) => {
+  try {
+    const { runRevalidation } = await import("../services/revalidation");
+    const result = await runRevalidation();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    logger.error({ err }, "Revalidation trigger failed");
+    res.status(500).json({ error: "Revalidation failed" });
+  }
+});
+
 router.get("/sync/status", async (_req, res) => {
   try {
     const { data: schedulerConfig } = await supabase

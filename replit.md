@@ -443,4 +443,27 @@ Tidak ada preferensi spesifik yang diberikan user.
 
 ---
 
+## 16. Catatan Kesinambungan — Revalidasi Prediksi (2026-08-05)
+
+### Sudah selesai
+- Menambahkan service revalidasi ringan untuk prediksi `ai_predictions` yang masih `active` dan fixture-nya belum kickoff.
+- Service membaca odds terbaru, membandingkan `best_odds` dan `ev_at_analysis`, lalu memberi status terpisah: `keep`, `review`, atau `invalidated`.
+- Status settlement tetap memakai kolom `status`; revalidasi tidak mengubah `parlays` atau `parlay_legs`, sehingga histori parlay yang sudah dibuat tetap immutable.
+- Menambahkan kolom live Supabase `revalidation_status`, `revalidation_note`, dan `last_revalidated_at`, plus migration lokal `supabase/migrations/20260805_prediction_revalidation.sql`.
+- Analisis baru sekarang menyimpan `best_odds` sebagai baseline revalidasi.
+- Scheduler menjalankan revalidasi setiap 3 jam pada menit ke-15, setelah cadence odds sync; endpoint admin manual tersedia di `POST /api/sync/revalidate`.
+- Endpoint cron aman tersedia sebagai `GET /api/cron?token=<CRON_SECRET>&action=revalidate`.
+- Modal analisis frontend menampilkan status dan alasan revalidasi.
+- Typecheck monorepo sudah bersih dan API workflow sudah berhasil restart.
+
+### Batasan yang sengaja dipertahankan
+- Revalidasi ini tidak memanggil Gemini ulang. Ia hanya mengukur perubahan harga/EV dan memberi sinyal risiko agar quota AI tidak terbakar.
+- Belum ada intelligence lineup/cedera atau versioning prediksi. Itu adalah pekerjaan lanjutan yang perlu desain dan quota budget terpisah.
+
+### Jika dilanjutkan
+- Tambahkan tombol/filter dashboard untuk menampilkan semua prediksi `review` dan `invalidated`.
+- Jika diperlukan, tambahkan AI re-call hanya untuk trigger tertentu (misalnya EV menjadi negatif atau odds turun keras), dengan versioning dan aturan jelas untuk parlay yang belum ditempatkan.
+
+---
+
 **Dokumentasi ini dibuat untuk agen AI Replit.** Update file ini setiap kali ada perubahan signifikan pada arsitektur, fitur, atau konfigurasi proyek.

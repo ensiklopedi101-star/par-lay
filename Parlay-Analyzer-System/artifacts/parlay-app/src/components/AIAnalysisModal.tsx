@@ -11,6 +11,9 @@ interface AnalysisResult {
   away_team?: string;
   prediction_text: string;
   created_at: string;
+  revalidation_status?: "keep" | "review" | "invalidated" | null;
+  revalidation_note?: string | null;
+  last_revalidated_at?: string | null;
 }
 
 interface Props {
@@ -25,6 +28,12 @@ function detectVerdict(text: string): "AMBIL" | "NO BET" | null {
   if (/\bAMBIL\b/i.test(text)) return "AMBIL";
   if (/\bNO\s*BET\b/i.test(text)) return "NO BET";
   return null;
+}
+
+function revalidationLabel(status: AnalysisResult["revalidation_status"]): string {
+  if (status === "invalidated") return "INVALIDATED";
+  if (status === "review") return "REVIEW";
+  return "KEEP";
 }
 
 function HighlightedMarkdown({ text }: { text: string }) {
@@ -83,6 +92,31 @@ export function AIAnalysisModal({ open, onOpenChange, result, homeTeam, awayTeam
             <Clock className="w-3 h-3" />
             Dianalisis: {format(new Date(result.created_at), "dd MMM yyyy, HH:mm")}
           </div>
+          {result.revalidation_status && (
+            <div
+              className={`mt-3 rounded-md border px-3 py-2 text-xs ${
+                result.revalidation_status === "invalidated"
+                  ? "border-red-500/40 bg-red-500/10 text-red-300"
+                  : result.revalidation_status === "review"
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                    : "border-green-500/40 bg-green-500/10 text-green-300"
+              }`}
+            >
+              <div className="font-semibold tracking-wide">
+                Revalidasi odds: {revalidationLabel(result.revalidation_status)}
+              </div>
+              {result.revalidation_note && (
+                <div className="mt-1 leading-relaxed text-current/90">
+                  {result.revalidation_note}
+                </div>
+              )}
+              {result.last_revalidated_at && (
+                <div className="mt-1 opacity-75">
+                  Dicek: {format(new Date(result.last_revalidated_at), "dd MMM yyyy, HH:mm")}
+                </div>
+              )}
+            </div>
+          )}
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto mt-4 pr-1 border-t border-border pt-4">
