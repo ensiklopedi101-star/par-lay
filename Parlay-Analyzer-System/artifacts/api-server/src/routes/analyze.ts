@@ -10,7 +10,7 @@ import {
 } from "../services/ai-analysis";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
-import { calculateKelly, extractProbFromPrediction } from "../lib/kelly-criterion";
+import { calculateKelly } from "../lib/kelly-criterion";
 import { requireAdmin } from "../middlewares/admin";
 import { createParlayFromCandidates, type ParlayCandidate } from "../services/parlay-builder";
 import { latestOddsByMarket } from "../services/odds-history";
@@ -185,18 +185,22 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
         statsCache,
       });
       backoffMs = result.rateLimited ? Math.min(backoffMs === 0 ? 5_000 : backoffMs * 2, 20_000) : 0;
-      const recommendation = extractPredictionRecommendation(result.prediction_text);
-      const prob = extractProbFromPrediction(result.prediction_text);
+       const recommendation = extractPredictionRecommendation(result.prediction_text);
+       const prob = result.probability ?? null;
       const kelly = prob && recommendation.odds > 1
         ? calculateKelly(recommendation.odds, prob)
         : { recommendedUnit: "N/A", edge: 0, isPositiveEdge: false };
-      const isParlayLeg = Boolean(
+       const isParlayLeg = Boolean(
         result.odds_status !== "stale" &&
         recommendation.marketBet &&
         recommendation.odds > 1 &&
         recommendation.confidence >= 8 &&
         recommendation.marketBet.toLowerCase() !== "no_bet",
-      );
+       ) &&
+         prob != null &&
+         prob > 0 &&
+         prob < 1 &&
+         recommendation.evPercent > 0;
 
       const ticket: BatchTicket = {
         fixture_id: String(fx.fixture_id),
@@ -217,7 +221,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
         is_parlay_leg: isParlayLeg,
       };
       job.tickets.push(ticket);
-      if (isParlayLeg) {
+       if (isParlayLeg && prob != null) {
         parlayCandidates.push({
           predictionId: result.prediction_id,
           fixtureId: fx.fixture_id,
@@ -229,6 +233,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
           selection: recommendation.marketBet!,
           odds: recommendation.odds,
           confidence: recommendation.confidence,
+           probability: prob,
           evPercent: recommendation.evPercent,
         });
       }

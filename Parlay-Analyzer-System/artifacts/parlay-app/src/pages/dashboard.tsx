@@ -445,7 +445,7 @@ export default function Dashboard() {
           </div>
           {statsHealth && (
             <div className="text-sm tabular-nums text-muted-foreground">
-              {statsHealth.coveredLeagues}/{statsHealth.totalLeagues} liga memiliki stats
+              {statsHealth.coveredLeagues}/{statsHealth.totalLeagues} liga memiliki stats inti
             </div>
           )}
         </CardHeader>
@@ -483,7 +483,7 @@ export default function Dashboard() {
                 <div className="rounded-md border border-red-500/20 bg-red-500/5 p-3">
                   <div className="flex items-center gap-2 font-semibold text-red-500">
                     <CircleAlert className="w-4 h-4" />
-                    Liga belum ada stats ({statsHealth.missingLeagues.length})
+                    Liga belum ada stats inti ({statsHealth.missingLeagues.length})
                   </div>
                   <p className="mt-2 text-sm text-muted-foreground">
                     {statsHealth.missingLeagues.length > 0

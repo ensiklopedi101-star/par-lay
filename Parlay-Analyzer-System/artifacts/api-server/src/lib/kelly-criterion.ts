@@ -73,7 +73,8 @@ export function calculateKelly(odds: number, probWin: number): KellyResult {
 
 /**
  * Ekstrak probabilitas dari teks prediksi Gemini
- * Mencari pattern "Prob. Nyata: XX%" atau "Confidence: X.X"
+ * Hanya menerima probabilitas nyata eksplisit. Confidence bukan probabilitas
+ * dan tidak boleh dipakai sebagai input Kelly.
  * @param predictionText - teks dari Gemini
  * @returns probabilitas (0-1) atau null
  */
@@ -83,13 +84,6 @@ export function extractProbFromPrediction(predictionText: string): number | null
   const probMatch = text.match(/prob(?:abilitas)?\s*(?:nyata)?:?\s*(\d+\.?\d*)\s*%/);
   if (probMatch) {
     return Math.min(0.99, Math.max(0.01, parseFloat(probMatch[1]) / 100));
-  }
-  // Cari "confidence: 8.5" → convert ke probabilitas kasar
-  const confMatch = text.match(/confidence\s*(?:score)?:?\s*(\d+\.?\d*)/);
-  if (confMatch) {
-    const conf = parseFloat(confMatch[1]);
-    // confidence / 10 → probabilitas kasar (8.5/10 = 0.85)
-    return Math.min(0.99, Math.max(0.01, conf / 10));
   }
   return null;
 }

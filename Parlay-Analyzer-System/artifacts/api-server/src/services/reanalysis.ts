@@ -140,14 +140,6 @@ export async function runTriggeredReanalysis(
           fixture_id: candidate.fixtureId,
           trigger_type: triggerType,
           trigger_reason: candidate.triggerReason,
-          trigger_context: {
-            oddsDelta: candidate.oddsDelta,
-            analysisOdds: candidate.analysisOdds,
-            currentOdds: candidate.currentOdds,
-            evAtAnalysis: candidate.evAtAnalysis,
-            currentEV: candidate.currentEV,
-            evDrop: candidate.evDrop,
-          },
           prediction_text: result.prediction_text,
           market_bet: result.market_bet ?? null,
           best_odds: result.odds && result.odds > 1 ? result.odds : null,
@@ -155,6 +147,16 @@ export async function runTriggeredReanalysis(
           confidence_score: result.confidence ?? null,
           provider: result.provider ?? null,
           model_version: result.model ?? null,
+          trigger_context: {
+            oddsDelta: candidate.oddsDelta,
+            analysisOdds: candidate.analysisOdds,
+            currentOdds: candidate.currentOdds,
+            evAtAnalysis: candidate.evAtAnalysis,
+            currentEV: candidate.currentEV,
+            evDrop: candidate.evDrop,
+            dataQuality: result.data_quality ?? null,
+            probability: result.probability ?? null,
+          },
           status: "completed",
         })
         .select("id")

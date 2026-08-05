@@ -68,6 +68,7 @@ type RevisionRow = {
   best_odds: number | null;
   ev_at_analysis: number | null;
   confidence_score: number | null;
+  trigger_context: Record<string, unknown> | null;
 };
 
 type ReadinessStatus =
@@ -78,7 +79,8 @@ type ReadinessStatus =
   | "started_or_finished"
   | "missing_prediction"
   | "stale"
-  | "rate_limited_unverified";
+  | "rate_limited_unverified"
+  | "invalid_probability";
 
 function asIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -102,6 +104,9 @@ function candidateFrom(
     selection: leg.selection,
     odds: revalidation?.currentOdds ?? leg.odds,
     confidence: prediction?.confidence_score ?? leg.confidence ?? 0,
+    probability: Number.isFinite(Number(leg.probability)) && Number(leg.probability) > 0 && Number(leg.probability) < 1
+      ? Number(leg.probability)
+      : 0,
     evPercent: ((revalidation?.currentEV ?? prediction?.ev_at_analysis ?? prediction?.expected_value ?? 0) * 100),
   };
 }
@@ -173,7 +178,7 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
   const fixtureById = new Map(loaded.fixtures.map((fixture) => [Number(fixture.fixture_id), fixture]));
   const { data: revisionRows } = await supabase
     .from("ai_prediction_revisions")
-    .select("prediction_id, status, provider, model_version, created_at, market_bet, best_odds, ev_at_analysis, confidence_score")
+    .select("prediction_id, status, provider, model_version, created_at, market_bet, best_odds, ev_at_analysis, confidence_score, trigger_context")
     .in("prediction_id", targetedPredictionIds)
     .order("created_at", { ascending: false })
     .limit(100);
@@ -198,6 +203,10 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
       if (latestRevision.best_odds != null && latestRevision.best_odds > 1) candidate.odds = latestRevision.best_odds;
       if (latestRevision.confidence_score != null) candidate.confidence = latestRevision.confidence_score;
       if (latestRevision.ev_at_analysis != null) candidate.evPercent = latestRevision.ev_at_analysis * 100;
+      const revisionProbability = Number(latestRevision.trigger_context?.probability);
+      if (Number.isFinite(revisionProbability) && revisionProbability > 0 && revisionProbability < 1) {
+        candidate.probability = revisionProbability;
+      }
     }
     const capturedAt = revalidationCandidate?.oddsCapturedAt;
     const refreshResult = refreshByFixture.get(Number(leg.fixture_id));
@@ -213,7 +222,10 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
       && revalidationCandidate?.currentOdds != null
       && withinFreshness;
     const aiFresh = latestRevision?.status === "completed";
-    const status: ReadinessStatus = prediction?.status === "active" && revalidationCandidate?.status === "keep" && fresh && aiFresh
+    const probabilityValid = Number.isFinite(candidate.probability)
+      && candidate.probability > 0
+      && candidate.probability < 1;
+    const status: ReadinessStatus = prediction?.status === "active" && revalidationCandidate?.status === "keep" && fresh && aiFresh && probabilityValid
       ? "ready"
       : !prediction
         ? "missing_prediction"
@@ -227,6 +239,8 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
             ? "invalidated"
             : revalidationCandidate?.status === "review"
               ? "review"
+              : candidate.probability <= 0 || candidate.probability >= 1
+                ? "invalid_probability"
               : "stale";
     return {
       parlayId: leg.parlay_id,
@@ -255,6 +269,8 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
               ? revalidationCandidate?.triggerReason ?? "Perlu review sebelum kickoff."
               : status === "invalidated"
                 ? revalidationCandidate?.triggerReason ?? "Sinyal value sudah invalid."
+                : status === "invalid_probability"
+                  ? "Probabilitas eksplisit/provenance tidak tersedia untuk leg ini; merge diblokir."
                 : status === "started_or_finished"
                   ? "Fixture sudah mulai atau selesai."
                   : "Prediksi aktif tidak ditemukan.",

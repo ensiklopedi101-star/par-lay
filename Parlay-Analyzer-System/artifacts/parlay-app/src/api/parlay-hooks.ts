@@ -385,6 +385,8 @@ export interface StatsLeagueHealth {
   name: string;
   statsRows: number;
   teamsCovered: number;
+  teamsComplete: number;
+  teamsIncomplete: number;
   latestUpdatedAt: string | null;
   ageDays: number | null;
   status: "missing" | "stale" | "current";

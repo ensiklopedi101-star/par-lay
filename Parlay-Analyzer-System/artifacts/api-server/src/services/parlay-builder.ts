@@ -12,6 +12,7 @@ export interface ParlayCandidate {
   selection: string;
   odds: number;
   confidence: number;
+  probability: number;
   evPercent: number;
 }
 
@@ -29,10 +30,7 @@ export interface MergeParlayResult {
 export type ParlayRiskLevel = "low" | "medium" | "high" | "very_high";
 
 function probabilityFor(candidate: ParlayCandidate): number {
-  const confidenceProbability = Math.max(0.01, Math.min(0.99, candidate.confidence / 10));
-  return candidate.odds > 1
-    ? Math.max(0.01, Math.min(0.99, Math.max(confidenceProbability, 1 / candidate.odds)))
-    : confidenceProbability;
+  return Math.max(0.01, Math.min(0.99, candidate.probability));
 }
 
 export function calculateParlayMetrics(candidates: ParlayCandidate[]) {
@@ -80,8 +78,8 @@ export async function createMergedParlay(
       rejected.push({ fixtureId, reason: "Fixture duplikat; hanya satu leg per fixture yang diperbolehkan." });
       continue;
     }
-    if (candidate.odds <= 1 || candidate.confidence < 6.5) {
-      rejected.push({ fixtureId, reason: "Odds atau confidence tidak memenuhi batas minimum." });
+    if (candidate.odds <= 1 || candidate.confidence < 6.5 || !Number.isFinite(candidate.probability) || candidate.probability <= 0 || candidate.probability >= 1) {
+      rejected.push({ fixtureId, reason: "Odds, confidence, atau probabilitas tidak memenuhi batas minimum." });
       continue;
     }
     if (unique.size >= 7) {

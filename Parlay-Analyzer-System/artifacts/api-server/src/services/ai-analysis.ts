@@ -66,15 +66,16 @@ OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
     {
       "fixture_id": "10293",
       "market": "Over 2.5",
+     "probability": 0.58,
       "confidence": 8.5,
       "odds": 1.85,
       "ev_percent": 8.2,
       "rationale": "Regresi 11 laci mengonfirmasi xG gabungan 3.12. Terjadi sharp money drop 0.12 pada Over, mengindikasikan arus dana besar terkonfirmasi."
-    }
+   }
   ]
 }
 
-Jika confidence < 6.5, selection: "NO_BET" dan JSON tidak wajib.`;
+Field "probability" adalah probabilitas nyata untuk selection dalam angka 0-1, bukan confidence dan bukan probabilitas implisit bandar. Field ini wajib untuk selection selain NO_BET. Jika confidence < 6.5 atau probabilitas nyata tidak dapat dihitung, gunakan selection "NO_BET".`;
 
 /* ═══════════════════════════════════════════════════════════════
    LOAD AI CONFIG dari Supabase
@@ -110,6 +111,103 @@ export interface OddsRow {
   odds_2: number | null;
   odds_draw: number | null;
   captured_at?: string;
+}
+
+export const REQUIRED_STAT_KEYS = [
+  "stats_xg",
+  "stats_fts",
+  "stats_btts",
+  "stats_goals_conceded",
+  "stats_goals_scored",
+  "stats_over_25",
+  "stats_under",
+  "stats_team_form",
+] as const;
+
+export const OPTIONAL_STAT_KEYS = [
+  "stats_shots",
+  "stats_over_35",
+  "stats_ht",
+] as const;
+
+export interface TeamStatsQuality {
+  valid: boolean;
+  availableKeys: string[];
+  missingKeys: string[];
+  invalidKeys: string[];
+  nonEmptyCount: number;
+  requiredCount: number;
+}
+
+function statsSourceObjects(stats: Record<string, unknown>): Record<string, unknown>[] {
+  const sources: Record<string, unknown>[] = [];
+  const current = stats.current_season;
+  const baseline = stats.baseline_reference;
+  if (current && typeof current === "object") sources.push(current as Record<string, unknown>);
+  if (baseline && typeof baseline === "object") sources.push(baseline as Record<string, unknown>);
+  if (sources.length === 0) sources.push(stats);
+  return sources;
+}
+
+function isMeaningfulStatValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as object).length > 0;
+  return false;
+}
+
+function hasSaneStatValues(value: unknown, key: string): boolean {
+  if (!isMeaningfulStatValue(value)) return false;
+  if (typeof value === "object" && value !== null) {
+    return Object.entries(value as Record<string, unknown>)
+      .every(([metric, metricValue]) => hasSaneStatValues(metricValue, `${key}.${metric}`));
+  }
+  const metric = key.split(".").at(-1)?.toLowerCase() ?? "";
+  const allowsNegative = metric.includes("gd")
+    || metric.includes("advantage")
+    || metric.includes("actual");
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return false;
+    if (!allowsNegative && value < 0) return false;
+    if ((metric === "mp" || metric.includes("matches played")) && value <= 0) return false;
+    return true;
+  }
+  if (typeof value !== "string") return true;
+
+  const percentageValues = [...value.matchAll(/(-?\d+(?:\.\d+)?)\s*%/g)].map((match) => Number(match[1]));
+  if (percentageValues.some((percentage) => !Number.isFinite(percentage) || percentage < 0 || percentage > 100)) {
+    return false;
+  }
+  const numericValues = [...value.matchAll(/[-+]?\d+(?:\.\d+)?/g)].map((match) => Number(match[0]));
+  if (!allowsNegative && numericValues.some((numeric) => Number.isFinite(numeric) && numeric < 0)) {
+    return false;
+  }
+  if ((metric === "mp" || metric.includes("matches played"))
+    && (!numericValues.some((numeric) => Number.isFinite(numeric) && numeric > 0))) {
+    return false;
+  }
+  return true;
+}
+
+export function assessTeamStatsQuality(stats: Record<string, unknown>): TeamStatsQuality {
+  const sources = statsSourceObjects(stats);
+  const availableKeys = REQUIRED_STAT_KEYS.filter((key) =>
+    sources.some((source) => hasSaneStatValues(source[key], key)),
+  );
+  const missingKeys = REQUIRED_STAT_KEYS.filter((key) => !availableKeys.includes(key));
+  const invalidKeys = REQUIRED_STAT_KEYS.filter((key) =>
+    sources.some((source) => isMeaningfulStatValue(source[key]) && !hasSaneStatValues(source[key], key)),
+  );
+  return {
+    valid: missingKeys.length === 0,
+    availableKeys: [...availableKeys],
+    missingKeys: [...missingKeys],
+    invalidKeys: [...invalidKeys],
+    nonEmptyCount: availableKeys.length,
+    requiredCount: REQUIRED_STAT_KEYS.length,
+  };
 }
 
 interface OddsMovementRow {
@@ -171,6 +269,56 @@ export interface OddsAvailability {
   status: OddsAvailabilityStatus;
   latestCapturedAt: string | null;
   rowCount: number;
+}
+
+function parseMarketLine(value: string): number | null {
+  const match = value.match(/(?:^|[\s:_])(-?\d+(?:\.\d+)?)(?:\s|$)/);
+  if (!match) return null;
+  const line = Number(match[1]);
+  return Number.isFinite(line) ? line : null;
+}
+
+type RecommendationMarketType = "ML" | "HT" | "Totals" | "AH" | "BTTS" | null;
+
+function recommendationMarketType(market: string): RecommendationMarketType {
+  const value = market.toLowerCase();
+  if (value.includes("btts") || value.includes("both teams")) return "BTTS";
+  if (value.includes("over") || value.includes("under")) return "Totals";
+  if (value.includes("handicap") || value.includes("spread") || value.includes("asian")) return "AH";
+  if (value.includes("half time") || value.includes("half-time") || /\bht\b/.test(value)) return "HT";
+  if (value.includes("home") || value.includes("away") || value.includes("draw") || value === "1" || value === "2" || value === "x") return "ML";
+  return null;
+}
+
+function validatedOddsForRecommendation(market: string, rows: OddsRow[]): number | null {
+  const marketType = recommendationMarketType(market);
+  if (!marketType) return null;
+  const value = market.toLowerCase();
+  const line = marketType === "Totals" || marketType === "AH" ? parseMarketLine(value) : null;
+  const candidates = rows
+    .filter((row) => classifyOddsMarket(row.market_type) === marketType)
+    .filter((row) => {
+      if (line == null) return true;
+      const storedLine = Number(row.odds_draw);
+      if (Number.isFinite(storedLine) && Math.abs(storedLine - line) <= 0.01) return true;
+      const marketLine = parseMarketLine(String(row.market_type ?? "").toLowerCase());
+      return marketLine != null && Math.abs(marketLine - line) <= 0.01;
+    })
+    .sort((a, b) => new Date(String(b.captured_at ?? "")).getTime() - new Date(String(a.captured_at ?? "")).getTime());
+  const row = candidates[0];
+  if (!row) return null;
+  if (marketType === "BTTS") {
+    return value.includes("no") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+  }
+  if (marketType === "Totals") {
+    return value.includes("under") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+  }
+  if (marketType === "AH") {
+    return value.includes("away") || value.includes("visitor") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+  }
+  if (value.includes("away") || value === "2") return Number(row.odds_2) > 1 ? Number(row.odds_2) : null;
+  if (value.includes("draw") || value === "x") return Number(row.odds_draw) > 1 ? Number(row.odds_draw) : null;
+  return Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
 }
 
 export function assessOddsAvailability(rows: OddsRow[]): OddsAvailability {
@@ -870,19 +1018,7 @@ ${relationalBlock}
    HELPER
    ═══════════════════════════════════════════════════════════════ */
 function hasStats(stats: Record<string, unknown>): boolean {
-  // Handle multi-season wrapped format: look inside current_season or baseline_reference
-  const meta = stats._meta as string | undefined;
-  if (meta === "COMBINED" || meta === "BASELINE_ONLY") {
-    const current = stats.current_season as Record<string, unknown> | undefined;
-    const baseline = stats.baseline_reference as Record<string, unknown> | undefined;
-    return hasStatsObject(current) || hasStatsObject(baseline);
-  }
-  return hasStatsObject(stats);
-}
-
-function hasStatsObject(stats: Record<string, unknown> | undefined): boolean {
-  if (!stats) return false;
-  return Object.values(stats).some((v) => v !== null && v !== undefined);
+  return assessTeamStatsQuality(stats).valid;
 }
 
 function hasStatValue(stats: Record<string, unknown>, key: string): boolean {
@@ -906,6 +1042,7 @@ export interface AnalysisResult {
   market_bet?: string | null;
   odds?: number;
   confidence?: number;
+  probability?: number | null;
   ev_percent?: number;
   ev_at_analysis?: number;
   odds_status?: OddsAvailabilityStatus;
@@ -914,6 +1051,11 @@ export interface AnalysisResult {
   rateLimited?: boolean;
   provider?: string;
   model?: string;
+  data_quality?: {
+    stats: { home: TeamStatsQuality; away: TeamStatsQuality };
+    odds: { status: OddsAvailabilityStatus; capturedAt: string | null; verifiedMarket: boolean };
+    rejectionReason?: string;
+  };
 }
 
 /**
@@ -949,6 +1091,7 @@ export interface PredictionRecommendation {
   odds: number;
   confidence: number;
   evPercent: number;
+  probability: number | null;
 }
 
 function toFiniteNumber(value: unknown, fallback = 0): number {
@@ -1007,7 +1150,26 @@ export function extractPredictionRecommendation(text: string): PredictionRecomme
   const odds = Math.max(0, toFiniteNumber(selected.odds ?? root.odds));
   const rawEv = toFiniteNumber(selected.ev_percent ?? selected.ev ?? root.ev_percent ?? root.expected_value);
   const evPercent = Math.abs(rawEv) <= 1 ? rawEv * 100 : rawEv;
-  return { marketBet, odds, confidence, evPercent };
+  const rawProbability = selected.probability
+    ?? selected.probability_real
+    ?? selected.prob_real
+    ?? selected.prob_win
+    ?? root.probability
+    ?? root.probability_real;
+  const probabilityText = typeof rawProbability === "string" ? rawProbability.trim() : "";
+  const parsedProbability = rawProbability == null
+    ? null
+    : probabilityText.endsWith("%")
+      ? toFiniteNumber(probabilityText.slice(0, -1), Number.NaN) / 100
+      : toFiniteNumber(rawProbability, Number.NaN);
+  const probability = parsedProbability != null && Number.isFinite(parsedProbability)
+    ? parsedProbability > 1 && parsedProbability <= 100
+      ? parsedProbability / 100
+      : parsedProbability >= 0 && parsedProbability <= 1
+        ? parsedProbability
+        : null
+    : null;
+  return { marketBet, odds, confidence, evPercent, probability };
 }
 
 export class StatsEmptyError extends Error {
@@ -1197,7 +1359,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
   ].join("\n");
 
   /* ── Terminal monitoring ── */
-  const STAT_KEYS = ["stats_xg","stats_fts","stats_btts","stats_goals_conceded","stats_goals_scored","stats_shots","stats_over_25","stats_over_35","stats_under","stats_team_form","stats_ht"] as const;
+  const STAT_KEYS = REQUIRED_STAT_KEYS;
   console.log(`\n[AI-ANALYSIS] ════════════════════════════════`);
   console.log(`[AI-ANALYSIS] Fixture: ${homeTeam} vs ${awayTeam} (ID: ${fixtureId})`);
   console.log(`[AI-ANALYSIS] Odds — 1X2: ${structuredOdds.matchWinner.length} | O/U: ${structuredOdds.overUnder.length} | BTTS: ${structuredOdds.btts.length}`);
@@ -1209,16 +1371,15 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
   }
 
   /* ── Guard: tolak jika statistik kosong ── */
-  const homeHasData = hasStats(homeStats);
-  const awayHasData = hasStats(awayStats);
-
-  if (!homeHasData && !awayHasData) {
-    console.log(`[AI-ANALYSIS] DITOLAK — tidak ada data statistik untuk kedua tim.\n`);
-    throw new StatsEmptyError("Data statistik belum lengkap di Supabase. Silakan upload CSV terlebih dahulu.");
-  }
-
-  if (!homeHasData || !awayHasData) {
-    console.log(`[AI-ANALYSIS] PERINGATAN — data ${!homeHasData ? homeTeam : awayTeam} tidak ditemukan, melanjutkan parsial.`);
+  const homeStatsQuality = assessTeamStatsQuality(homeStats);
+  const awayStatsQuality = assessTeamStatsQuality(awayStats);
+  if (!homeStatsQuality.valid || !awayStatsQuality.valid) {
+    const missingHome = homeStatsQuality.missingKeys.join(", ") || "none";
+    const missingAway = awayStatsQuality.missingKeys.join(", ") || "none";
+    console.log(`[AI-ANALYSIS] DITOLAK — stats belum lengkap. Home missing: ${missingHome}; Away missing: ${missingAway}\n`);
+    throw new StatsEmptyError(
+      `Data statistik belum lengkap. ${homeTeam}: ${missingHome}. ${awayTeam}: ${missingAway}.`,
+    );
   }
 
    console.log(`[AI-ANALYSIS] Mengirim prompt ke AI provider...\n`);
@@ -1236,8 +1397,30 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
    const aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
    const predictionText = aiResult.text;
-   const recommendation = extractPredictionRecommendation(predictionText);
-   const evAtAnalysis = recommendation.evPercent / 100;
+    const parsedRecommendation = extractPredictionRecommendation(predictionText);
+    const verifiedOdds = parsedRecommendation.marketBet
+      ? validatedOddsForRecommendation(parsedRecommendation.marketBet, oddsRows)
+      : null;
+    const recommendation = verifiedOdds != null && parsedRecommendation.probability != null
+      ? {
+          ...parsedRecommendation,
+          odds: verifiedOdds,
+          evPercent: (parsedRecommendation.probability * verifiedOdds - 1) * 100,
+        }
+      : {
+          ...parsedRecommendation,
+          marketBet: null,
+          odds: 0,
+          evPercent: 0,
+        };
+    const rejectionReason = parsedRecommendation.marketBet == null
+      ? "AI tidak memilih market taruhan."
+      : verifiedOdds == null
+        ? "Market atau line rekomendasi AI tidak ditemukan pada odds snapshot provider."
+        : parsedRecommendation.probability == null
+          ? "Probabilitas nyata eksplisit tidak tersedia; confidence tidak digunakan sebagai probabilitas."
+          : undefined;
+    const evAtAnalysis = recommendation.evPercent / 100;
 
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
 
@@ -1251,9 +1434,25 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     home_team: homeTeam,
     away_team: awayTeam,
     league: leagueName,
-    market_bet: recommendation.marketBet,
+     market_bet: recommendation.marketBet,
     best_odds: recommendation.odds > 1 ? recommendation.odds : null,
     ev_at_analysis: evAtAnalysis,
+     manual_context: {
+       data_quality: {
+         stats: { home: homeStatsQuality, away: awayStatsQuality },
+         odds: {
+           status: oddsAvailability.status,
+           capturedAt: oddsAvailability.latestCapturedAt,
+           verifiedMarket: verifiedOdds != null,
+         },
+         rejectionReason: rejectionReason ?? null,
+       },
+       probability: recommendation.probability,
+       probabilitySource: recommendation.probability != null ? "ai_explicit" : null,
+       oddsSource: recommendation.odds > 1 ? "provider_snapshot" : null,
+       provider: aiResult.provider,
+       model: aiResult.model,
+     },
     status: "active",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -1276,6 +1475,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     market_bet: recommendation.marketBet,
     odds: recommendation.odds,
     confidence: recommendation.confidence,
+    probability: recommendation.probability,
     ev_percent: recommendation.evPercent,
     ev_at_analysis: evAtAnalysis,
     odds_status: oddsAvailability.status,
@@ -1283,5 +1483,14 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     rateLimited: aiResult.rateLimited,
     provider: aiResult.provider,
     model: aiResult.model,
+    data_quality: {
+      stats: { home: homeStatsQuality, away: awayStatsQuality },
+      odds: {
+        status: oddsAvailability.status,
+        capturedAt: oddsAvailability.latestCapturedAt,
+        verifiedMarket: verifiedOdds != null,
+      },
+      rejectionReason,
+    },
   };
 }

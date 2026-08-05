@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
+import { assessTeamStatsQuality, REQUIRED_STAT_KEYS } from "../services/ai-analysis";
 
 const router: IRouter = Router();
 const STATS_STALE_DAYS = 14;
@@ -9,6 +10,7 @@ type StatsRow = {
   league_slug: string | null;
   team_name: string | null;
   updated_at: string | null;
+  [key: string]: unknown;
 };
 
 type FixtureRow = {
@@ -49,7 +51,10 @@ router.get("/stats/health", async (_req, res) => {
   try {
     const [{ data: config }, { data: statsRows, error: statsError }] = await Promise.all([
       supabase.from("scheduler_config").select("leagues, scan_days").limit(1).maybeSingle(),
-      supabase.from("team_season_stats").select("league_slug, team_name, updated_at").limit(5000),
+       supabase
+         .from("team_season_stats")
+         .select(`league_slug, team_name, updated_at, ${REQUIRED_STAT_KEYS.join(", ")}`)
+         .limit(5000),
     ]);
 
     if (statsError) throw statsError;
@@ -62,7 +67,7 @@ router.get("/stats/health", async (_req, res) => {
     const staleCutoff = now - STATS_STALE_DAYS * 24 * 60 * 60 * 1000;
     const rowsByLeague = new Map<string, StatsRow[]>();
 
-    for (const row of (statsRows ?? []) as StatsRow[]) {
+    for (const row of (statsRows ?? []) as unknown as StatsRow[]) {
       if (!row.league_slug) continue;
       const key = canonicalLeague(row.league_slug);
       const current = rowsByLeague.get(key) ?? [];
@@ -78,6 +83,8 @@ router.get("/stats/health", async (_req, res) => {
       name: string;
       statsRows: number;
       teamsCovered: number;
+       teamsComplete: number;
+       teamsIncomplete: number;
       latestUpdatedAt: string | null;
       ageDays: number | null;
       status: "missing" | "stale" | "current";
@@ -88,6 +95,8 @@ router.get("/stats/health", async (_req, res) => {
       if (healthByKey.has(key)) continue;
       const rows = rowsByLeague.get(key) ?? [];
       const latestUpdatedAt = latestDate(rows.map((row) => row.updated_at));
+      const quality = rows.map((row) => assessTeamStatsQuality(row));
+      const teamsComplete = quality.filter((entry) => entry.valid).length;
       const ageDays = latestUpdatedAt
         ? Math.max(0, Math.floor((now - new Date(latestUpdatedAt).getTime()) / (24 * 60 * 60 * 1000)))
         : null;
@@ -96,9 +105,11 @@ router.get("/stats/health", async (_req, res) => {
         name: leagueLabel(slug),
         statsRows: rows.length,
         teamsCovered: new Set(rows.map((row) => row.team_name).filter(Boolean)).size,
+        teamsComplete,
+        teamsIncomplete: Math.max(0, rows.length - teamsComplete),
         latestUpdatedAt,
         ageDays,
-        status: rows.length === 0 ? "missing" : latestUpdatedAt && new Date(latestUpdatedAt).getTime() >= staleCutoff ? "current" : "stale",
+        status: teamsComplete === 0 ? "missing" : latestUpdatedAt && new Date(latestUpdatedAt).getTime() >= staleCutoff ? "current" : "stale",
       });
     }
 
