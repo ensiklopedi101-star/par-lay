@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { addDays, formatISO } from "date-fns";
-import { useGetConfig, useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth, useGetStatsHealth, getListSupabaseParlaysQueryKey } from "@/api/parlay-hooks";
+import { useGetConfig, useGetSyncStatus, useListSupabaseParlays, useListSupabaseFixtures, useGetHealth, useGetStatsHealth, useGetRiskCenter, getListSupabaseParlaysQueryKey } from "@/api/parlay-hooks";
 import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Activity, Clock, Database, Server, BrainCircuit, CalendarDays, Zap, Shield, CircleAlert, RefreshCw } from "lucide-react";
+import { Activity, Clock, Database, Server, BrainCircuit, CalendarDays, Zap, Shield, CircleAlert, RefreshCw, AlertTriangle, ExternalLink } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { formatLeagueName } from "@/utils/format-league";
@@ -12,13 +13,14 @@ import { useAdminPassword } from "@/hooks/use-admin-password";
 import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
 
 function HealthDot({ status }: { status: string }) {
-  const color = status === "active" ? "bg-emerald-500" : status === "idle" ? "bg-amber-500" : status === "error" || status === "missing_key" ? "bg-red-500" : "bg-slate-500";
+  const color = status === "active" || status === "ready" ? "bg-emerald-500" : status === "idle" ? "bg-amber-500" : status === "error" || status === "missing_key" ? "bg-red-500" : "bg-slate-500";
   return <div className={`w-2.5 h-2.5 rounded-full ${color} ${status === "calculating" ? "animate-pulse" : ""}`} />;
 }
 
 function HealthBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     active: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+    ready: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
     idle: "bg-amber-500/10 text-amber-500 border-amber-500/20",
     calculating: "bg-amber-500/10 text-amber-500 border-amber-500/20",
     saving: "bg-blue-500/10 text-blue-500 border-blue-500/20",
@@ -43,6 +45,7 @@ export default function Dashboard() {
     limit: 500,
   });
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
+  const { data: riskCenter, isLoading: isRiskCenterLoading, isError: isRiskCenterError } = useGetRiskCenter();
   const { data: statsHealth, isLoading: isStatsHealthLoading } = useGetStatsHealth();
   const [scanState, setScanState] = useState<"idle" | "scanning">("idle");
   const [scanError, setScanError] = useState<string | null>(null);
@@ -288,6 +291,10 @@ export default function Dashboard() {
                 <div>
                   <div className="text-sm font-medium">AI Pipeline</div>
                   <HealthBadge status={health?.aiPipeline?.status ?? "idle"} />
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    {health?.aiPipeline?.activePredictions ?? 0} aktif ·{" "}
+                    {(health?.aiPipeline?.reviewPredictions ?? 0) + (health?.aiPipeline?.invalidatedPredictions ?? 0)} risiko
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-3 p-3 rounded-lg bg-secondary/30">
@@ -299,6 +306,103 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Risk Center — active pre-kickoff predictions needing attention */}
+      <Card className="bg-card border-border">
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="text-lg font-semibold flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Risk Center
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Prediksi aktif sebelum kickoff yang perlu diperiksa sebelum dipasang.
+            </p>
+          </div>
+          {riskCenter && (
+            <div className="flex flex-wrap gap-2 text-xs">
+              <Badge variant="outline" className="border-amber-500/30 text-amber-500">
+                Review {riskCenter.summary.review}
+              </Badge>
+              <Badge variant="outline" className="border-red-500/30 text-red-500">
+                Invalidated {riskCenter.summary.invalidated}
+              </Badge>
+            </div>
+          )}
+        </CardHeader>
+        <CardContent>
+          {isRiskCenterLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-14 w-full" />
+              <Skeleton className="h-14 w-full" />
+            </div>
+          ) : isRiskCenterError ? (
+            <div className="rounded-md border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-400">
+              Risk Center belum dapat dimuat. Health monitor tetap tersedia.
+            </div>
+          ) : riskCenter?.items.length ? (
+            <div className="space-y-2">
+              {riskCenter.items.map((item) => {
+                const isInvalidated = item.revalidationStatus === "invalidated";
+                return (
+                  <div
+                    key={item.predictionId}
+                    className={`rounded-md border p-3 ${
+                      isInvalidated
+                        ? "border-red-500/30 bg-red-500/5"
+                        : "border-amber-500/30 bg-amber-500/5"
+                    }`}
+                  >
+                    <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold">
+                            {item.homeTeam} <span className="text-muted-foreground">vs</span> {item.awayTeam}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className={isInvalidated
+                              ? "border-red-500/40 text-red-500"
+                              : "border-amber-500/40 text-amber-500"}
+                          >
+                            {isInvalidated ? "INVALIDATED" : "REVIEW"}
+                          </Badge>
+                          {item.inParlay && (
+                            <Badge variant="outline" className="border-primary/30 text-primary">
+                              In parlay
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {formatLeagueName(item.league)} · {item.market} · kickoff{" "}
+                          {new Date(item.fixtureDate).toLocaleString()}
+                        </div>
+                        <p className={`mt-2 text-sm ${isInvalidated ? "text-red-300" : "text-amber-300"}`}>
+                          {item.revalidationNote}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 flex-row items-center gap-3 text-xs text-muted-foreground lg:flex-col lg:items-end">
+                        <span>Odds: {item.bestOdds != null ? item.bestOdds.toFixed(2) : "N/A"}</span>
+                        <span>Confidence: {item.confidence != null ? item.confidence.toFixed(1) : "N/A"}</span>
+                        <Link
+                          href={`/fixtures?fixture=${item.fixtureId}`}
+                          className="inline-flex items-center gap-1 text-primary hover:underline"
+                        >
+                          Buka fixture <ExternalLink className="h-3 w-3" />
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-4 text-sm text-emerald-400">
+              Tidak ada prediksi aktif yang perlu direview sebelum kickoff.
             </div>
           )}
         </CardContent>

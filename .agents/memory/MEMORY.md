@@ -19,3 +19,4 @@
 - [Batch Scanner Fixture Schema](batch-scanner-fixture-schema.md) — Batch analyzer harus memakai kolom live `fixture_date`, `home_team_name`, dan `away_team_name`.
 - [Cross-league Stats Resolver](stats-resolver.md) — Resolver stats toleran terhadap variasi slug liga, rentang musim, suffix nama tim, dan membaca MP dari JSONB form.
 - [Prediction Revalidation](prediction-revalidation.md) — Pisahkan sinyal risiko pre-kickoff dari status settlement; revalidasi odds tidak boleh mengubah histori parlay atau status active.
+- [Risk Center Health](risk-center-health.md) — Health AI memakai count prediksi aktif; Risk Center hanya menampilkan prediksi active yang fixture-nya belum kickoff.

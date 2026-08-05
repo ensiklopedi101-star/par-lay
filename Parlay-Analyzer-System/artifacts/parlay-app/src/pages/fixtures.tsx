@@ -1,4 +1,4 @@
-import { useState, Fragment } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { useListEvents, useGetEvent, useListAvailableLeagues, useGetAIPrediction, useRunAIAnalysis, type AIAnalysisResult, type LeagueAvailable } from "@/api/parlay-hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -189,11 +189,18 @@ function AIAnalysisButton({ eventId, homeTeam, awayTeam }: AIButtonProps) {
 export default function Fixtures() {
   const [leagueSlug, setLeagueSlug] = useState<string>("all");
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const selectedFixtureId = Number(new URLSearchParams(window.location.search).get("fixture") ?? 0);
 
   const { data: leagues, isLoading: isLeaguesLoading } = useListAvailableLeagues();
   const { data: events, isLoading: isEventsLoading } = useListEvents(
     leagueSlug === "all" ? undefined : { league: leagueSlug, limit: 100 }
   );
+
+  useEffect(() => {
+    if (selectedFixtureId > 0 && events?.some((event) => event.id === selectedFixtureId)) {
+      setExpandedId(selectedFixtureId);
+    }
+  }, [events, selectedFixtureId]);
 
   return (
     <div className="space-y-6">

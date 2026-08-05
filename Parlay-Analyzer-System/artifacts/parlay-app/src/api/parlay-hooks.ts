@@ -21,10 +21,40 @@ export interface SyncStatus {
 export interface Health {
   supabase?: { status?: string; latencyMs?: number; [key: string]: unknown };
   gemini?: { status?: string; model?: string; [key: string]: unknown };
-  aiPipeline?: { status?: string; [key: string]: unknown };
+  aiPipeline?: {
+    status?: string;
+    activePredictions?: number;
+    reviewPredictions?: number;
+    invalidatedPredictions?: number;
+    [key: string]: unknown;
+  };
   aiLearning?: { status?: string; hitRate?: number | null; [key: string]: unknown };
   oddsApi?: { status?: string; [key: string]: unknown };
   timestamp?: string;
+}
+
+export interface RiskCenterItem {
+  predictionId: string;
+  fixtureId: number;
+  homeTeam: string;
+  awayTeam: string;
+  league: string;
+  fixtureDate: string;
+  market: string;
+  bestOdds: number | null;
+  evAtAnalysis: number | null;
+  confidence: number | null;
+  revalidationStatus: "review" | "invalidated";
+  revalidationNote: string;
+  lastRevalidatedAt: string | null;
+  inParlay: boolean;
+  parlayCount: number;
+}
+
+export interface RiskCenterResponse {
+  summary: { total: number; review: number; invalidated: number };
+  items: RiskCenterItem[];
+  generatedAt: string;
 }
 
 export interface LeagueAvailable {
@@ -380,6 +410,15 @@ export function useGetHealth() {
   return useQuery<Health>({
     queryKey: getGetHealthQueryKey(),
     queryFn: () => apiGet<Health>(`${API_BASE}/health`),
+  });
+}
+
+export const getRiskCenterQueryKey = () => ["risk-center"];
+export function useGetRiskCenter() {
+  return useQuery<RiskCenterResponse>({
+    queryKey: getRiskCenterQueryKey(),
+    queryFn: () => apiGet<RiskCenterResponse>(`${API_BASE}/risk-center`),
+    refetchInterval: 60_000,
   });
 }
 

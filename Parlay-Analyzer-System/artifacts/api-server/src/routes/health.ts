@@ -18,7 +18,12 @@ router.get("/health", async (_req, res) => {
   const health = {
     supabase: { status: "checking", latencyMs: 0 },
     gemini: { status: "checking", model: "gemini-2.0-flash" },
-    aiPipeline: { status: "idle" as "idle" | "calculating" | "saving" },
+    aiPipeline: {
+      status: "checking" as "checking" | "ready" | "error" | "missing_key",
+      activePredictions: 0,
+      reviewPredictions: 0,
+      invalidatedPredictions: 0,
+    },
     aiLearning: { status: "checking", hitRate: null as number | null },
     oddsApi: { status: "checking", lastRateLimit: null as string | null },
     timestamp: new Date().toISOString(),
@@ -42,15 +47,37 @@ router.get("/health", async (_req, res) => {
   const geminiKey = process.env["GEMINI_API_KEY"];
   health.gemini.status = geminiKey ? "active" : "missing_key";
 
-  /* 3. AI Pipeline status — check if any recent predictions are pending */
+  /* 3. AI Pipeline status and risk counts. Active predictions are stored
+     recommendations, not an in-progress calculation, so they must not make
+     the UI claim that the pipeline is "calculating". */
   try {
-    const { data: pending } = await supabase
+    const { count: activeCount, error: activeError } = await supabase
       .from("ai_predictions")
       .select("id", { count: "exact", head: true })
       .eq("status", "active");
-    health.aiPipeline.status = (pending && pending.length > 0) ? "calculating" : "idle";
-  } catch {
-    health.aiPipeline.status = "idle";
+    const { count: reviewCount, error: reviewError } = await supabase
+      .from("ai_predictions")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "active")
+      .eq("revalidation_status", "review");
+    const { count: invalidatedCount, error: invalidatedError } = await supabase
+      .from("ai_predictions")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "active")
+      .eq("revalidation_status", "invalidated");
+
+    health.aiPipeline.activePredictions = activeCount ?? 0;
+    health.aiPipeline.reviewPredictions = reviewCount ?? 0;
+    health.aiPipeline.invalidatedPredictions = invalidatedCount ?? 0;
+    health.aiPipeline.status =
+      activeError || reviewError || invalidatedError
+        ? "error"
+        : geminiKey
+          ? "ready"
+          : "missing_key";
+  } catch (err) {
+    logger.error({ err }, "Health check: AI pipeline query failed");
+    health.aiPipeline.status = "error";
   }
 
   /* 4. AI Learning — last performance log */
