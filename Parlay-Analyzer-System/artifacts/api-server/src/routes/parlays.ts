@@ -12,7 +12,10 @@ import {
 } from "../services/parlay-builder";
 
 const router: IRouter = Router();
-const READINESS_MAX_AGE_MINUTES = 20;
+// A successful provider refresh is considered usable for three hours. A
+// rate-limited refresh never becomes READY automatically; it may only expose
+// the last known price as an unverified reference.
+const READINESS_MAX_AGE_MINUTES = 3 * 60;
 
 type ParlayRow = {
   id: string;
@@ -74,7 +77,8 @@ type ReadinessStatus =
   | "missing_odds"
   | "started_or_finished"
   | "missing_prediction"
-  | "stale";
+  | "stale"
+  | "rate_limited_unverified";
 
 function asIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -150,6 +154,9 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
   }
   const loaded = await loadReadiness(parlayIds);
   const refreshSummary = refresh ? await refreshOddsForFixtures(loaded.fixtureIds) : null;
+  const refreshByFixture = new Map(
+    (refreshSummary?.fixtures ?? []).map((fixture) => [fixture.fixtureId, fixture]),
+  );
   let revalidation = await runRevalidation();
   const targetedPredictionIds = Array.from(new Set(loaded.predictions.map((prediction) => prediction.id)));
   const reanalysis = await runTriggeredReanalysis(revalidation.candidates ?? [], {
@@ -193,11 +200,18 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
       if (latestRevision.ev_at_analysis != null) candidate.evPercent = latestRevision.ev_at_analysis * 100;
     }
     const capturedAt = revalidationCandidate?.oddsCapturedAt;
+    const refreshResult = refreshByFixture.get(Number(leg.fixture_id));
     const kickoffAt = fixture ? new Date(fixture.fixture_date).getTime() : 0;
     const upcoming = kickoffAt > now;
-    const fresh = upcoming && (capturedAt
-      ? now - new Date(capturedAt).getTime() <= READINESS_MAX_AGE_MINUTES * 60_000
-      : refreshSummary?.refreshed === refreshSummary?.requested);
+    const capturedAgeMs = capturedAt ? now - new Date(capturedAt).getTime() : Number.POSITIVE_INFINITY;
+    const withinFreshness = Number.isFinite(capturedAgeMs) && capturedAgeMs >= 0
+      && capturedAgeMs <= READINESS_MAX_AGE_MINUTES * 60_000;
+    const fresh = upcoming && withinFreshness
+      && (refreshResult?.status === "refreshed" || refreshResult == null);
+    const rateLimitedUnverified = upcoming
+      && refreshResult?.status === "rate_limited"
+      && revalidationCandidate?.currentOdds != null
+      && withinFreshness;
     const aiFresh = latestRevision?.status === "completed";
     const status: ReadinessStatus = prediction?.status === "active" && revalidationCandidate?.status === "keep" && fresh && aiFresh
       ? "ready"
@@ -205,6 +219,8 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
         ? "missing_prediction"
         : !upcoming
           ? "started_or_finished"
+          : rateLimitedUnverified
+            ? "rate_limited_unverified"
           : !revalidationCandidate?.currentOdds
             ? "missing_odds"
           : revalidationCandidate?.status === "invalidated"
@@ -229,8 +245,12 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
         ? "Odds segar, AI berhasil diperbarui, dan revalidasi terakhir tetap aman."
         : !aiFresh
           ? "AI belum berhasil diperbarui untuk leg ini; jangan pasang bet."
+          : status === "rate_limited_unverified"
+            ? `Refresh Odds API terkena rate limit. Harga ${revalidationCandidate?.currentOdds?.toFixed(2) ?? "terakhir"} adalah last-known odds, terakhir diambil ${capturedAt ? new Date(capturedAt).toISOString() : "tidak diketahui"}; belum terverifikasi ulang.`
           : status === "missing_odds"
-            ? "Odds terbaru untuk market ini tidak ditemukan; jangan pasang bet."
+            ? refreshResult?.status === "missing_odds"
+              ? "Provider merespons, tetapi market yang dibutuhkan tidak memiliki odds usable."
+              : "Odds untuk market ini belum tersedia; jangan pasang bet."
             : status === "review"
               ? revalidationCandidate?.triggerReason ?? "Perlu review sebelum kickoff."
               : status === "invalidated"
@@ -247,6 +267,12 @@ async function buildReadiness(parlayIds: string[], refresh = true) {
           }
         : null,
       candidate,
+      oddsVerification: {
+        refreshStatus: refreshResult?.status ?? "not_requested",
+        capturedAt,
+        ageMinutes: Number.isFinite(capturedAgeMs) ? Math.max(0, Math.round(capturedAgeMs / 60_000)) : null,
+        verified: status === "ready",
+      },
     };
   });
 

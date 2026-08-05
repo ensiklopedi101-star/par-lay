@@ -61,6 +61,8 @@ function readinessLabel(status: ParlayReadinessLeg["status"]) {
   if (status === "invalidated") return "INVALIDATED";
   if (status === "started_or_finished") return "KICKED OFF";
   if (status === "missing_prediction") return "MISSING";
+  if (status === "rate_limited_unverified") return "RATE LIMITED";
+  if (status === "missing_odds") return "NO ODDS";
   if (status === "stale") return "STALE";
   return "REVIEW";
 }
@@ -68,8 +70,10 @@ function readinessLabel(status: ParlayReadinessLeg["status"]) {
 function readinessClass(status: ParlayReadinessLeg["status"]) {
   return status === "ready"
     ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-    : status === "invalidated" || status === "started_or_finished"
+      : status === "invalidated" || status === "started_or_finished"
       ? "bg-red-500/10 text-red-500 border-red-500/20"
+        : status === "rate_limited_unverified"
+          ? "bg-orange-500/10 text-orange-500 border-orange-500/20"
       : "bg-amber-500/10 text-amber-500 border-amber-500/20";
 }
 
@@ -191,7 +195,14 @@ function VerificationPanel({
                       <Badge variant="outline" className={readinessClass(leg.status)}>{readinessLabel(leg.status)}</Badge>
                     </div>
                   </div>
-                  {leg.status !== "ready" && <div className="mt-2 pl-6 text-xs text-amber-500">{leg.reason}</div>}
+                   {leg.status !== "ready" && (
+                     <div className={`mt-2 pl-6 text-xs ${leg.status === "rate_limited_unverified" ? "text-orange-500" : "text-amber-500"}`}>
+                       {leg.reason}
+                       {leg.status === "rate_limited_unverified" && (
+                         <span className="ml-1 font-semibold">Merge otomatis tetap diblokir.</span>
+                       )}
+                     </div>
+                   )}
                 </div>
               ))}
             </div>

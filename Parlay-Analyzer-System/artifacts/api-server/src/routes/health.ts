@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { getOddsRefreshState } from "../services/odds-fetcher";
 
 const router: IRouter = Router();
 
@@ -25,7 +26,12 @@ router.get("/health", async (_req, res) => {
       invalidatedPredictions: 0,
     },
     aiLearning: { status: "checking", hitRate: null as number | null },
-    oddsApi: { status: "checking", lastRateLimit: null as string | null },
+     oddsApi: {
+       status: "checking",
+       lastRateLimit: null as string | null,
+       retryAfterSeconds: null as number | null,
+       affectedFixtures: [] as number[],
+     },
     timestamp: new Date().toISOString(),
   };
 
@@ -97,6 +103,10 @@ router.get("/health", async (_req, res) => {
   /* 5. Odds API status */
   const oddsKey = process.env["ODDS_API_KEY"];
   health.oddsApi.status = oddsKey ? "active" : "missing_key";
+  const refreshState = getOddsRefreshState();
+  health.oddsApi.lastRateLimit = refreshState.lastRateLimitedAt;
+  health.oddsApi.retryAfterSeconds = refreshState.retryAfterSeconds;
+  health.oddsApi.affectedFixtures = refreshState.fixtureIds;
 
   res.json(health);
 });

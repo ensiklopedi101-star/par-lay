@@ -135,6 +135,7 @@ interface LessonRow {
 
 interface MarketOdds {
   bookmaker: string;
+  capturedAt?: string | null;
   home?: number;
   draw?: number;
   away?: number;
@@ -150,10 +151,18 @@ interface StructuredOdds {
   matchWinner: MarketOdds[];
   overUnder: MarketOdds[];
   btts: MarketOdds[];
-  other: { bookmaker: string; market: string; odds_1?: number; odds_2?: number; odds_draw?: number }[];
+  other: {
+    bookmaker: string;
+    market: string;
+    capturedAt?: string | null;
+    odds_1?: number;
+    odds_2?: number;
+    odds_draw?: number;
+  }[];
 }
 
 export type OddsAvailabilityStatus = "valid" | "stale" | "missing";
+const ODDS_MAX_AGE_HOURS = 3;
 
 export interface OddsAvailability {
   status: OddsAvailabilityStatus;
@@ -173,7 +182,7 @@ export function assessOddsAvailability(rows: OddsRow[]): OddsAvailability {
     .filter((value): value is string => Boolean(value))
     .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
   const isStale = latestCapturedAt
-    ? Date.now() - new Date(latestCapturedAt).getTime() > 24 * 60 * 60 * 1000
+     ? Date.now() - new Date(latestCapturedAt).getTime() > ODDS_MAX_AGE_HOURS * 60 * 60 * 1000
     : false;
   return {
     status: isStale ? "stale" : "valid",
@@ -646,6 +655,7 @@ function extractStructuredOdds(rows: OddsRow[]): StructuredOdds {
     if (mt === "h2h" || mt === "1x2" || mt === "match_winner" || mt === "match winner" || mt === "ml") {
       result.matchWinner.push({
         bookmaker: row.bookmaker,
+        capturedAt: row.captured_at ?? null,
         home: row.odds_1 ?? undefined,
         draw: row.odds_draw ?? undefined,
         away: row.odds_2 ?? undefined,
@@ -655,9 +665,17 @@ function extractStructuredOdds(rows: OddsRow[]): StructuredOdds {
           away: impliedProb(row.odds_2),
         },
       });
-    } else if (mt === "totals" || mt === "over_under" || mt.includes("over") || mt.includes("total")) {
+    } else if (
+      mt === "ou"
+      || mt === "totals"
+      || mt === "over_under"
+      || mt.includes("over")
+      || mt.includes("under")
+      || mt.includes("total")
+    ) {
       result.overUnder.push({
         bookmaker: row.bookmaker,
+        capturedAt: row.captured_at ?? null,
         over: row.odds_1 ?? undefined,
         under: row.odds_2 ?? undefined,
         impliedProb: {
@@ -668,6 +686,7 @@ function extractStructuredOdds(rows: OddsRow[]): StructuredOdds {
     } else if (mt === "btts" || mt === "both_teams_to_score" || mt.includes("both teams")) {
       result.btts.push({
         bookmaker: row.bookmaker,
+        capturedAt: row.captured_at ?? null,
         yes: row.odds_1 ?? undefined,
         no: row.odds_2 ?? undefined,
         impliedProb: {
@@ -678,6 +697,7 @@ function extractStructuredOdds(rows: OddsRow[]): StructuredOdds {
     } else {
       result.other.push({
         bookmaker: row.bookmaker,
+        capturedAt: row.captured_at ?? null,
         market: row.market_type,
         odds_1: row.odds_1 ?? undefined,
         odds_2: row.odds_2 ?? undefined,
@@ -692,12 +712,17 @@ function extractStructuredOdds(rows: OddsRow[]): StructuredOdds {
    FORMAT BLOK ODDS UNTUK PROMPT
    ═══════════════════════════════════════════════════════════════ */
 function formatOddsBlock(homeTeam: string, awayTeam: string, odds: StructuredOdds): string {
-  const lines: string[] = ["--- DATA HARGA PASAR (ODDS BANDAR) ---"];
+  const lines: string[] = [
+    "--- DATA HARGA PASAR (ODDS BANDAR) ---",
+    "KONTRAK PEMBACAAN: setiap row memakai odds_1/odds_2 sebagai selection pertama/kedua sesuai market.",
+    "1X2: odds_1=Home, odds_draw=Draw, odds_2=Away | TOTALS: odds_1=Over, odds_2=Under | BTTS: odds_1=Yes, odds_2=No.",
+    "Gunakan hanya angka yang tersedia, jangan memindahkan nilai antar market, dan perhatikan bookmaker serta timestamp snapshot.",
+  ];
   if (odds.matchWinner.length > 0) {
     lines.push(`\n▪ Match Winner / 1X2 (${homeTeam} | Draw | ${awayTeam}):`);
     for (const o of odds.matchWinner) {
       lines.push(
-        `  [${o.bookmaker}]  Home: ${o.home ?? "N/A"} (impl. ${o.impliedProb?.home})` +
+        `  [${o.bookmaker} @ ${o.capturedAt ?? "timestamp unavailable"}]  Home: ${o.home ?? "N/A"} (impl. ${o.impliedProb?.home})` +
         `  |  Draw: ${o.draw ?? "N/A"} (impl. ${o.impliedProb?.draw})` +
         `  |  Away: ${o.away ?? "N/A"} (impl. ${o.impliedProb?.away})`,
       );
@@ -709,7 +734,7 @@ function formatOddsBlock(homeTeam: string, awayTeam: string, odds: StructuredOdd
     lines.push(`\n▪ Over/Under Goals (Totals):`);
     for (const o of odds.overUnder) {
       lines.push(
-        `  [${o.bookmaker}]  Over: ${o.over ?? "N/A"} (impl. ${o.impliedProb?.over})` +
+        `  [${o.bookmaker} @ ${o.capturedAt ?? "timestamp unavailable"}]  Over: ${o.over ?? "N/A"} (impl. ${o.impliedProb?.over})` +
         `  |  Under: ${o.under ?? "N/A"} (impl. ${o.impliedProb?.under})`,
       );
     }
@@ -720,7 +745,7 @@ function formatOddsBlock(homeTeam: string, awayTeam: string, odds: StructuredOdd
     lines.push(`\n▪ Both Teams to Score (BTTS):`);
     for (const o of odds.btts) {
       lines.push(
-        `  [${o.bookmaker}]  Yes: ${o.yes ?? "N/A"} (impl. ${o.impliedProb?.yes})` +
+        `  [${o.bookmaker} @ ${o.capturedAt ?? "timestamp unavailable"}]  Yes: ${o.yes ?? "N/A"} (impl. ${o.impliedProb?.yes})` +
         `  |  No: ${o.no ?? "N/A"} (impl. ${o.impliedProb?.no})`,
       );
     }
@@ -731,7 +756,7 @@ function formatOddsBlock(homeTeam: string, awayTeam: string, odds: StructuredOdd
     lines.push(`\n▪ Pasaran Lainnya:`);
     for (const o of odds.other) {
       lines.push(
-        `  [${o.bookmaker}] ${o.market}: ` +
+        `  [${o.bookmaker} @ ${o.capturedAt ?? "timestamp unavailable"}] ${o.market}: ` +
         `${o.odds_1 != null ? `O1=${o.odds_1}` : ""}` +
         `${o.odds_draw != null ? ` Draw=${o.odds_draw}` : ""}` +
         `${o.odds_2 != null ? ` O2=${o.odds_2}` : ""}`.trim(),

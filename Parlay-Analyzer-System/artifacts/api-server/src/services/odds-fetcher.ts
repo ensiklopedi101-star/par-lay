@@ -18,6 +18,34 @@ const MAX_RATE_LIMIT_BACKOFF_SECONDS = 300;
 
 let activeLeagueCache: { slugs: Set<string>; expiresAt: number } | null = null;
 
+export type OddsRefreshFixtureStatus =
+  | "refreshed"
+  | "rate_limited"
+  | "missing_odds"
+  | "failed"
+  | "skipped";
+
+export interface OddsRefreshFixtureResult {
+  fixtureId: number;
+  status: OddsRefreshFixtureStatus;
+  retryAfterSeconds?: number;
+  errorMessage?: string;
+}
+
+let lastOddsRefreshState: {
+  lastRateLimitedAt: string | null;
+  retryAfterSeconds: number | null;
+  fixtureIds: number[];
+} = {
+  lastRateLimitedAt: null,
+  retryAfterSeconds: null,
+  fixtureIds: [],
+};
+
+export function getOddsRefreshState() {
+  return { ...lastOddsRefreshState, fixtureIds: [...lastOddsRefreshState.fixtureIds] };
+}
+
 function normalizeBookmakerName(name: string): string {
   return name.toLowerCase().replace(/\s*\(no latency\)\s*/g, "").trim();
 }
@@ -290,7 +318,7 @@ function buildOddsMovementRow(
       away_odds: o.away  ? parseFloat(o.away as string)  : null,
       draw_odds: o.draw  ? parseFloat(o.draw as string)  : null,
     };
-  } else if (name.includes("ou") || name.includes("total") || name.includes("over")) {
+  } else if (name === "ou" || name.includes("total") || name.includes("over") || name.includes("under")) {
     newOdds = {
       over_odds:  o.over  ? parseFloat(o.over  as string) : null,
       under_odds: o.under ? parseFloat(o.under as string) : null,
@@ -361,7 +389,7 @@ async function saveOddsMovementBatch(
   }
 }
 
-async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap: Map<string, number>) {
+async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap: Map<string, number>): Promise<number> {
   logger.info({ eventId: event.id, home: event.home, away: event.away, leagueSlug, leagueIdMapKeys: Array.from(leagueIdMap.keys()) }, "RADAR: saveEventAndOdds called");
   const leagueId = leagueIdMap.get(leagueSlug);
   logger.info({ leagueSlug, leagueIdFound: leagueId }, "RADAR: leagueId lookup result");
@@ -418,7 +446,7 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
     }
   }
 
-  if (!event.bookmakers) return;
+  if (!event.bookmakers) return 0;
 
   // 2. Collect all odds rows for this event before touching Supabase.
   const capturedAt = new Date().toISOString();
@@ -428,6 +456,19 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
     for (const market of markets) {
       if (market.odds.length < 1) continue;
       const odds = market.odds[0]!;
+      const marketName = (market.name ?? "").toLowerCase();
+      const isMatchWinner = marketName === "ml" || marketName === "1x2" || marketName === "match_winner" || marketName === "h2h";
+      const isTotals = marketName === "ou"
+        || marketName === "totals"
+        || marketName === "over_under"
+        || marketName.includes("total")
+        || marketName.includes("over")
+        || marketName.includes("under");
+      const isBtts = marketName === "btts" || marketName.includes("both_teams") || marketName.includes("both teams");
+      const odds1 = isTotals ? odds.over : isBtts ? odds.yes : odds.home;
+      const odds2 = isTotals ? odds.under : isBtts ? odds.no : odds.away;
+      const oddsDraw = isMatchWinner ? odds.draw : undefined;
+      if (!Number.isFinite(Number(odds1)) && !Number.isFinite(Number(odds2)) && !Number.isFinite(Number(oddsDraw))) continue;
       oddsPayloads.push({
         match_id: String(event.id),
         home_team: event.home,
@@ -435,16 +476,18 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
         commence_time: event.date,
         bookmaker,
         market_type: market.name,
-        odds_1: odds.home ? parseFloat(odds.home) : null,
-        odds_2: odds.away ? parseFloat(odds.away) : null,
-        odds_draw: odds.draw ? parseFloat(odds.draw) : null,
+        // odds_history uses generic selection slots: 1/2 means
+        // home/away for 1X2, over/under for totals, and yes/no for BTTS.
+        odds_1: odds1 != null ? parseFloat(String(odds1)) : null,
+        odds_2: odds2 != null ? parseFloat(String(odds2)) : null,
+        odds_draw: oddsDraw != null ? parseFloat(String(oddsDraw)) : null,
         captured_at: capturedAt,
       });
       const movementRow = buildOddsMovementRow(event.id, bookmaker, market, capturedAt);
       if (movementRow) movementPayloads.push({ bookmaker, market, row: movementRow });
     }
   }
-  if (oddsPayloads.length === 0) return;
+  if (oddsPayloads.length === 0) return 0;
 
   // The live database has no unique constraint for odds_history. Preserve the
   // existing latest-row update behavior, but reduce reads to one query and
@@ -487,6 +530,7 @@ async function saveEventAndOdds(event: ApiEvent, leagueSlug: string, leagueIdMap
 
   // One read + one insert for all movement snapshots belonging to this event.
   await saveOddsMovementBatch(event.id, movementPayloads);
+  return oddsPayloads.length;
 }
 
 async function getAlreadySyncedEventIds(
@@ -582,9 +626,11 @@ export async function fetchAndSaveLeagueOdds(
       try {
         await new Promise((r) => setTimeout(r, 300));
         const withOdds = await fetchEventOdds(event.id, apiKey, bookmakers);
-        await saveEventAndOdds(withOdds, league.slug, leagueIdMap);
-        saved++;
-        oddsFetched++;
+        const savedRows = await saveEventAndOdds(withOdds, league.slug, leagueIdMap);
+        if (savedRows > 0) {
+          saved++;
+          oddsFetched++;
+        }
       } catch (err) {
         if (err instanceof RateLimitError) {
           rateLimitedSeconds = err.retryAfterSeconds;
@@ -828,9 +874,20 @@ export async function refreshOddsForFixtures(fixtureIds: number[]): Promise<{
   refreshed: number;
   failed: number;
   skipped: number;
+  rateLimited: number;
+  missingOdds: number;
+  fixtures: OddsRefreshFixtureResult[];
 }> {
   const uniqueIds = Array.from(new Set(fixtureIds.filter((id) => Number.isFinite(id)))).slice(0, 20);
-  const summary = { requested: uniqueIds.length, refreshed: 0, failed: 0, skipped: 0 };
+  const summary: {
+    requested: number;
+    refreshed: number;
+    failed: number;
+    skipped: number;
+    rateLimited: number;
+    missingOdds: number;
+    fixtures: OddsRefreshFixtureResult[];
+  } = { requested: uniqueIds.length, refreshed: 0, failed: 0, skipped: 0, rateLimited: 0, missingOdds: 0, fixtures: [] };
   if (uniqueIds.length === 0) return summary;
 
   const apiKey = process.env["ODDS_API_KEY"];
@@ -854,19 +911,52 @@ export async function refreshOddsForFixtures(fixtureIds: number[]): Promise<{
   );
   const fixtureById = new Map((fixtures ?? []).map((fixture) => [Number(fixture.fixture_id), fixture]));
 
-  for (const fixtureId of uniqueIds) {
+  // Readiness is a point-in-time bet check. When several legs are selected,
+  // spend the provider request budget on the nearest upcoming kickoff first.
+  const orderedFixtureIds = uniqueIds.slice().sort((a, b) => {
+    const aDate = new Date(String(fixtureById.get(a)?.fixture_date ?? "")).getTime();
+    const bDate = new Date(String(fixtureById.get(b)?.fixture_date ?? "")).getTime();
+    return (Number.isFinite(aDate) ? aDate : Number.POSITIVE_INFINITY)
+      - (Number.isFinite(bDate) ? bDate : Number.POSITIVE_INFINITY);
+  });
+
+  for (const fixtureId of orderedFixtureIds) {
     const fixture = fixtureById.get(fixtureId);
     if (!fixture) {
       summary.skipped++;
+      summary.fixtures.push({ fixtureId, status: "skipped" });
       continue;
     }
     try {
       const event = await fetchEventOdds(fixtureId, apiKey, DEFAULT_BOOKMAKERS);
-      await saveEventAndOdds(event, String(fixture.league_name ?? ""), leagueIdMap);
-      summary.refreshed++;
+      const savedRows = await saveEventAndOdds(event, String(fixture.league_name ?? ""), leagueIdMap);
+      if (savedRows === 0) {
+        summary.missingOdds++;
+        summary.fixtures.push({ fixtureId, status: "missing_odds" });
+      } else {
+        summary.refreshed++;
+        summary.fixtures.push({ fixtureId, status: "refreshed" });
+      }
     } catch (error) {
-      summary.failed++;
-      logger.warn({ error, fixtureId }, "[ODDS-READINESS] Failed to refresh fixture odds");
+      if (error instanceof RateLimitError) {
+        summary.rateLimited++;
+        summary.fixtures.push({
+          fixtureId,
+          status: "rate_limited",
+          retryAfterSeconds: error.retryAfterSeconds,
+        });
+        lastOddsRefreshState = {
+          lastRateLimitedAt: new Date().toISOString(),
+          retryAfterSeconds: error.retryAfterSeconds,
+          fixtureIds: Array.from(new Set([...lastOddsRefreshState.fixtureIds, fixtureId])).slice(-50),
+        };
+        logger.warn({ error, fixtureId, retryAfterSeconds: error.retryAfterSeconds }, "[ODDS-READINESS] Rate limited while refreshing fixture odds");
+      } else {
+        summary.failed++;
+        const errorMessage = error instanceof Error ? error.message : "Unknown odds refresh failure";
+        summary.fixtures.push({ fixtureId, status: "failed", errorMessage });
+        logger.warn({ error, fixtureId }, "[ODDS-READINESS] Failed to refresh fixture odds");
+      }
     }
   }
 

@@ -159,7 +159,8 @@ export type ParlayReadinessStatus =
   | "missing_odds"
   | "stale"
   | "missing_prediction"
-  | "started_or_finished";
+  | "started_or_finished"
+  | "rate_limited_unverified";
 
 export interface ParlayReadinessLeg {
   parlayId: string;
@@ -175,6 +176,12 @@ export interface ParlayReadinessLeg {
   currentEV: number | null;
   status: ParlayReadinessStatus;
   reason: string;
+  oddsVerification: {
+    refreshStatus: string;
+    capturedAt: string | null;
+    ageMinutes: number | null;
+    verified: boolean;
+  };
   aiRevision: {
     status: string;
     provider: string | null;
@@ -186,7 +193,20 @@ export interface ParlayReadinessLeg {
 export interface ParlayReadiness {
   ready: boolean;
   generatedAt: string;
-  refresh: { requested: number; refreshed: number; failed: number; skipped: number } | null;
+  refresh: {
+    requested: number;
+    refreshed: number;
+    failed: number;
+    skipped: number;
+    rateLimited: number;
+    missingOdds: number;
+    fixtures: Array<{
+      fixtureId: number;
+      status: string;
+      retryAfterSeconds?: number;
+      errorMessage?: string;
+    }>;
+  } | null;
   reanalysis: {
     considered: number;
     analyzed: number;
