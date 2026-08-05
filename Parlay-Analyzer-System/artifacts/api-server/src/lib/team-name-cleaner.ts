@@ -9,6 +9,19 @@ const JUNK_WORDS = [
   "football club", "football", "calcio", "club",
 ];
 
+/**
+ * Explicit aliases that are known to represent the same club.
+ *
+ * Keep this list conservative: unlike generic suffix removal, these mappings
+ * are entity decisions and should only be added when the identity is certain.
+ */
+const CANONICAL_TEAM_NAMES: Record<string, string> = {
+  heerenveen: "Heerenveen",
+  "sc heerenveen": "Heerenveen",
+  utrecht: "Utrecht",
+  "fc utrecht": "Utrecht",
+};
+
 const KNOWN_SUFFIX_PATTERNS = [
   // "Manchester City FC Badge" → "Manchester City"
   /^(.+?)\s+(?:fc\s+)?badge$/i,
@@ -75,7 +88,8 @@ export function cleanTeamName(raw: string): string {
     }
   }
 
-  return cleaned.trim();
+  const trimmed = cleaned.trim();
+  return CANONICAL_TEAM_NAMES[trimmed.toLowerCase()] ?? trimmed;
 }
 
 /**

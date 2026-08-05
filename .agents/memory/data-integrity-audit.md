@@ -14,3 +14,9 @@ Team stats can still contain multiple rows for one normalized club identity with
 **Why:** Name cleaning and entity resolution are separate from database reconciliation.
 
 **How to apply:** Merge aliases with an explicit canonical mapping and field-level conflict policy before changing the live stats rows.
+
+The confirmed Eredivisie aliases `SC Heerenveen → Heerenveen` and `FC Utrecht → Utrecht` were merged at field level without conflicts; canonical rows were retained and alias rows removed after readback verification.
+
+**Why:** These identities were confirmed by the user’s example and live rows showed complementary or empty fields rather than conflicting values.
+
+**How to apply:** Keep future alias additions conservative and require an explicit mapping plus conflict guard; do not infer arbitrary clubs from fuzzy similarity alone.

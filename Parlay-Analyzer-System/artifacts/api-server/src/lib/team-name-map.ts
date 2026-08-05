@@ -121,6 +121,12 @@ export const TEAM_NAME_MAP: Record<string, string> = {
   "us cremonese": "cremonese",
   "cremonese": "cremonese",
 
+  // Eredivisie
+  "heerenveen": "heerenveen",
+  "sc heerenveen": "heerenveen",
+  "utrecht": "utrecht",
+  "fc utrecht": "utrecht",
+
   // K-League 1
   "jeonbuk hyundai motors": "jeonbuk",
   "jeonbuk": "jeonbuk",

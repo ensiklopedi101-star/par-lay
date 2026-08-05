@@ -1,0 +1,305 @@
+{
+  "createdAt": "2026-08-05T04:09:24.805Z",
+  "rows": [
+    {
+      "id": "36975217-ebb3-491f-8f89-27379da2c26f",
+      "league_slug": "netherlands-eredivisie",
+      "season": "2025-26",
+      "team_name": "Heerenveen",
+      "stats_xg": {
+        "GA": "1.60",
+        "GF": "1.69",
+        "MP": "35",
+        "xG": "1.67",
+        "xGA": "1.59",
+        "xGD": "+0.08",
+        "xG vs Actual": "+0.02"
+      },
+      "stats_fts": {
+        "MP": "35",
+        "FTS": "8",
+        "FTS %": "23%",
+        "Away %": "28%",
+        "Home %": "18%"
+      },
+      "stats_btts": {
+        "MP": "35",
+        "BTTS": "23",
+        "Away %": "56%",
+        "BTTS %": "66%",
+        "Home %": "76%"
+      },
+      "stats_goals_conceded": {
+        "MP": "35",
+        "Away": "1.78 / match",
+        "Home": "1.41 / match",
+        "Per Match": "1.60 Conceded / match",
+        "Goals Conceded": "56",
+        "Home Advantage": "'+12%"
+      },
+      "stats_goals_scored": {
+        "MP": "35",
+        "Away": "1.44 / match",
+        "Home": "1.94 / match",
+        "Per Match": "1.69 Scored / match",
+        "Goals Scored": "59",
+        "Home Advantage": "'+15%"
+      },
+      "stats_shots": {
+        "Over 10.5": "86%",
+        "Over 11.5": "74%",
+        "Over 12.5": "69%",
+        "Over 13.5": "63%",
+        "Over 14.5": "56%",
+        "Over 15.5": "49%"
+      },
+      "stats_over_25": {
+        "%": "71%",
+        "MP": "35",
+        "Away": "72%",
+        "Home": "71%",
+        "Over 2.5": "25"
+      },
+      "stats_over_35": {
+        "%": "40%",
+        "MP": "35",
+        "Away": "39%",
+        "Home": "41%",
+        "Over 3.5": "14"
+      },
+      "stats_under": {
+        "MP": "35",
+        "Under 0.5": "3%",
+        "Under 1.5": "6%",
+        "Under 2.5": "29%",
+        "Under 3.5": "60%",
+        "Under 4.5": "80%",
+        "Under 5.5": "94%"
+      },
+      "stats_team_form": {
+        "D": "1",
+        "L": "3",
+        "W": "2",
+        "CS": "33%",
+        "GA": "9",
+        "GD": "-3",
+        "GF": "6",
+        "MP": "6",
+        "FTS": "50%",
+        "PPG": "1.17",
+        "Pts": "7",
+        "BTTS": "33%",
+        "Last 6": "L D L W W L",
+        "Over 2.5": "50%"
+      },
+      "stats_ht": {
+        "MP": "35",
+        "Win %": "37%",
+        "Draw %": "31%",
+        "Loss %": "31%",
+        "W - D - L (HT)": "13 - 11 - 11"
+      },
+      "updated_at": "2026-08-04T02:34:00.781+00:00"
+    },
+    {
+      "id": "ed8237de-8887-464d-a338-b93fcc2273dd",
+      "league_slug": "netherlands-eredivisie",
+      "season": "2025-26",
+      "team_name": "Utrecht",
+      "stats_xg": {
+        "GA": "1.25",
+        "GF": "1.64",
+        "MP": "36",
+        "xG": "1.65",
+        "xGA": "1.52",
+        "xGD": "+0.13",
+        "xG vs Actual": "-0.01"
+      },
+      "stats_fts": {
+        "MP": "36",
+        "FTS": "6",
+        "FTS %": "17%",
+        "Away %": "17%",
+        "Home %": "17%"
+      },
+      "stats_btts": {
+        "MP": "36",
+        "BTTS": "22",
+        "Away %": "72%",
+        "BTTS %": "61%",
+        "Home %": "50%"
+      },
+      "stats_goals_conceded": {
+        "MP": "36",
+        "Away": "1.67 / match",
+        "Home": "0.83 / match",
+        "Per Match": "1.25 Conceded / match",
+        "Goals Conceded": "45",
+        "Home Advantage": "'+34%"
+      },
+      "stats_goals_scored": {
+        "MP": "36",
+        "Away": "1.39 / match",
+        "Home": "1.89 / match",
+        "Per Match": "1.64 Scored / match",
+        "Goals Scored": "59",
+        "Home Advantage": "'+15%"
+      },
+      "stats_shots": {
+        "Over 10.5": "86%",
+        "Over 11.5": "72%",
+        "Over 12.5": "64%",
+        "Over 13.5": "64%",
+        "Over 14.5": "47%",
+        "Over 15.5": "47%"
+      },
+      "stats_over_25": {
+        "%": "50%",
+        "MP": "36",
+        "Away": "56%",
+        "Home": "44%",
+        "Over 2.5": "18"
+      },
+      "stats_over_35": {
+        "%": "33%",
+        "MP": "36",
+        "Away": "33%",
+        "Home": "33%",
+        "Over 3.5": "12"
+      },
+      "stats_under": {
+        "MP": "36",
+        "Under 0.5": "3%",
+        "Under 1.5": "17%",
+        "Under 2.5": "50%",
+        "Under 3.5": "67%",
+        "Under 4.5": "81%",
+        "Under 5.5": "97%"
+      },
+      "stats_team_form": {
+        "D": "1",
+        "L": "1",
+        "W": "4",
+        "CS": "33%",
+        "GA": "9",
+        "GD": "1",
+        "GF": "10",
+        "MP": "6",
+        "FTS": "17%",
+        "PPG": "2.17",
+        "Pts": "13",
+        "BTTS": "50%",
+        "Last 6": "D W W W W L",
+        "Over 2.5": "50%",
+        "Next Match": "-"
+      },
+      "stats_ht": {
+        "MP": "36",
+        "Win %": "42%",
+        "Draw %": "31%",
+        "Loss %": "28%",
+        "W - D - L (HT)": "15 - 11 - 10"
+      },
+      "updated_at": "2026-06-22T03:43:39.579+00:00"
+    },
+    {
+      "id": "23755494-34c6-4bc0-8b64-e61ea006ac35",
+      "league_slug": "netherlands-eredivisie",
+      "season": "2025-26",
+      "team_name": "SC Heerenveen",
+      "stats_xg": {},
+      "stats_fts": {},
+      "stats_btts": {},
+      "stats_goals_conceded": {},
+      "stats_goals_scored": {},
+      "stats_shots": {
+        "Over 10.5": "86%",
+        "Over 11.5": "74%",
+        "Over 12.5": "69%",
+        "Over 13.5": "63%",
+        "Over 14.5": "56%",
+        "Over 15.5": "49%"
+      },
+      "stats_over_25": {},
+      "stats_over_35": {},
+      "stats_under": {},
+      "stats_team_form": {},
+      "stats_ht": {},
+      "updated_at": "2026-08-04T02:34:40.289+00:00"
+    },
+    {
+      "id": "45592c9b-c2c9-4640-82a0-66ef13be0331",
+      "league_slug": "netherlands-eredivisie",
+      "season": "2025-26",
+      "team_name": "FC Utrecht",
+      "stats_xg": {
+        "GA": "1.25",
+        "GF": "1.64",
+        "MP": "36",
+        "xG": "1.65",
+        "xGA": "1.52",
+        "xGD": "+0.13",
+        "xG vs Actual": "-0.01"
+      },
+      "stats_fts": {
+        "MP": "36",
+        "FTS": "6",
+        "FTS %": "17%",
+        "Away %": "17%",
+        "Home %": "17%"
+      },
+      "stats_btts": {
+        "MP": "36",
+        "BTTS": "22",
+        "Away %": "72%",
+        "BTTS %": "61%",
+        "Home %": "50%"
+      },
+      "stats_goals_conceded": {
+        "MP": "36",
+        "Away": "1.67 / match",
+        "Home": "0.83 / match",
+        "Per Match": "1.25 Conceded / match",
+        "Goals Conceded": "45",
+        "Home Advantage": "'+34%"
+      },
+      "stats_goals_scored": {
+        "MP": "36",
+        "Away": "1.39 / match",
+        "Home": "1.89 / match",
+        "Per Match": "1.64 Scored / match",
+        "Goals Scored": "59",
+        "Home Advantage": "'+15%"
+      },
+      "stats_shots": {
+        "Over 10.5": "86%",
+        "Over 11.5": "72%",
+        "Over 12.5": "64%",
+        "Over 13.5": "64%",
+        "Over 14.5": "47%",
+        "Over 15.5": "47%"
+      },
+      "stats_over_25": {},
+      "stats_over_35": {},
+      "stats_under": {},
+      "stats_team_form": {
+        "D": "1",
+        "L": "1",
+        "W": "4",
+        "CS": "33%",
+        "GA": "9",
+        "GD": "1",
+        "GF": "10",
+        "MP": "6",
+        "FTS": "17%",
+        "PPG": "2.17",
+        "Pts": "13",
+        "BTTS": "50%",
+        "Last 6": "D W W W W L",
+        "Over 2.5": "50%"
+      },
+      "stats_ht": {},
+      "updated_at": "2026-08-04T02:34:40.289+00:00"
+    }
+  ]
+}
