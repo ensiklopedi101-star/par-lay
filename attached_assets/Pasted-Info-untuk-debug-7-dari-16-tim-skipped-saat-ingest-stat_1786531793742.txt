@@ -1,0 +1,75 @@
+Info untuk debug: 7 dari 16 tim "skipped" saat ingest stats_team_form
+1. URL Endpoint yang dipanggil ekstensi
+POST https://par-lay--libertyisketan1.replit.app/api/stats/ingest
+
+Header yang dikirim:
+
+Content-Type: application/json
+x-api-key: <API key yang diisi user di config>
+2. Response lengkap dari endpoint (yang diterima ekstensi)
+json
+{
+  "ok": true,
+  "league_slug": "china-chinese-super-league",
+  "season": "2025-26",
+  "stat_type": "stats_team_form",
+  "upserted": 9,
+  "skipped": 7,
+  "result_rows": null
+}
+3. Payload JSON yang dikirim ekstensi (16 tim)
+
+Struktur payload:
+
+json
+{
+  "raw_url_path": "china/chinese-super-league",
+  "stat_type": "stats_team_form",
+  "season": "2025-26",
+  "teams": [
+    {
+      "raw_team_name": "Beijing Guoan FC",
+      "stat_data": {
+        "MP": "6", "W": "4", "D": "2", "L": "0",
+        "GF": "12", "GA": "4", "GD": "8", "Pts": "14",
+        "Last 6": "W W D D W W", "PPG": "2.33",
+        "CS": "50%", "FTS": "0%", "BTTS": "50%", "Over 2.5": "50%"
+      }
+    }
+    // ... 15 objek tim lainnya dengan struktur sama
+  ]
+}
+
+16 raw_team_name yang dikirim (urutan sesuai tabel FootyStats):
+
+Beijing Guoan FC
+Tianjin Teda FC
+Qingdao Youth Island FC
+Shanghai SIPG FC
+Yunnan Yukun FC
+Dalian Zhixing FC
+Shanghai Shenhua FC
+Shandong Luneng Taishan FC
+Henan Jianye FC
+Wuhan Three Towns FC
+Shenyang Urban FC
+Zhejiang Professional FC
+Sichuan Jiuniu FC
+Chengdu Better City FC
+Chongqing Tongliang Long FC
+Qingdao Jonoon FC
+Catatan tambahan
+
+Source code ekstensi (content.js) sudah divalidasi ulang secara terpisah (dijalankan manual via Node.js dengan raw data yang sama persis) — hasilnya 16/16 baris berhasil diparsing sempurna dan semua raw_team_name di atas bersih (tidak ada teks "Badge" atau "Next Match" yang bocor/nyangkut). File source ekstensi (content.js) dilampirkan terpisah jika diperlukan untuk verifikasi langsung.
+
+Hipotesis
+
+Kemungkinan besar 7 nama tim di atas tidak match dengan tabel teams di database karena klub Chinese Super League sering ganti nama (aturan CFA sejak 2021 soal larangan nama sponsor di nama klub), dan FootyStats kadang masih menampilkan nama versi lama. Contoh yang dicurigai:
+
+Shanghai SIPG FC → kemungkinan di DB sudah "Shanghai Port FC"
+Shandong Luneng Taishan FC → kemungkinan di DB sudah "Shandong Taishan FC"
+Henan Jianye FC → kemungkinan di DB sudah "Henan Songshan Longmen FC"
+Tianjin Teda FC → nama sudah berganti beberapa kali
+Qingdao Jonoon FC → nama sangat lawas
+
+Mohon dicek: apakah 7 yang skip persis nama-nama di atas? Jika ya, ini mengkonfirmasi masalah ada di logic matching nama tim di backend/Supabase, bukan di ekstensi.

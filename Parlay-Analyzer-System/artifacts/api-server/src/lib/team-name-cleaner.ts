@@ -20,6 +20,22 @@ const CANONICAL_TEAM_NAMES: Record<string, string> = {
   "sc heerenveen": "Heerenveen",
   utrecht: "Utrecht",
   "fc utrecht": "Utrecht",
+  // Chinese Super League historical FootyStats names → current database names.
+  // These are explicit entity aliases, not generic suffix removal.
+  "tianjin teda": "Tianjin Jinmen Tiger",
+  "qingdao youth island": "Qingdao West Coast FC",
+  "shanghai sipg": "Shanghai Port FC",
+  "dalian zhixing": "Dalian Yingbo FC",
+  "shandong luneng taishan": "Shandong Taishan FC",
+  "henan jianye": "Henan",
+  "shenyang urban": "Liaoning Tieren FC",
+  "zhejiang professional": "Zhejiang FC",
+  "sichuan jiuniu": "Shenzhen Peng City",
+  "chengdu better city": "Chengdu Rongcheng",
+  "chongqing tongliang long": "Chongqing Tonglianglong FC",
+  "qingdao jonoon": "Qingdao Hainiu FC",
+  "shanghai shenhua": "Shanghai Shenhua FC",
+  "wuhan three towns": "Wuhan Three Towns FC",
 };
 
 const KNOWN_SUFFIX_PATTERNS = [

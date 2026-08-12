@@ -58,11 +58,13 @@ function normalizeLeagueSlug(raw: string): string {
  */
 function normalizeSeason(raw: string): string {
   const s = raw.trim();
-  // Handle "2025-26" format
-  const m = s.match(/^(\d{4})-(\d{2})$/);
-  if (m) {
-    const century = m[1]!.slice(0, 2);
-    return `${m[1]}-${century}${m[2]}`;
+  // Keep the compact format used by the live Supabase rows.
+  // "2025-2026" is also accepted and canonicalized to "2025-26".
+  const compact = s.match(/^(\d{4})-(\d{2})$/);
+  if (compact) return `${compact[1]}-${compact[2]}`;
+  const expanded = s.match(/^(\d{4})-(\d{4})$/);
+  if (expanded && expanded[2]!.startsWith(expanded[1]!.slice(0, 2))) {
+    return `${expanded[1]}-${expanded[2]!.slice(2)}`;
   }
   return s;
 }
@@ -81,13 +83,20 @@ async function upsertTeamStat(
   const cleanTeam = cleanTeamName(teamName);
 
   // 1. Cek apakah row sudah ada
-  const { data: existing } = await supabase
+  const { data: existing, error: lookupError } = await supabase
     .from("team_season_stats")
     .select("id, " + statType)
     .eq("league_slug", leagueSlug)
     .eq("season", season)
     .ilike("team_name", cleanTeam)
     .maybeSingle();
+
+  if (lookupError) {
+    return { success: false, error: `Existing-row lookup failed: ${lookupError.message}` };
+  }
+  const existingId = existing && typeof existing === "object" && "id" in existing
+    ? String((existing as { id: string }).id)
+    : null;
 
   const payload: Record<string, unknown> = {
     league_slug: leagueSlug,
@@ -99,15 +108,13 @@ async function upsertTeamStat(
   // 2. Hanya set kolom yang sesuai stat_type
   payload[statType] = statData;
 
-  if (existing) {
+  if (existing && existingId) {
     // Update existing row (hanya kolom stat_type yang berubah)
     // Match by the same natural key to avoid relying on id typing.
     const { error } = await supabase
       .from("team_season_stats")
       .update(payload)
-      .eq("league_slug", leagueSlug)
-      .eq("season", season)
-      .ilike("team_name", cleanTeam);
+      .eq("id", existingId);
 
     if (error) {
       return { success: false, error: error.message };
@@ -209,9 +216,14 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
 
     res.json({
       success: true,
+      // Compatibility fields for the Chrome extension contract.
+      ok: true,
       processed: results.length,
       success_count: successCount,
       fail_count: failCount,
+      upserted: successCount,
+      skipped: failCount,
+      result_rows: results,
       league_slug: leagueSlug,
       season: normalizedSeason,
       stat_type,
