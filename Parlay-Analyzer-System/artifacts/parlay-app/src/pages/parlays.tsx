@@ -279,6 +279,9 @@ function ParlayDetailModal({ parlay, onClose }: { parlay: Parlay; onClose: () =>
                       <span className="flex items-center gap-1">
                         {(leg.probability * 100).toFixed(0)}% implied
                       </span>
+                      {leg.result && (
+                        <ParlayStatusBadge status={leg.result.toLowerCase()} />
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -292,7 +295,7 @@ function ParlayDetailModal({ parlay, onClose }: { parlay: Parlay; onClose: () =>
 }
 
 export default function Parlays() {
-  const { data: parlays, isLoading, error } = useListSupabaseParlays({ status: "active" });
+  const { data: parlays, isLoading, error } = useListSupabaseParlays();
   const [selectedParlay, setSelectedParlay] = useState<Parlay | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [readiness, setReadiness] = useState<ParlayReadiness | null>(null);
@@ -341,7 +344,7 @@ export default function Parlays() {
     <div className="space-y-6">
       <div className="flex flex-col gap-2">
         <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Parlays</h1>
-        <p className="text-muted-foreground">Review, verify, and safely combine active AI parlays. Click a row to view legs.</p>
+        <p className="text-muted-foreground">Review active AI parlays and see settled WIN/LOSS history. Click a row to view legs.</p>
       </div>
 
       {error && (
@@ -366,7 +369,7 @@ export default function Parlays() {
 
       <Card className="bg-card border-border">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold">Active Parlays</CardTitle>
+          <CardTitle className="text-lg font-semibold">AI Parlays & History</CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -403,6 +406,7 @@ export default function Parlays() {
                             type="checkbox"
                             checked={selectedIds.includes(parlay.parlay_id)}
                             onChange={() => toggleParlay(parlay.parlay_id)}
+                            disabled={parlay.status !== "active"}
                             className="h-4 w-4 accent-primary"
                           />
                         </TableCell>
@@ -426,7 +430,7 @@ export default function Parlays() {
                   ) : (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                        No active parlays found.
+                        No AI parlays found.
                       </TableCell>
                     </TableRow>
                   )}

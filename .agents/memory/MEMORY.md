@@ -26,3 +26,4 @@
 - [Odds Refresh Contract](odds-refresh-contract.md) — Three-hour verified freshness, rate-limited last-known odds stay unverified, and AI receives explicit market-slot mappings.
 - [Odds market selection](odds-refresh-contract.md) — Settings market filters sync; shared classification covers ML, HT, Totals, AH, BTTS and preserves alternate lines.
 - [Stats quality gates](stats-quality-gates.md) — AI/parlay flows require complete core stats, sane numeric ranges, and explicit probability; confidence is never a probability fallback.
+- [Settlement market parsing](settlement-market-parsing.md) — Structured selected market overrides “NO BET” mentions in generated alternative-market prose.

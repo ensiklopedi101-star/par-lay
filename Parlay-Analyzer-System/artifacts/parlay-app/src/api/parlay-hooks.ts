@@ -138,6 +138,8 @@ export interface ParlayLeg {
   selection: string;
   odds: number;
   probability: number;
+  confidence?: number | null;
+  result?: string | null;
 }
 
 export interface Parlay {
@@ -148,7 +150,9 @@ export interface Parlay {
   expected_value: number;
   win_probability: number;
   status: string;
+  actual_result?: string | null;
   created_at: string;
+  updated_at?: string | null;
   legs?: ParlayLeg[];
 }
 

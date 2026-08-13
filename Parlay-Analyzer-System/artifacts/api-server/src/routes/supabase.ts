@@ -45,11 +45,107 @@ router.get("/supabase/odds", async (req, res) => {
 router.get("/supabase/parlays", async (req, res) => {
   try {
     const { status, limit } = req.query;
-    let q = supabase.from("v_active_parlays").select("*");
+    const requestedLimit = Number(limit ?? 50);
+    const safeLimit = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 200)
+      : 50;
+
+    let q = supabase
+      .from("parlays")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(safeLimit);
     if (status) q = q.eq("status", status as string);
-    const { data, error } = await q.order("created_at", { ascending: false }).limit(Number(limit ?? 50));
-    if (error) { logger.error({ error }, "Supabase parlays error"); res.status(500).json({ error: error.message }); return; }
-    res.json(data ?? []);
+
+    const { data: parlayRows, error: parlayError } = await q;
+    if (parlayError) {
+      logger.error({ error: parlayError }, "Supabase parlays error");
+      res.status(500).json({ error: parlayError.message });
+      return;
+    }
+
+    const rows = (parlayRows ?? []) as Array<Record<string, unknown>>;
+    const parlayIds = rows
+      .map((row) => row.id)
+      .filter((id): id is string | number => id !== null && id !== undefined);
+
+    const { data: legRows, error: legsError } = parlayIds.length > 0
+      ? await supabase
+        .from("parlay_legs")
+        .select("*")
+        .in("parlay_id", parlayIds)
+        .order("leg_order", { ascending: true })
+      : { data: [], error: null };
+    if (legsError) {
+      logger.error({ error: legsError }, "Supabase parlay legs error");
+      res.status(500).json({ error: legsError.message });
+      return;
+    }
+
+    const legs = (legRows ?? []) as Array<Record<string, unknown>>;
+    const fixtureIds = Array.from(new Set(
+      legs
+        .map((leg) => Number(leg.fixture_id))
+        .filter((id) => Number.isFinite(id)),
+    ));
+    const { data: fixtureRows, error: fixturesError } = fixtureIds.length > 0
+      ? await supabase
+        .from("fixtures")
+        .select("fixture_id, home_team_name, away_team_name, league_name, fixture_date")
+        .in("fixture_id", fixtureIds)
+      : { data: [], error: null };
+    if (fixturesError) {
+      logger.error({ error: fixturesError }, "Supabase parlay fixtures error");
+      res.status(500).json({ error: fixturesError.message });
+      return;
+    }
+
+    const fixtureById = new Map(
+      ((fixtureRows ?? []) as Array<Record<string, unknown>>)
+        .map((fixture) => [Number(fixture.fixture_id), fixture] as const),
+    );
+    const legsByParlay = new Map<string, Array<Record<string, unknown>>>();
+    for (const leg of legs) {
+      const key = String(leg.parlay_id);
+      const current = legsByParlay.get(key) ?? [];
+      current.push(leg);
+      legsByParlay.set(key, current);
+    }
+
+    const toNumber = (value: unknown, fallback = 0) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : fallback;
+    };
+
+    res.json(rows.map((parlay) => ({
+      parlay_id: String(parlay.id),
+      parlay_name: String(parlay.parlay_name ?? "AI Parlay"),
+      legs_count: toNumber(parlay.legs_count),
+      combined_odds: toNumber(parlay.combined_odds),
+      expected_value: toNumber(parlay.expected_value),
+      win_probability: toNumber(parlay.win_probability),
+      avg_confidence: toNumber(parlay.avg_confidence),
+      status: String(parlay.status ?? "pending"),
+      actual_result: parlay.actual_result ?? null,
+      created_at: parlay.created_at,
+      updated_at: parlay.updated_at ?? null,
+      legs: (legsByParlay.get(String(parlay.id)) ?? []).map((leg) => {
+        const fixture = fixtureById.get(Number(leg.fixture_id)) ?? {};
+        return {
+          fixture_id: Number(leg.fixture_id),
+          home: leg.home_team ?? fixture.home_team_name ?? "Unknown",
+          away: leg.away_team ?? fixture.away_team_name ?? "Unknown",
+          league: leg.league ?? fixture.league_name ?? "",
+          date: leg.date ?? fixture.fixture_date ?? leg.created_at,
+          market: leg.market ?? "",
+          selection: leg.selection ?? "",
+          odds: toNumber(leg.odds),
+          probability: toNumber(leg.probability),
+          confidence: leg.confidence == null ? null : toNumber(leg.confidence),
+          result: leg.result ?? null,
+        };
+      }),
+    })));
   } catch (err) {
     logger.error({ err }, "Supabase parlays exception");
     res.status(500).json({ error: "Internal error" });

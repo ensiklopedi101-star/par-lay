@@ -89,6 +89,14 @@ async function runScheduledRevalidation() {
 export function startScheduler() {
   logger.info("Scheduler starting — odds sync + daily settlement + revalidation");
 
+  /* Catch up once on startup so a sleeping/restarted workspace does not leave
+     completed fixtures and previously active predictions unsettled. The
+     settlement runner is idempotent because it only selects unsettled
+     prediction statuses. */
+  runDailySettlement().catch((err) =>
+    logger.error({ err }, "Startup settlement catch-up failed"),
+  );
+
   /* Initial odds sync on startup */
   loadConfigAndSync().catch((err) =>
     logger.error({ err }, "Initial odds sync failed"),

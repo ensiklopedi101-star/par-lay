@@ -45,6 +45,13 @@ interface CompletedFixture {
    Tentukan apakah prediksi adalah "NO BET"
 ───────────────────────────────────────── */
 function isNoBet(prediction: PendingPrediction): boolean {
+  // A selected market is authoritative. The full Gemini response often
+  // contains "NO BET" for alternative markets even when the final
+  // recommendation is a real bet.
+  if ((prediction.market_bet ?? prediction.best_market ?? "").trim() !== "") {
+    return false;
+  }
+
   const text = (prediction.prediction_text ?? "").toLowerCase();
   return (
     text.includes("no bet") ||
@@ -207,11 +214,12 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
   const geminiKey = process.env["GEMINI_API_KEY"];
   const aiAvailable = Boolean(geminiKey || process.env["GROQ_API_KEY"]);
 
-  /* 1. Ambil prediksi yang masih aktif */
+  /* 1. Ambil prediksi aktif dan prediksi yang sebelumnya salah ditandai no_bet.
+     The latter must be recoverable after the recommendation parser is fixed. */
   const { data: pendingPredictions, error: predErr } = await supabase
     .from("ai_predictions")
     .select("id, fixture_id, prediction_text, best_market, market_bet, home_team, away_team, expected_value, ev_at_analysis, league")
-    .eq("status", "active")
+    .in("status", ["active", "no_bet", "settled_manual"])
     .not("prediction_text", "is", null)
     .limit(100);
 
