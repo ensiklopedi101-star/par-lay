@@ -286,8 +286,9 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
   const parlayLegs = job.tickets.filter((ticket) => ticket.is_parlay_leg);
   const { error: logErr } = await supabase.from("performance_log").insert({
     date: new Date().toISOString().split("T")[0],
-    predictions_made: job.tickets.length,
-    valid_tickets: validTickets.length,
+    total_parlays: job.parlayId ? 1 : 0,
+    wins: 0,
+    losses: 0,
     hit_rate: null,
     total_roi: null,
     created_at: new Date().toISOString(),

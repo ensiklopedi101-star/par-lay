@@ -475,7 +475,7 @@ async function fetchPerformanceLog(): Promise<Record<string, unknown>[]> {
   try {
     const { data } = await supabase
       .from("performance_log")
-      .select("date, win_count, loss_count, hit_rate, total_roi, valid_tickets")
+      .select("date, wins, losses, hit_rate, total_roi, total_parlays")
       .order("date", { ascending: false })
       .limit(5);
     return (data ?? []) as Record<string, unknown>[];
@@ -489,8 +489,8 @@ function formatPerformanceBlock(entries: Record<string, unknown>[]): string {
   const lines = ["\n--- KINERJA AI TERBARU (performance_log) ---"];
   for (const e of entries) {
     const date = e.date ?? "?";
-    const w = e.win_count ?? 0;
-    const l = e.loss_count ?? 0;
+    const w = e.wins ?? 0;
+    const l = e.losses ?? 0;
     const hr = e.hit_rate != null ? `${(Number(e.hit_rate) * 100).toFixed(1)}%` : "N/A";
     lines.push(`  ${date}: ${w}W / ${l}L | Hit Rate: ${hr}`);
   }

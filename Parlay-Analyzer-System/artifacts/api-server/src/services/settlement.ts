@@ -204,6 +204,82 @@ Format: langsung tulis pelajarannya, tanpa intro, tanpa header, dalam bahasa Ind
   }
 }
 
+interface LessonPerformanceRow {
+  bet_result: string | null;
+  created_at: string | null;
+}
+
+/**
+ * Rebuild the feedback metrics from settled lessons.
+ *
+ * `performance_log` is an aggregate table, while `lessons_learned` is the
+ * durable source for each settled prediction. Rebuilding from lessons makes
+ * the metric recoverable after a failed insert or a server restart.
+ */
+async function rebuildPerformanceLog(): Promise<void> {
+  const { data, error } = await supabase
+    .from("lessons_learned")
+    .select("bet_result, created_at")
+    .not("created_at", "is", null);
+
+  if (error) {
+    logger.error({ err: error }, "[SETTLEMENT] Gagal membaca lessons untuk performance log");
+    return;
+  }
+
+  const byDate = new Map<string, LessonPerformanceRow[]>();
+  for (const row of (data ?? []) as LessonPerformanceRow[]) {
+    const date = row.created_at?.slice(0, 10);
+    if (!date) continue;
+    const rows = byDate.get(date) ?? [];
+    rows.push(row);
+    byDate.set(date, rows);
+  }
+
+  for (const [date, rows] of byDate) {
+    const wins = rows.filter((row) => row.bet_result === "WIN").length;
+    const losses = rows.filter((row) => row.bet_result === "LOSS").length;
+    const total = wins + losses;
+    if (total === 0) continue;
+
+    const payload = {
+      date,
+      total_parlays: total,
+      wins,
+      losses,
+      hit_rate: wins / total,
+      total_roi: null,
+    };
+
+    const { data: existing, error: lookupError } = await supabase
+      .from("performance_log")
+      .select("id")
+      .eq("date", date)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lookupError) {
+      logger.error({ err: lookupError, date }, "[SETTLEMENT] Gagal membaca performance log");
+      continue;
+    }
+
+    const write = existing?.id
+      ? await supabase.from("performance_log").update({
+          total_parlays: payload.total_parlays,
+          wins: payload.wins,
+          losses: payload.losses,
+          hit_rate: payload.hit_rate,
+          total_roi: payload.total_roi,
+        }).eq("id", existing.id)
+      : await supabase.from("performance_log").insert(payload);
+
+    if (write.error) {
+      logger.error({ err: write.error, date }, "[SETTLEMENT] Gagal menyimpan performance log");
+    }
+  }
+}
+
 /* ─────────────────────────────────────────
    Main runner — dipanggil oleh scheduler
    dan endpoint POST /api/sync/settle
@@ -225,6 +301,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
 
   if (predErr || !pendingPredictions?.length) {
     logger.info("[SETTLEMENT] Tidak ada prediksi aktif untuk di-settle");
+    await rebuildPerformanceLog();
     return { settled: 0, lessons: 0, skipped: 0 };
   }
 
@@ -242,6 +319,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
 
   if (!completedFixtures?.length) {
     logger.info("[SETTLEMENT] Tidak ada fixture selesai dengan skor tersedia di DB");
+    await rebuildPerformanceLog();
     return { settled: 0, lessons: 0, skipped: 0 };
   }
 
@@ -356,56 +434,8 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
 
   await settleParlaysForFixtures(completedFixtures.map((fixture) => fixture.fixture_id));
 
-  /* M6: AI Feedback Loop — aggregate daily performance log */
-  const today = new Date().toISOString().split("T")[0];
-  const { data: todaysLog } = await supabase
-    .from("performance_log")
-    .select("*")
-    .eq("date", today)
-    .limit(1)
-    .maybeSingle();
-
-  if (!todaysLog) {
-    const winCount = completedFixtures.filter((f) => {
-      const p = pendingPredictions.find((pp) => pp.fixture_id === f.fixture_id);
-      if (!p || isNoBet(p)) return false;
-      const result = calculateResult(f.home_goals!, f.away_goals!, p.market_bet ?? p.best_market, p.prediction_text);
-      return result === "WIN";
-    }).length;
-    const lossCount = settled - winCount;
-    const hitRate = settled > 0 ? winCount / settled : 0;
-
-    await supabase.from("performance_log").insert({
-      date: today,
-      predictions_made: settled + skipped,
-      valid_tickets: settled,
-      win_count: winCount,
-      loss_count: lossCount,
-      hit_rate: hitRate,
-      total_roi: null,
-      created_at: new Date().toISOString(),
-    });
-  } else {
-    const winCount = completedFixtures.filter((f) => {
-      const p = pendingPredictions.find((pp) => pp.fixture_id === f.fixture_id);
-      if (!p || isNoBet(p)) return false;
-      const result = calculateResult(f.home_goals!, f.away_goals!, p.market_bet ?? p.best_market, p.prediction_text);
-      return result === "WIN";
-    }).length;
-    const lossCount = settled - winCount;
-    const totalWin = (todaysLog.win_count ?? 0) + winCount;
-    const totalLoss = (todaysLog.loss_count ?? 0) + lossCount;
-    const totalBets = totalWin + totalLoss;
-    const hitRate = totalBets > 0 ? totalWin / totalBets : 0;
-
-    await supabase.from("performance_log").update({
-      win_count: totalWin,
-      loss_count: totalLoss,
-      valid_tickets: totalBets,
-      hit_rate: hitRate,
-      updated_at: new Date().toISOString(),
-    }).eq("id", todaysLog.id);
-  }
+  /* M6: AI Feedback Loop — rebuild aggregates from durable lessons. */
+  await rebuildPerformanceLog();
 
   logger.info(
     `[SETTLEMENT] Selesai: ${settled} diselesaikan (${lessons} pelajaran LOSS dibuat), ${skipped} dilewati`
