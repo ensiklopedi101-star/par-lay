@@ -118,3 +118,4 @@ build = ["bash", "-c", "cd Parlay-Analyzer-System && pnpm install && PORT=8080 p
 
 [userenv.shared]
 SUPABASE_PROJECT_REF = "hqbuwfyiqfxpnpdlgcru"
+SUPABASE_URL = "https://hqbuwfyiqfxpnpdlgcru.supabase.co"

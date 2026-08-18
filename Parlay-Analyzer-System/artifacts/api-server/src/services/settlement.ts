@@ -28,7 +28,12 @@ interface PendingPrediction {
   away_team: string | null;
   expected_value: number | null;
   ev_at_analysis: number | null;
+  best_odds: number | null;
+  confidence_score: number | null;
+  uncertainty_score: number | null;
   league: string | null;
+  created_at: string | null;
+  manual_context: Record<string, unknown> | null;
 }
 
 interface CompletedFixture {
@@ -164,6 +169,23 @@ function extractLine(market: string): number | null {
   return whole + frac;
 }
 
+function withSettlementContext(
+  prediction: PendingPrediction,
+  settlement: Record<string, unknown>,
+): Record<string, unknown> {
+  const existing = prediction.manual_context && typeof prediction.manual_context === "object"
+    ? prediction.manual_context
+    : {};
+  return {
+    ...existing,
+    settlement: {
+      ...settlement,
+      evaluatedAt: new Date().toISOString(),
+      evaluationSource: "fixture_final_score",
+    },
+  };
+}
+
 /* ─────────────────────────────────────────
    Gemini: evaluasi LOSS → buat pelajaran
    (satu-satunya tugas Gemini di settlement)
@@ -294,7 +316,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
      The latter must be recoverable after the recommendation parser is fixed. */
   const { data: pendingPredictions, error: predErr } = await supabase
     .from("ai_predictions")
-    .select("id, fixture_id, prediction_text, best_market, market_bet, home_team, away_team, expected_value, ev_at_analysis, league")
+    .select("id, fixture_id, prediction_text, best_market, market_bet, home_team, away_team, expected_value, ev_at_analysis, best_odds, confidence_score, uncertainty_score, league, created_at, manual_context")
     .in("status", ["active", "no_bet", "settled_manual"])
     .not("prediction_text", "is", null)
     .limit(100);
@@ -348,6 +370,13 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
         away_score: awayGoals,
         settled_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        manual_context: withSettlementContext(prediction, {
+          status: "no_bet",
+          marketBet: null,
+          homeScore: homeGoals,
+          awayScore: awayGoals,
+          marketResolution: "no_selected_market",
+        }),
       }).eq("id", prediction.id);
       skipped++;
       continue;
@@ -370,6 +399,13 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
         away_score: awayGoals,
         settled_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        manual_context: withSettlementContext(prediction, {
+          status: "settled_manual",
+          marketBet,
+          homeScore: homeGoals,
+          awayScore: awayGoals,
+          marketResolution: "unsupported_market",
+        }),
       }).eq("id", prediction.id);
 
       skipped++;
@@ -383,24 +419,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
       result: betResult,
     }, "[SETTLEMENT] Hasil dihitung");
 
-    /* 5. Update status prediksi */
-    await supabase.from("ai_predictions").update({
-      status: betResult,
-      home_score: homeGoals,
-      away_score: awayGoals,
-      settled_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }).eq("id", prediction.id);
-
-    await supabase
-      .from("parlay_legs")
-      .update({ result: betResult })
-      .eq("fixture_id", fixture.fixture_id)
-      .is("result", null);
-
-    settled++;
-
-    /* 6. Simpan ke lessons_learned untuk kedua hasil (WIN & LOSS)
+    /* 5. Simpan ke lessons_learned untuk kedua hasil (WIN & LOSS)
           LOSS: Gemini generate evaluasi kenapa salah
           WIN : simpan catatan referensi positif tanpa Gemini */
     const evAtBet = prediction.ev_at_analysis ?? prediction.expected_value ?? 0;
@@ -411,6 +430,36 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
     } else if (betResult === "WIN") {
       lessonText = `Prediksi berhasil. Market: ${marketBet ?? "N/A"}. Skor: ${homeGoals}-${awayGoals}. EV saat analisis: ${evAtBet.toFixed(2)}.`;
     }
+
+    /* 6. Update prediction dengan hasil dan snapshot evaluasi lengkap.
+          Snapshot analisis asli tetap dipertahankan; settlement hanya menambah
+          bagian hasil aktual sehingga evaluasi tidak kehilangan input awal. */
+    await supabase.from("ai_predictions").update({
+      status: betResult,
+      home_score: homeGoals,
+      away_score: awayGoals,
+      settled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      manual_context: withSettlementContext(prediction, {
+        status: betResult,
+        marketBet,
+        oddsAtAnalysis: prediction.best_odds,
+        confidenceAtAnalysis: prediction.confidence_score,
+        uncertaintyAtAnalysis: prediction.uncertainty_score,
+        evAtAnalysis: evAtBet,
+        homeScore: homeGoals,
+        awayScore: awayGoals,
+        lessonText,
+      }),
+    }).eq("id", prediction.id);
+
+    await supabase
+      .from("parlay_legs")
+      .update({ result: betResult })
+      .eq("fixture_id", fixture.fixture_id)
+      .is("result", null);
+
+    settled++;
 
     const { error: lessonErr } = await supabase.from("lessons_learned").insert({
       fixture_id: String(fixture.fixture_id),

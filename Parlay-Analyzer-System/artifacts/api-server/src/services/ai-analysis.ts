@@ -1058,6 +1058,53 @@ export interface AnalysisResult {
   };
 }
 
+interface EvaluationSnapshot {
+  schemaVersion: 1;
+  analysis: {
+    analyzedAt: string;
+    provider: string;
+    model: string;
+    rateLimited: boolean;
+  };
+  fixture: {
+    fixtureId: number | string;
+    homeTeam: string;
+    awayTeam: string;
+    league: string;
+  };
+  recommendation: {
+    marketBet: string | null;
+    odds: number;
+    probability: number | null;
+    confidence: number;
+    evPercent: number;
+    evAtAnalysis: number;
+    rejectionReason: string | null;
+  };
+  input: {
+    odds: {
+      status: OddsAvailabilityStatus;
+      capturedAt: string | null;
+      selectedMarketVerified: boolean;
+      snapshot: OddsRow[];
+    };
+    teamStats: {
+      home: Record<string, unknown>;
+      away: Record<string, unknown>;
+    };
+    standings: {
+      home: StandingContext | null;
+      away: StandingContext | null;
+    };
+    headToHead: unknown;
+    oddsMovement: unknown;
+    ragLessons: unknown;
+    performanceLog: unknown;
+  };
+  dataQuality: AnalysisResult["data_quality"] | null;
+  settlement: null;
+}
+
 /**
  * Batch-scoped context that lets a caller (e.g. the batch scanner) share
  * data it already loaded for the whole batch — fixture row, the
@@ -1424,7 +1471,57 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
 
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
 
-  /* ── 6. Simpan ke ai_predictions ── */
+   const analyzedAt = new Date().toISOString();
+   const evaluationSnapshot: EvaluationSnapshot = {
+     schemaVersion: 1,
+     analysis: {
+       analyzedAt,
+       provider: aiResult.provider,
+       model: aiResult.model,
+       rateLimited: aiResult.rateLimited,
+     },
+     fixture: {
+       fixtureId: parseInt(fixtureId) || fixtureId,
+       homeTeam,
+       awayTeam,
+       league: leagueName,
+     },
+     recommendation: {
+       marketBet: recommendation.marketBet,
+       odds: recommendation.odds,
+       probability: recommendation.probability,
+       confidence: recommendation.confidence,
+       evPercent: recommendation.evPercent,
+       evAtAnalysis,
+       rejectionReason: rejectionReason ?? null,
+     },
+     input: {
+       odds: {
+         status: oddsAvailability.status,
+         capturedAt: oddsAvailability.latestCapturedAt,
+         selectedMarketVerified: verifiedOdds != null,
+         snapshot: oddsRows.slice(0, 60),
+       },
+       teamStats: { home: homeStats, away: awayStats },
+       standings: { home: homeStandings, away: awayStandings },
+       headToHead: h2h,
+       oddsMovement: movementRows,
+       ragLessons: lessons,
+       performanceLog: perfLog,
+     },
+     dataQuality: {
+       stats: { home: homeStatsQuality, away: awayStatsQuality },
+       odds: {
+         status: oddsAvailability.status,
+         capturedAt: oddsAvailability.latestCapturedAt,
+         verifiedMarket: verifiedOdds != null,
+       },
+       rejectionReason,
+     },
+     settlement: null,
+   };
+
+   /* ── 6. Simpan ke ai_predictions ── */
    let savedPrediction: { id?: string } | null = null;
    let insertError: { message: string } | null = null;
    if (context?.persistPrediction !== false) {
@@ -1438,15 +1535,9 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     best_odds: recommendation.odds > 1 ? recommendation.odds : null,
     ev_at_analysis: evAtAnalysis,
      manual_context: {
-       data_quality: {
-         stats: { home: homeStatsQuality, away: awayStatsQuality },
-         odds: {
-           status: oddsAvailability.status,
-           capturedAt: oddsAvailability.latestCapturedAt,
-           verifiedMarket: verifiedOdds != null,
-         },
-         rejectionReason: rejectionReason ?? null,
-       },
+       ...evaluationSnapshot,
+       // Keep the compact legacy fields for existing readers.
+       data_quality: evaluationSnapshot.dataQuality,
        probability: recommendation.probability,
        probabilitySource: recommendation.probability != null ? "ai_explicit" : null,
        oddsSource: recommendation.odds > 1 ? "provider_snapshot" : null,
@@ -1454,8 +1545,8 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
        model: aiResult.model,
      },
     status: "active",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+     created_at: analyzedAt,
+     updated_at: analyzedAt,
      }, { onConflict: "fixture_id" }).select("id").single();
      savedPrediction = result.data;
      insertError = result.error;
@@ -1470,7 +1561,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     home_team: homeTeam,
     away_team: awayTeam,
     prediction_text: predictionText,
-    created_at: new Date().toISOString(),
+     created_at: analyzedAt,
     prediction_id: savedPrediction?.id,
     market_bet: recommendation.marketBet,
     odds: recommendation.odds,
