@@ -578,7 +578,11 @@ const TEAM_NAME_ALIASES: Record<string, string> = {
   united: "utd",
   "manchester utd": "man utd",
   "inter milan": "inter",
+  "inter milano": "inter",
   "internazionale": "inter",
+  "genoa cfc": "genoa",
+  "juventus turin": "juventus",
+  "lazio rome": "lazio",
   psg: "paris",
 };
 
