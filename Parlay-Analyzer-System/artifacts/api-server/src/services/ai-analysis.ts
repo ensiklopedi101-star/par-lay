@@ -595,6 +595,12 @@ function normalizeTeamForMatch(name: string): string {
 function leagueSlugCandidates(leagueSlug: string): string[] {
   const slug = leagueSlug.trim().toLowerCase();
   const candidates = new Set([slug]);
+  if (slug.endsWith("-laliga")) {
+    candidates.add(slug.replace(/-laliga$/, "-la-liga"));
+  }
+  if (slug.endsWith("-la-liga")) {
+    candidates.add(slug.replace(/-la-liga$/, "-laliga"));
+  }
   if (slug.includes("republic-of-korea")) {
     candidates.add(slug.replace("republic-of-korea", "south-korea"));
   }

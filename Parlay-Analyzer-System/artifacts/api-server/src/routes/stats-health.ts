@@ -21,12 +21,15 @@ type FixtureRow = {
 };
 
 function canonicalLeague(value: string): string {
-  return value
+  const canonical = value
     .toLowerCase()
     .trim()
     .replace(/[\/_\s]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^south-korea-/, "republic-of-korea-");
+  // Odds/fixture config uses "spain-laliga", while imported stats use
+  // "spain-la-liga". Treat both as the same competition.
+  return canonical.replace(/-laliga$/, "-la-liga");
 }
 
 function leagueLabel(value: string): string {
