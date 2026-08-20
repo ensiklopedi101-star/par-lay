@@ -177,7 +177,11 @@ function hasSaneStatValues(value: unknown, key: string): boolean {
   if (typeof value !== "string") return true;
 
   const percentageValues = [...value.matchAll(/(-?\d+(?:\.\d+)?)\s*%/g)].map((match) => Number(match[1]));
-  if (percentageValues.some((percentage) => !Number.isFinite(percentage) || percentage < 0 || percentage > 100)) {
+  if (percentageValues.some((percentage) =>
+    !Number.isFinite(percentage) ||
+    percentage > 100 ||
+    (!allowsNegative && percentage < 0)
+  )) {
     return false;
   }
   const numericValues = [...value.matchAll(/[-+]?\d+(?:\.\d+)?/g)].map((match) => Number(match[0]));
