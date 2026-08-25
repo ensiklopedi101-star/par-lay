@@ -39,7 +39,7 @@ export interface RiskCenterItem {
   homeTeam: string;
   awayTeam: string;
   league: string;
-  fixtureDate: string;
+  fixtureDate: string | null;
   market: string;
   bestOdds: number | null;
   evAtAnalysis: number | null;
@@ -154,6 +154,36 @@ export interface Parlay {
   created_at: string;
   updated_at?: string | null;
   legs?: ParlayLeg[];
+}
+
+export interface AIPredictionBoardItem {
+  id: string;
+  fixtureId: number;
+  homeTeam: string;
+  awayTeam: string;
+  league: string;
+  fixtureDate: string;
+  market: string;
+  selection: string;
+  odds: number | null;
+  probability: number | null;
+  confidence: number;
+  ev: number;
+  predictionText: string;
+  createdAt: string;
+  isInParlay: boolean;
+  isUpcoming: boolean;
+  status: string;
+  isSelectable: boolean;
+}
+
+export interface CreateParlayFromPredictionsResult {
+  parlayId: string | null;
+  legs: unknown[];
+  combinedOdds: number;
+  winProbability: number;
+  expectedValue: number;
+  avgConfidence: number;
 }
 
 export type ParlayReadinessStatus =
@@ -292,6 +322,15 @@ export function useListSupabaseParlays(params?: { status?: string }) {
   });
 }
 
+export const getPredictionBoardQueryKey = () => ["parlays/predictions"];
+export function usePredictionBoard() {
+  return useQuery<AIPredictionBoardItem[]>({
+    queryKey: getPredictionBoardQueryKey(),
+    queryFn: () => apiGet<AIPredictionBoardItem[]>(`${API_BASE}/parlays/predictions`),
+    refetchInterval: 60_000,
+  });
+}
+
 export interface ParlayActionInput {
   parlayIds: string[];
   stake?: number;
@@ -325,6 +364,17 @@ export function useMergeParlays() {
     mutationFn: (input) => apiPost<MergedParlayResponse>(`${API_BASE}/parlays/merge`, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["supabase/parlays"] });
+    },
+  });
+}
+
+export function useCreateParlayFromPredictions() {
+  const queryClient = useQueryClient();
+  return useMutation<CreateParlayFromPredictionsResult, Error, { predictionIds: string[] }>({
+    mutationFn: (input) => apiPost<CreateParlayFromPredictionsResult>(`${API_BASE}/parlays/from-predictions`, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["supabase/parlays"] });
+      queryClient.invalidateQueries({ queryKey: getPredictionBoardQueryKey() });
     },
   });
 }

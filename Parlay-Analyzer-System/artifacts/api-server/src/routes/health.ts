@@ -25,7 +25,13 @@ router.get("/health", async (_req, res) => {
       reviewPredictions: 0,
       invalidatedPredictions: 0,
     },
-    aiLearning: { status: "checking", hitRate: null as number | null },
+     aiLearning: {
+       status: "checking",
+       hitRate: null as number | null,
+       wins: 0,
+       losses: 0,
+       settled: 0,
+     },
      oddsApi: {
        status: "checking",
        lastRateLimit: null as string | null,
@@ -86,17 +92,25 @@ router.get("/health", async (_req, res) => {
     health.aiPipeline.status = "error";
   }
 
-  /* 4. AI Learning — last performance log */
+  /* 4. AI Learning — lessons_learned is the durable source of truth.
+     A scan may append a zero-result performance row, so using only the
+     latest performance_log row can incorrectly hide older WIN/LOSS data. */
   try {
-    const { data: perf } = await supabase
-      .from("performance_log")
-      .select("hit_rate, total_roi")
-      .order("date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    health.aiLearning.status = perf ? "active" : "no_data";
-    health.aiLearning.hitRate = perf?.hit_rate ?? null;
-  } catch {
+    const { data: lessons, error: lessonsError } = await supabase
+      .from("lessons_learned")
+      .select("bet_result")
+      .in("bet_result", ["WIN", "LOSS"]);
+    if (lessonsError) throw lessonsError;
+    const wins = (lessons ?? []).filter((row) => String(row.bet_result).toUpperCase() === "WIN").length;
+    const losses = (lessons ?? []).filter((row) => String(row.bet_result).toUpperCase() === "LOSS").length;
+    const settled = wins + losses;
+    health.aiLearning.wins = wins;
+    health.aiLearning.losses = losses;
+    health.aiLearning.settled = settled;
+    health.aiLearning.status = settled > 0 ? "active" : "no_data";
+    health.aiLearning.hitRate = settled > 0 ? wins / settled : null;
+  } catch (err) {
+    logger.error({ err }, "Health check: AI learning query failed");
     health.aiLearning.status = "no_data";
   }
 

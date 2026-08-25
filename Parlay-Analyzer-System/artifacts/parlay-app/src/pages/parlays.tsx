@@ -1,12 +1,15 @@
 import { useState } from "react";
 import {
   useListSupabaseParlays,
+  usePredictionBoard,
+  useCreateParlayFromPredictions,
   useVerifyParlays,
   useMergeParlays,
   type Parlay,
   type ParlayLeg,
   type ParlayReadiness,
   type ParlayReadinessLeg,
+  type AIPredictionBoardItem,
 } from "@/api/parlay-hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -294,14 +297,124 @@ function ParlayDetailModal({ parlay, onClose }: { parlay: Parlay; onClose: () =>
   );
 }
 
+function PredictionBoard({
+  predictions,
+  selectedIds,
+  onToggle,
+  onCreate,
+  isCreating,
+}: {
+  predictions: AIPredictionBoardItem[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  onCreate: () => void;
+  isCreating: boolean;
+}) {
+  return (
+    <Card className="border-primary/20 bg-primary/[0.03]">
+      <CardHeader className="pb-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Target className="h-5 w-5 text-primary" />
+              AI Prediction Board
+            </CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Prediksi individual dari batch scan dan analisis AI. Pilih beberapa prediksi untuk menyusun parlay manual.
+            </p>
+          </div>
+          <Button onClick={onCreate} disabled={selectedIds.length < 2 || isCreating}>
+            <GitMerge className="h-4 w-4" />
+            {isCreating ? "Creating..." : `Create from ${selectedIds.length} predictions`}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {predictions.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border p-5 text-center text-sm text-muted-foreground">
+            Belum ada prediksi aktif untuk fixture mendatang dengan odds dan probabilitas valid. Jalankan scanning setelah odds tersedia.
+          </div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {predictions.map((prediction) => {
+              const selected = selectedIds.includes(prediction.id);
+              return (
+                <button
+                  key={prediction.id}
+                  type="button"
+                  onClick={() => prediction.isSelectable && onToggle(prediction.id)}
+                  disabled={!prediction.isSelectable}
+                  className={`rounded-lg border p-3 text-left transition-colors ${
+                    selected ? "border-primary bg-primary/10" : "border-border bg-card/60 hover:bg-secondary/30"
+                  } ${!prediction.isSelectable ? "cursor-not-allowed opacity-70" : ""}`}
+                >
+                  <div className="flex items-start gap-3">
+                    <input
+                      aria-label={`Select ${prediction.homeTeam} vs ${prediction.awayTeam}`}
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => onToggle(prediction.id)}
+                      onClick={(event) => event.stopPropagation()}
+                      disabled={!prediction.isSelectable}
+                      className="mt-1 h-4 w-4 accent-primary"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold">
+                          {prediction.homeTeam} <span className="text-muted-foreground">vs</span> {prediction.awayTeam}
+                        </span>
+                        <div className="flex gap-1">
+                          <Badge variant="outline" className="text-[10px]">{prediction.status}</Badge>
+                          {prediction.isInParlay && <Badge variant="outline" className="text-[10px]">In parlay</Badge>}
+                        </div>
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {prediction.league} · {prediction.fixtureDate ? format(new Date(prediction.fixtureDate), "MMM dd, HH:mm") : "fixture date unavailable"}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                        <span className="font-medium text-primary">{prediction.market}</span>
+                        <span>Odds <strong>{prediction.odds?.toFixed(2) ?? "—"}</strong></span>
+                        <span>AI <strong>{prediction.probability == null ? "—" : `${(prediction.probability * 100).toFixed(1)}%`}</strong></span>
+                        <span>Conf <strong>{prediction.confidence.toFixed(1)}</strong></span>
+                        <span className={prediction.ev >= 0 ? "text-emerald-500" : "text-red-500"}>
+                          EV {(prediction.ev * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                      {!prediction.isSelectable && (
+                        <div className="mt-2 text-xs text-amber-500">
+                          {prediction.status.toLowerCase() !== "active"
+                            ? "Prediksi sudah memiliki hasil/status settlement; hanya untuk histori."
+                            : !prediction.isUpcoming
+                              ? "Fixture sudah kickoff/selesai; hanya untuk histori."
+                              : "Belum bisa dipilih: market, odds, atau probabilitas AI belum lengkap."}
+                        </div>
+                      )}
+                      {prediction.predictionText && (
+                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{prediction.predictionText}</p>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Parlays() {
   const { data: parlays, isLoading, error } = useListSupabaseParlays();
+  const { data: predictions = [] } = usePredictionBoard();
   const [selectedParlay, setSelectedParlay] = useState<Parlay | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedPredictionIds, setSelectedPredictionIds] = useState<string[]>([]);
   const [readiness, setReadiness] = useState<ParlayReadiness | null>(null);
   const [stake, setStake] = useState("");
   const verify = useVerifyParlays();
   const merge = useMergeParlays();
+  const createFromPredictions = useCreateParlayFromPredictions();
   const { open, withPassword, onSubmit, onCancel } = useAdminPassword();
   const { toast } = useToast();
 
@@ -339,6 +452,36 @@ export default function Parlays() {
       });
     });
   };
+  const togglePrediction = (id: string) => {
+    setSelectedPredictionIds((current) =>
+      current.includes(id)
+        ? current.filter((value) => value !== id)
+        : current.length < 7
+          ? [...current, id]
+          : current,
+    );
+  };
+  const runCreateFromPredictions = () => {
+    withPassword((pwd) => {
+      void pwd;
+      createFromPredictions.mutate({ predictionIds: selectedPredictionIds }, {
+        onSuccess: (result) => {
+          setSelectedPredictionIds([]);
+          toast({
+            title: "Manual AI parlay created",
+            description: result.parlayId
+              ? `Parlay ${result.parlayId} dibuat dari ${result.legs.length} prediksi.`
+              : "Parlay berhasil dibuat.",
+          });
+        },
+        onError: (mutationError) => toast({
+          title: "Create parlay failed",
+          description: mutationError.message,
+          variant: "destructive",
+        }),
+      });
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -346,6 +489,14 @@ export default function Parlays() {
         <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Parlays</h1>
         <p className="text-muted-foreground">Review active AI parlays and see settled WIN/LOSS history. Click a row to view legs.</p>
       </div>
+
+      <PredictionBoard
+        predictions={predictions}
+        selectedIds={selectedPredictionIds}
+        onToggle={togglePrediction}
+        onCreate={runCreateFromPredictions}
+        isCreating={createFromPredictions.isPending}
+      />
 
       {error && (
         <Card className="border-red-500/20 bg-red-500/5">

@@ -50,6 +50,15 @@ type PredictionRow = {
   league: string | null;
 };
 
+type PredictionBoardRow = PredictionRow & {
+  id: string;
+  prediction_text: string | null;
+  manual_context: Record<string, unknown> | null;
+  created_at: string;
+        fixture_date: string | null;
+  is_in_parlay: boolean;
+};
+
 type FixtureRow = {
   fixture_id: number;
   fixture_date: string;
@@ -110,6 +119,73 @@ function candidateFrom(
     evPercent: ((revalidation?.currentEV ?? prediction?.ev_at_analysis ?? prediction?.expected_value ?? 0) * 100),
   };
 }
+
+function predictionProbability(prediction: PredictionBoardRow): number {
+  const value = Number(prediction.manual_context?.probability);
+  return Number.isFinite(value) && value > 0 && value < 1 ? value : 0;
+}
+
+/* Individual AI signals for manual parlay construction. This intentionally
+   stays separate from the active-parlay history endpoint. */
+router.get("/parlays/predictions", async (_req, res) => {
+  try {
+    const now = new Date().toISOString();
+    const { data: predictions, error } = await supabase
+      .from("ai_predictions")
+      .select("id, fixture_id, status, prediction_text, market_bet, best_market, best_odds, confidence_score, ev_at_analysis, expected_value, home_team, away_team, league, manual_context, created_at")
+      .in("status", ["active", "WIN", "LOSS", "win", "loss", "no_bet", "settled_manual"])
+      .gte("fixture_id", 0)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (error) throw error;
+
+    const rows = (predictions ?? []) as unknown as Array<PredictionBoardRow>;
+    const fixtureIds = rows.map((row) => Number(row.fixture_id)).filter(Number.isFinite);
+    const [{ data: fixtures, error: fixturesError }, { data: parlayLegs, error: legsError }] = await Promise.all([
+      fixtureIds.length
+        ? supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name, league_name").in("fixture_id", fixtureIds)
+        : Promise.resolve({ data: [], error: null }),
+      fixtureIds.length
+        ? supabase.from("parlay_legs").select("fixture_id").in("fixture_id", fixtureIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (fixturesError) throw fixturesError;
+    if (legsError) throw legsError;
+    const fixtureById = new Map((fixtures ?? []).map((fixture) => [Number(fixture.fixture_id), fixture]));
+    const inParlay = new Set((parlayLegs ?? []).map((leg) => Number(leg.fixture_id)));
+
+    res.json(rows.flatMap((prediction) => {
+      const fixture = fixtureById.get(Number(prediction.fixture_id));
+      const isUpcoming = Boolean(fixture?.fixture_date && new Date(fixture.fixture_date).getTime() > Date.now());
+      const market = prediction.market_bet ?? prediction.best_market ?? "";
+      const probability = predictionProbability(prediction);
+      const odds = Number(prediction.best_odds);
+      return [{
+        id: String(prediction.id),
+        fixtureId: Number(prediction.fixture_id),
+        homeTeam: fixture?.home_team_name ?? prediction.home_team ?? "Unknown",
+        awayTeam: fixture?.away_team_name ?? prediction.away_team ?? "Unknown",
+        league: fixture?.league_name ?? prediction.league ?? "",
+        fixtureDate: fixture?.fixture_date ?? null,
+        market: market || "NO_BET / belum dipilih",
+        selection: market,
+        odds: Number.isFinite(odds) && odds > 1 ? odds : null,
+        probability: probability > 0 ? probability : null,
+        confidence: Number(prediction.confidence_score ?? 0),
+        ev: Number(prediction.ev_at_analysis ?? prediction.expected_value ?? 0),
+        predictionText: prediction.prediction_text ?? "",
+        createdAt: prediction.created_at,
+        isInParlay: inParlay.has(Number(prediction.fixture_id)),
+        isUpcoming,
+        status: String(prediction.status ?? "active"),
+        isSelectable: Boolean(String(prediction.status).toLowerCase() === "active" && isUpcoming && market && Number.isFinite(odds) && odds > 1 && probability > 0 && probability < 1),
+      }];
+    }));
+  } catch (error) {
+    logger.error({ error }, "[PARLAY-PREDICTIONS] Failed");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to load predictions" });
+  }
+});
 
 async function loadReadiness(parlayIds: string[]) {
   const { data: parlays, error: parlaysError } = await supabase
@@ -396,6 +472,65 @@ router.post("/parlays/merge", requireAdmin, async (req, res) => {
   } catch (error) {
     logger.error({ error }, "[PARLAY-MERGE] Failed");
     res.status(500).json({ error: error instanceof Error ? error.message : "Merge failed" });
+  }
+});
+
+router.post("/parlays/from-predictions", requireAdmin, async (req, res) => {
+  try {
+    const predictionIds = asIds(req.body?.predictionIds);
+    if (predictionIds.length < 2) {
+      res.status(422).json({ error: "Pilih minimal dua prediksi aktif." });
+      return;
+    }
+    const { data: predictions, error } = await supabase
+      .from("ai_predictions")
+      .select("id, fixture_id, status, market_bet, best_market, best_odds, confidence_score, ev_at_analysis, expected_value, home_team, away_team, league, manual_context")
+      .in("id", predictionIds)
+      .eq("status", "active");
+    if (error) throw error;
+    const rows = (predictions ?? []) as Array<Record<string, unknown>>;
+    const fixtureIds = rows.map((row) => Number(row.fixture_id)).filter(Number.isFinite);
+    const { data: fixtures, error: fixturesError } = await supabase
+      .from("fixtures")
+      .select("fixture_id, fixture_date, home_team_name, away_team_name, league_name")
+      .in("fixture_id", fixtureIds);
+    if (fixturesError) throw fixturesError;
+    const fixtureById = new Map((fixtures ?? []).map((fixture) => [Number(fixture.fixture_id), fixture]));
+    const candidates: ParlayCandidate[] = rows.flatMap((row) => {
+      const fixture = fixtureById.get(Number(row.fixture_id));
+      const context = (row.manual_context ?? {}) as Record<string, unknown>;
+      const probability = Number(context.probability);
+      const odds = Number(row.best_odds);
+      const market = String(row.market_bet ?? row.best_market ?? "").trim();
+      if (!fixture || new Date(fixture.fixture_date).getTime() <= Date.now() || !market || odds <= 1 || !Number.isFinite(probability) || probability <= 0 || probability >= 1) return [];
+      return [{
+        predictionId: String(row.id),
+        fixtureId: Number(row.fixture_id),
+        homeTeam: fixture.home_team_name ?? String(row.home_team ?? "Unknown"),
+        awayTeam: fixture.away_team_name ?? String(row.away_team ?? "Unknown"),
+        league: fixture.league_name ?? String(row.league ?? ""),
+        date: fixture.fixture_date,
+        market,
+        selection: market,
+        odds,
+        confidence: Number(row.confidence_score ?? 0),
+        probability,
+        evPercent: Number(row.ev_at_analysis ?? row.expected_value ?? 0) * 100,
+      }];
+    });
+    if (candidates.length < 2) {
+      res.status(422).json({ error: "Minimal dua prediksi harus memiliki odds, probabilitas, fixture mendatang, dan market yang valid." });
+      return;
+    }
+    const result = await createMergedParlay(candidates, []);
+    if (!result.parlayId) {
+      res.status(422).json({ error: "Parlay tidak dapat dibuat.", result });
+      return;
+    }
+    res.status(201).json(result);
+  } catch (error) {
+    logger.error({ error }, "[PARLAY-FROM-PREDICTIONS] Failed");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to create parlay" });
   }
 });
 
