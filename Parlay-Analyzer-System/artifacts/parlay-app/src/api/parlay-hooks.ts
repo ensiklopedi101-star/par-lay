@@ -39,7 +39,7 @@ export interface RiskCenterItem {
   homeTeam: string;
   awayTeam: string;
   league: string;
-  fixtureDate: string | null;
+  fixtureDate: string;
   market: string;
   bestOdds: number | null;
   evAtAnalysis: number | null;
@@ -162,7 +162,7 @@ export interface AIPredictionBoardItem {
   homeTeam: string;
   awayTeam: string;
   league: string;
-  fixtureDate: string;
+  fixtureDate: string | null;
   market: string;
   selection: string;
   odds: number | null;
