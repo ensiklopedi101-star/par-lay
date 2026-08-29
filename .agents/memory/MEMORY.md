@@ -6,13 +6,13 @@
 - [Odds-API Free Bookmaker](odds-api-free-bookmaker.md) — Akun free saat ini hanya berhasil memakai Bet365; Betano/1xBet ditolak dan Sbobet perlu plan berbayar.
 - [AI Predictions Schema](ai-predictions-schema.md) — Kolom baru: prediction_text, home_team, away_team, league, home_score, away_score, ev_at_analysis, market_bet, settled_at
 - [RAG Architecture](rag-architecture.md) — lessons_learned → diinject ke Gemini prompt sebelum analisis; odds_movement_history → trend data; settlement cron jam 06:00 harian
-- [Replit Import](replit-import.md) — Proyek sudah di-import ke Replit. Semua secrets (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, GEMINI_API_KEY, ODDS_API_KEY, SUPABASE_ACCESS_TOKEN, GITHUB_ACCESS_TOKEN, GITHUB_REPO_URL) tersedia di Replit Secrets. Workflow: `Start Backend` (8080), `Start application` (5000), `Project` (parallel). GitHub repo: `https://github.com/free2vps/par-lay`
+- [GitHub Source](replit-import.md) — Sumber GitHub aktif untuk sinkronisasi penuh adalah `https://github.com/ensiklopedi101-star/par-lay` pada branch `main`.
 - [7-Module Quant System](quant-system.md) — M1-M7 sudah diimplementasi: Team Stats UI (11 indicators), Dashboard Health Monitor, Batch Scanner, Parlay Hub, Gemini v4 persona, AI Feedback Loop (performance_log), Backend Rules. Semua backend & frontend build berhasil.
 - [Frontend Hook Types](frontend-types.md) — Shared typed response interfaces di `src/api/parlay-hooks.ts`; semua `useQuery` pakai generic `<T>`; `formatLeagueName` di `src/utils/format-league.ts`.
 - [Standings Per-League & Default Season](standings-season-default.md) — Backend sort & position per liga; default season depan di UI; kolom Form (Last 6) sebagai pills W/D/L.
 - [Backend Framework Correction](express-not-fastify.md) — API server pakai Express, bukan Fastify.
 - [Gemini Persona DB-Driven](gemini-persona-db-driven.md) — Persona aktif di `scheduler_config.ai_persona`; seed script di `artifacts/api-server/scripts/seed-persona.mjs`.
-- [Workspace Cleanup](workspace-cleanup.md) — Workflow canonical: `Start Backend` (8080) + `Start application` (5000). Workflow artifact duplikat (`api-server`, `parlay-app: web`) di-stop. `pnpm run typecheck` di root clean setelah install `@types/node` di `lib/supabase-client`.
+- [Workspace Cleanup](workspace-cleanup.md) — Workflow canonical saat ini: API Server artifact (8080) + `Start application` (5000); hindari backend duplikat yang memakai port sama.
 - [Supabase Node WebSocket](supabase-node-websocket.md) — Node.js 20 perlu transport `ws` eksplisit saat membuat client Supabase Realtime.
 - [Upcoming Odds Sync](upcoming-odds-sync.md) — Simpan histori; ambil odds hanya untuk fixture pending 10 hari ke depan dengan cap 80 event per siklus.
 - [Cron and Market Movement](cron-and-market-movement.md) — Keep-alive memakai `/api/cron`; market movement tercatat saat fetch odds menghasilkan perubahan, bukan saat ping keep-alive.
