@@ -35,6 +35,60 @@ router.get("/odds/events", async (req, res) => {
       res.status(500).json({ error: error.message });
       return;
     }
+
+    const fixtureIds = (data ?? []).map((event) => String(event.fixture_id));
+    const [{ data: oddsRows, error: oddsError }, { data: movementRows, error: movementError }] =
+      fixtureIds.length > 0
+        ? await Promise.all([
+            supabase
+              .from("odds_history")
+              .select("match_id, bookmaker, market_type, captured_at")
+              .in("match_id", fixtureIds),
+            supabase
+              .from("odds_movement_history")
+              .select("fixture_id, bookmaker, market_type, captured_at")
+              .in("fixture_id", fixtureIds),
+          ])
+        : [
+            { data: [], error: null },
+            { data: [], error: null },
+          ];
+
+    if (oddsError) logger.warn({ error: oddsError }, "Failed to load odds status for events");
+    if (movementError) logger.warn({ error: movementError }, "Failed to load odds movement status for events");
+
+    const oddsByFixture = new Map<string, { capturedAt: string | null; count: number }>();
+    for (const row of oddsRows ?? []) {
+      const key = String(row.match_id);
+      const current = oddsByFixture.get(key);
+      const capturedAt = row.captured_at ? String(row.captured_at) : null;
+      oddsByFixture.set(key, {
+        count: (current?.count ?? 0) + 1,
+        capturedAt:
+          current?.capturedAt && capturedAt
+            ? new Date(capturedAt).getTime() > new Date(current.capturedAt).getTime()
+              ? capturedAt
+              : current.capturedAt
+            : capturedAt ?? current?.capturedAt ?? null,
+      });
+    }
+
+    const movementSnapshots = new Map<string, number>();
+    for (const row of movementRows ?? []) {
+      const key = [
+        String(row.fixture_id),
+        String(row.bookmaker ?? "").toLowerCase(),
+        String(row.market_type ?? "").toLowerCase(),
+      ].join("::");
+      movementSnapshots.set(key, (movementSnapshots.get(key) ?? 0) + 1);
+    }
+    const movementByFixture = new Map<string, number>();
+    for (const [key, count] of movementSnapshots) {
+      if (count <= 1) continue;
+      const fixtureId = key.split("::")[0]!;
+      movementByFixture.set(fixtureId, (movementByFixture.get(fixtureId) ?? 0) + count - 1);
+    }
+
     res.json(
       (data ?? []).map((e) => ({
         id: e.fixture_id,
@@ -43,8 +97,11 @@ router.get("/odds/events", async (req, res) => {
         away: e.away_team_name,
         date: e.fixture_date,
         status: e.status_short,
-         isUpcomingRadar: new Date(e.fixture_date).getTime() <= radarEnd.getTime(),
+        isUpcomingRadar: new Date(e.fixture_date).getTime() <= radarEnd.getTime(),
         updatedAt: e.updated_at,
+        oddsCount: oddsByFixture.get(String(e.fixture_id))?.count ?? 0,
+        oddsCapturedAt: oddsByFixture.get(String(e.fixture_id))?.capturedAt ?? null,
+        oddsMovementCount: movementByFixture.get(String(e.fixture_id)) ?? 0,
       })),
     );
   } catch (err) {

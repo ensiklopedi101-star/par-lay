@@ -44,17 +44,20 @@ interface CompletedFixture {
   status_short: string;
   home_goals: number | null;
   away_goals: number | null;
+  home_goals_ht: number | null;
+  away_goals_ht: number | null;
 }
 
 /* ─────────────────────────────────────────
    Tentukan apakah prediksi adalah "NO BET"
 ───────────────────────────────────────── */
-function isNoBet(prediction: PendingPrediction): boolean {
+export function isNoBet(prediction: PendingPrediction): boolean {
   // A selected market is authoritative. The full Gemini response often
   // contains "NO BET" for alternative markets even when the final
   // recommendation is a real bet.
-  if ((prediction.market_bet ?? prediction.best_market ?? "").trim() !== "") {
-    return false;
+  const selectedMarket = (prediction.market_bet ?? prediction.best_market ?? "").trim().toLowerCase();
+  if (selectedMarket !== "") {
+    return selectedMarket === "no_bet" || selectedMarket === "no bet";
   }
 
   const text = (prediction.prediction_text ?? "").toLowerCase();
@@ -70,60 +73,56 @@ function isNoBet(prediction: PendingPrediction): boolean {
    Tentukan WIN/LOSS dari skor + market
    Return null jika market tidak dikenali
 ───────────────────────────────────────── */
-function calculateResult(
+export function calculateResult(
   homeGoals: number,
   awayGoals: number,
   bestMarket: string | null,
   predictionText: string | null,
+  homeGoalsHT?: number | null,
+  awayGoalsHT?: number | null,
 ): "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH" | null {
   const market = (bestMarket ?? "").toLowerCase().trim();
   const text   = (predictionText ?? "").toLowerCase();
-
-  /* 1x2 / Moneyline */
-  if (market.includes("home") || market === "1" || market === "1x2_home") {
-    return homeGoals > awayGoals ? "WIN" : "LOSS";
-  }
-  if (market.includes("away") || market === "2" || market === "1x2_away") {
-    return awayGoals > homeGoals ? "WIN" : "LOSS";
-  }
-  if (market.includes("draw") || market === "x" || market === "1x2_draw") {
-    return homeGoals === awayGoals ? "WIN" : "LOSS";
-  }
+  const isHalfTime = /\b(ht|half[\s-]?time|first[\s-]?half)\b/.test(market);
+  const evaluatedHomeGoals = isHalfTime ? homeGoalsHT : homeGoals;
+  const evaluatedAwayGoals = isHalfTime ? awayGoalsHT : awayGoals;
+  if (evaluatedHomeGoals == null || evaluatedAwayGoals == null) return null;
+  const evaluatedTotal = evaluatedHomeGoals + evaluatedAwayGoals;
+  const evaluatedDiff = evaluatedHomeGoals - evaluatedAwayGoals;
 
   /* Over / Under */
   if (market.includes("over") || market.includes("over_2")) {
     const line = extractLine(market) ?? 2.5;
-    return (homeGoals + awayGoals) > line ? "WIN" : "LOSS";
+    return evaluatedTotal > line ? "WIN" : evaluatedTotal === line ? "PUSH" : "LOSS";
   }
   if (market.includes("under")) {
     const line = extractLine(market) ?? 2.5;
-    return (homeGoals + awayGoals) < line ? "WIN" : "LOSS";
+    return evaluatedTotal < line ? "WIN" : evaluatedTotal === line ? "PUSH" : "LOSS";
   }
 
   /* BTTS */
   if (market.includes("btts_yes") || market.includes("both teams to score yes")) {
-    return homeGoals > 0 && awayGoals > 0 ? "WIN" : "LOSS";
+    return evaluatedHomeGoals > 0 && evaluatedAwayGoals > 0 ? "WIN" : "LOSS";
   }
   if (market.includes("btts_no") || market.includes("both teams to score no")) {
-    return homeGoals === 0 || awayGoals === 0 ? "WIN" : "LOSS";
+    return evaluatedHomeGoals === 0 || evaluatedAwayGoals === 0 ? "WIN" : "LOSS";
   }
   if (market.includes("btts")) {
     /* btts tanpa yes/no — inferensi dari teks */
     if (text.includes("btts yes") || text.includes("kedua tim mencetak")) {
-      return homeGoals > 0 && awayGoals > 0 ? "WIN" : "LOSS";
+      return evaluatedHomeGoals > 0 && evaluatedAwayGoals > 0 ? "WIN" : "LOSS";
     }
-    return homeGoals > 0 && awayGoals > 0 ? "WIN" : "LOSS";
+    return evaluatedHomeGoals > 0 && evaluatedAwayGoals > 0 ? "WIN" : "LOSS";
   }
 
   /* Asian Handicap — dengan quarter line support */
   if (market.includes("handicap") || market.includes("ah")) {
     const line = extractLine(market);
     if (line !== null) {
-      const diff = homeGoals - awayGoals; // positif = home menang
+      const isAwaySelection = /\b(away|visitor|tamu)\b|(?:^|[_\s])2(?:$|[_\s])/.test(market);
+      const selectedTeamDiff = isAwaySelection ? -evaluatedDiff : evaluatedDiff;
+      const margin = selectedTeamDiff + line;
       const absLine = Math.abs(line);
-      const isHomeFav = line < 0; // line negatif = home adalah favorit
-      const effectiveDiff = isHomeFav ? diff : -diff; // adjust dari perspektif yang di-handicap
-      const margin = effectiveDiff + absLine;
 
       // Quarter lines: 0.25, 0.75, 1.25, 1.75, dll
       const fracPart = absLine % 1;
@@ -143,18 +142,31 @@ function calculateResult(
         }
       }
 
-      // Half lines (0.5, 1.0, 1.5) → binary
-      return margin > 0 ? "WIN" : "LOSS";
+      // Whole/half lines. An exact zero on a whole line is a push.
+      return margin > 0 ? "WIN" : margin === 0 ? "PUSH" : "LOSS";
     }
-    return homeGoals > awayGoals ? "WIN" : "LOSS";
+    return selectedTeamWins(market, evaluatedHomeGoals, evaluatedAwayGoals)
+      ? "WIN"
+      : "LOSS";
   }
 
   /* Fallback: coba inferensi dari teks prediksi */
   if (text.includes("menang") && (text.includes("home") || text.includes("tuan rumah"))) {
-    return homeGoals > awayGoals ? "WIN" : "LOSS";
+    return evaluatedHomeGoals > evaluatedAwayGoals ? "WIN" : "LOSS";
   }
   if (text.includes("menang") && (text.includes("away") || text.includes("tamu"))) {
-    return awayGoals > homeGoals ? "WIN" : "LOSS";
+    return evaluatedAwayGoals > evaluatedHomeGoals ? "WIN" : "LOSS";
+  }
+
+  /* 1x2 / Moneyline */
+  if (market.includes("home") || market === "1" || market === "1x2_home") {
+    return evaluatedHomeGoals > evaluatedAwayGoals ? "WIN" : "LOSS";
+  }
+  if (market.includes("away") || market === "2" || market === "1x2_away") {
+    return evaluatedAwayGoals > evaluatedHomeGoals ? "WIN" : "LOSS";
+  }
+  if (market.includes("draw") || market === "x" || market === "1x2_draw") {
+    return evaluatedHomeGoals === evaluatedAwayGoals ? "WIN" : "LOSS";
   }
 
   return null; /* market tidak dikenali */
@@ -162,11 +174,23 @@ function calculateResult(
 
 /* Helper: ekstrak angka dari string market (misal "over_2_5" → 2.5) */
 function extractLine(market: string): number | null {
-  const m = market.match(/(\d+)[_. ]?(\d+)?/);
-  if (!m) return null;
-  const whole = parseInt(m[1]!);
-  const frac  = m[2] ? parseInt(m[2]) / 10 : 0;
-  return whole + frac;
+  const normalized = market.toLowerCase().replace(/,/g, ".");
+  const lineMatch = normalized.match(
+    /(?:over|under|handicap|asian[\s_-]*handicap|spread|ah)[^\d+]*([-+]?\d+(?:[._]\d+)?)/,
+  ) ?? normalized.match(/[-+]?\d+(?:[._]\d+)?/);
+  if (!lineMatch) return null;
+  const parsed = Number(lineMatch[1]!.replace("_", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function selectedTeamWins(market: string, homeGoals: number, awayGoals: number): boolean {
+  return /\b(away|visitor|tamu)\b|(?:^|[_\s])2(?:$|[_\s])/.test(market)
+    ? awayGoals > homeGoals
+    : homeGoals > awayGoals;
+}
+
+function requiresHalfTimeScore(market: string | null): boolean {
+  return /\b(ht|half[\s-]?time|first[\s-]?half)\b/i.test(market ?? "");
 }
 
 function withSettlementContext(
@@ -226,6 +250,73 @@ Format: langsung tulis pelajarannya, tanpa intro, tanpa header, dalam bahasa Ind
   }
 }
 
+function buildFallbackLesson(
+  prediction: PendingPrediction,
+  homeGoals: number,
+  awayGoals: number,
+  betResult: "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH",
+  marketBet: string | null,
+  evAtBet: number,
+): string {
+  const market = marketBet ?? "N/A";
+  const score = `${homeGoals}-${awayGoals}`;
+  switch (betResult) {
+    case "WIN":
+      return `Prediksi WIN terkonfirmasi. Market: ${market}. Skor: ${score}. EV saat analisis: ${evAtBet.toFixed(2)}.`;
+    case "HALF_WIN":
+      return `Prediksi HALF_WIN. Market: ${market} menghasilkan kemenangan setengah berdasarkan skor ${score}; evaluasi line quarter perlu dipertahankan.`;
+    case "HALF_LOSS":
+      return `Prediksi HALF_LOSS. Market: ${market} menghasilkan kerugian setengah berdasarkan skor ${score}; line quarter perlu diperiksa pada analisis berikutnya.`;
+    case "PUSH":
+      return `Prediksi PUSH. Market: ${market} tepat pada line berdasarkan skor ${score}; tidak ada edge hasil yang terealisasi.`;
+    case "LOSS":
+      return `Prediksi LOSS. Market: ${market}. Skor aktual ${score} berbeda dari rekomendasi; evaluasi ulang kualitas statistik, line, dan pergerakan odds.`;
+  }
+}
+
+async function ensureLearningLesson(
+  prediction: PendingPrediction,
+  fixture: CompletedFixture,
+  betResult: "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH",
+  lessonText: string,
+  evAtBet: number,
+  marketBet: string | null,
+): Promise<boolean> {
+  const fixtureId = String(fixture.fixture_id);
+  const existing = await supabase
+    .from("lessons_learned")
+    .select("id")
+    .eq("fixture_id", fixtureId)
+    .eq("bet_result", betResult)
+    .limit(1);
+
+  if (existing.error) {
+    logger.error({ err: existing.error, fixtureId, predictionId: prediction.id }, "[SETTLEMENT] Gagal memeriksa lesson existing");
+    return false;
+  }
+  if ((existing.data ?? []).length > 0) return true;
+
+  const { error } = await supabase.from("lessons_learned").insert({
+    fixture_id: fixtureId,
+    home_team: prediction.home_team ?? fixture.home_team_name,
+    away_team: prediction.away_team ?? fixture.away_team_name,
+    league: prediction.league ?? fixture.league_name,
+    bet_result: betResult,
+    home_score: fixture.home_goals,
+    away_score: fixture.away_goals,
+    ev_at_bet: evAtBet,
+    ai_prediction: prediction.prediction_text?.slice(0, 2000) ?? null,
+    lesson_text: lessonText,
+    market_bet: marketBet ?? null,
+    created_at: new Date().toISOString(),
+  });
+  if (error) {
+    logger.error({ err: error, fixtureId, predictionId: prediction.id, betResult }, "[SETTLEMENT] Gagal menyimpan lesson AI");
+    return false;
+  }
+  return true;
+}
+
 interface LessonPerformanceRow {
   bet_result: string | null;
   created_at: string | null;
@@ -259,9 +350,10 @@ async function rebuildPerformanceLog(): Promise<void> {
   }
 
   for (const [date, rows] of byDate) {
-    const wins = rows.filter((row) => row.bet_result === "WIN").length;
-    const losses = rows.filter((row) => row.bet_result === "LOSS").length;
-    const total = wins + losses;
+    const wins = rows.filter((row) => row.bet_result === "WIN" || row.bet_result === "HALF_WIN").length;
+    const losses = rows.filter((row) => row.bet_result === "LOSS" || row.bet_result === "HALF_LOSS").length;
+    const total = rows.length;
+    const decisive = wins + losses;
     if (total === 0) continue;
 
     const payload = {
@@ -269,7 +361,7 @@ async function rebuildPerformanceLog(): Promise<void> {
       total_parlays: total,
       wins,
       losses,
-      hit_rate: wins / total,
+      hit_rate: decisive > 0 ? wins / decisive : null,
       total_roi: null,
     };
 
@@ -333,7 +425,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
         Inilah sumber kebenaran — tidak perlu panggil API eksternal */
   const { data: completedFixtures } = await supabase
     .from("fixtures")
-    .select("fixture_id, home_team_name, away_team_name, league_name, status_short, home_goals, away_goals")
+    .select("fixture_id, home_team_name, away_team_name, league_name, status_short, home_goals, away_goals, home_goals_ht, away_goals_ht")
     .in("fixture_id", fixtureIds)
     .in("status_short", ["FT", "AET", "PEN", "finished", "completed"])
     .not("home_goals", "is", null)
@@ -384,7 +476,23 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
 
     /* 4. Hitung WIN/LOSS secara matematis murni dari skor */
     const marketBet = prediction.market_bet ?? prediction.best_market;
-    const betResult = calculateResult(homeGoals, awayGoals, marketBet, prediction.prediction_text);
+    if (requiresHalfTimeScore(marketBet) &&
+      (fixture.home_goals_ht == null || fixture.away_goals_ht == null)) {
+      logger.warn(
+        { fixtureId: fixture.fixture_id, predictionId: prediction.id },
+        "[SETTLEMENT] Skipping HT market until half-time score is available",
+      );
+      skipped++;
+      continue;
+    }
+    const betResult = calculateResult(
+      homeGoals,
+      awayGoals,
+      marketBet,
+      prediction.prediction_text,
+      fixture.home_goals_ht,
+      fixture.away_goals_ht,
+    );
 
     if (betResult === null) {
       /* Market tidak dikenali — tandai manual */
@@ -419,22 +527,56 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
       result: betResult,
     }, "[SETTLEMENT] Hasil dihitung");
 
-    /* 5. Simpan ke lessons_learned untuk kedua hasil (WIN & LOSS)
-          LOSS: Gemini generate evaluasi kenapa salah
-          WIN : simpan catatan referensi positif tanpa Gemini */
+    /* 5. Simpan setiap hasil taruhan ke knowledge base.
+          NO BET sudah dilewati di atas; WIN/LOSS/partial/push semuanya
+          menjadi feedback yang dapat dipakai oleh RAG. */
     const evAtBet = prediction.ev_at_analysis ?? prediction.expected_value ?? 0;
 
-    let lessonText: string | null = null;
+    let lessonText: string;
     if (betResult === "LOSS" && aiAvailable) {
-      lessonText = await generateLossLesson(prediction, homeGoals, awayGoals, geminiKey);
-    } else if (betResult === "WIN") {
-      lessonText = `Prediksi berhasil. Market: ${marketBet ?? "N/A"}. Skor: ${homeGoals}-${awayGoals}. EV saat analisis: ${evAtBet.toFixed(2)}.`;
+      lessonText = await generateLossLesson(prediction, homeGoals, awayGoals, geminiKey)
+        ?? buildFallbackLesson(prediction, homeGoals, awayGoals, betResult, marketBet, evAtBet);
+    } else {
+      lessonText = buildFallbackLesson(prediction, homeGoals, awayGoals, betResult, marketBet, evAtBet);
+    }
+
+    /*
+     * Learning is written before the prediction is marked settled. If this
+     * write fails, the row remains retryable on the next scheduler run
+     * instead of silently becoming permanently invisible to the learner.
+     */
+    const learningSaved = await ensureLearningLesson(
+      prediction,
+      fixture,
+      betResult,
+      lessonText,
+      evAtBet,
+      marketBet,
+    );
+    if (!learningSaved) {
+      skipped++;
+      continue;
+    }
+
+    /*
+     * Update the parlay leg first. If this fails, the prediction remains
+     * retryable and the parent parlay cannot be left with a null result.
+     */
+    const { error: legUpdateError } = await supabase
+      .from("parlay_legs")
+      .update({ result: betResult })
+      .eq("fixture_id", fixture.fixture_id)
+      .is("result", null);
+    if (legUpdateError) {
+      logger.error({ err: legUpdateError, fixtureId: fixture.fixture_id }, "[SETTLEMENT] Gagal update hasil parlay leg");
+      skipped++;
+      continue;
     }
 
     /* 6. Update prediction dengan hasil dan snapshot evaluasi lengkap.
           Snapshot analisis asli tetap dipertahankan; settlement hanya menambah
           bagian hasil aktual sehingga evaluasi tidak kehilangan input awal. */
-    await supabase.from("ai_predictions").update({
+    const { error: predictionUpdateError } = await supabase.from("ai_predictions").update({
       status: betResult,
       home_score: homeGoals,
       away_score: awayGoals,
@@ -452,33 +594,14 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
         lessonText,
       }),
     }).eq("id", prediction.id);
-
-    await supabase
-      .from("parlay_legs")
-      .update({ result: betResult })
-      .eq("fixture_id", fixture.fixture_id)
-      .is("result", null);
+    if (predictionUpdateError) {
+      logger.error({ err: predictionUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal update hasil prediksi");
+      skipped++;
+      continue;
+    }
 
     settled++;
-
-    const { error: lessonErr } = await supabase.from("lessons_learned").insert({
-      fixture_id: String(fixture.fixture_id),
-      home_team:  prediction.home_team ?? fixture.home_team_name,
-      away_team:  prediction.away_team ?? fixture.away_team_name,
-      league:     prediction.league ?? fixture.league_name,
-      bet_result: betResult,
-      home_score: homeGoals,
-      away_score: awayGoals,
-      ev_at_bet:  evAtBet,
-      ai_prediction: prediction.prediction_text?.slice(0, 2000) ?? null,
-      lesson_text: lessonText,
-      market_bet:  marketBet ?? null,
-      created_at:  new Date().toISOString(),
-    });
-
-    if (!lessonErr && betResult === "LOSS") {
-      lessons++;
-    }
+    lessons++;
   }
 
   await settleParlaysForFixtures(completedFixtures.map((fixture) => fixture.fixture_id));
@@ -487,7 +610,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
   await rebuildPerformanceLog();
 
   logger.info(
-    `[SETTLEMENT] Selesai: ${settled} diselesaikan (${lessons} pelajaran LOSS dibuat), ${skipped} dilewati`
+    `[SETTLEMENT] Selesai: ${settled} diselesaikan (${lessons} hasil masuk learning), ${skipped} dilewati`
   );
   return { settled, lessons, skipped };
 }

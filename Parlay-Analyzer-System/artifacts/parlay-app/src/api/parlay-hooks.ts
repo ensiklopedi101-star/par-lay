@@ -86,6 +86,9 @@ export interface FixtureEvent {
   leagueSlug?: string;
   status?: string;
   isUpcomingRadar?: boolean;
+  oddsCount?: number;
+  oddsCapturedAt?: string | null;
+  oddsMovementCount?: number;
   [key: string]: unknown;
 }
 

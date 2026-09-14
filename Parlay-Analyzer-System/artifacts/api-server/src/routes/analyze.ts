@@ -93,14 +93,51 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
   const parlayCandidates: ParlayCandidate[] = [];
   const existing = await supabase
     .from("ai_predictions")
-    .select("fixture_id")
+    .select("fixture_id, status, market_bet, best_market, best_odds")
     .in("fixture_id", fixtures.map((fixture) => fixture.fixture_id));
-  const existingSet = new Set((existing.data ?? []).map((row) => String(row.fixture_id)));
+  if (existing.error) {
+    throw new Error(`Failed to load existing predictions: ${existing.error.message}`);
+  }
+
+  /*
+   * A row with no selected market is not a completed scan. It can be a
+   * recoverable NO BET result, or a legacy row created before odds became
+   * available. Keep it eligible so a later scan can use a newly captured
+   * odds snapshot. In particular, a missing-odds scan never writes a row,
+   * so it must not be turned into a permanent exclusion here.
+   */
+  const hasUsableSelectedMarket = (row: {
+    status?: unknown;
+    market_bet?: unknown;
+    best_market?: unknown;
+    best_odds?: unknown;
+  }) => {
+    const market = String(row.market_bet ?? row.best_market ?? "").trim().toLowerCase();
+    const odds = Number(row.best_odds);
+    return Boolean(
+      market &&
+      market !== "no_bet" &&
+      market !== "no bet" &&
+      Number.isFinite(odds) &&
+      odds > 1 &&
+      String(row.status ?? "active").toLowerCase() !== "no_bet",
+    );
+  };
+  const existingSet = new Set(
+    (existing.data ?? [])
+      .filter(hasUsableSelectedMarket)
+      .map((row) => String(row.fixture_id)),
+  );
   const pendingFixtures = fixtures.filter((fixture) => !existingSet.has(String(fixture.fixture_id)));
-  const oddsResult = await supabase
-    .from("odds_history")
-    .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
-    .in("match_id", pendingFixtures.map((fixture) => String(fixture.fixture_id)));
+  const oddsResult = pendingFixtures.length > 0
+    ? await supabase
+      .from("odds_history")
+      .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+      .in("match_id", pendingFixtures.map((fixture) => String(fixture.fixture_id)))
+    : { data: [], error: null };
+  if (oddsResult.error) {
+    throw new Error(`Failed to load odds snapshots: ${oddsResult.error.message}`);
+  }
   const oddsByFixture = new Map<string, Array<{
     bookmaker: string;
     market_type: string;

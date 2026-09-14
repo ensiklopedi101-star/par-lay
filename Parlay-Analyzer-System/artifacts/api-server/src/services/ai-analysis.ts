@@ -75,7 +75,13 @@ OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
   ]
 }
 
-Field "probability" adalah probabilitas nyata untuk selection dalam angka 0-1, bukan confidence dan bukan probabilitas implisit bandar. Field ini wajib untuk selection selain NO_BET. Jika confidence < 6.5 atau probabilitas nyata tidak dapat dihitung, gunakan selection "NO_BET".`;
+VALIDATION GATE:
+- Bandingkan semua market yang tersedia (ML, HT, Totals, AH, BTTS) sebelum memilih.
+- Market dan line wajib cocok persis dengan snapshot odds provider.
+- Probability wajib eksplisit, 0 < probability < 1, dan bukan confidence atau probabilitas implisit.
+- Hitung ulang EV = (probability × odds provider) - 1. Jika EV tidak positif atau confidence < 6.5, gunakan "NO_BET".
+
+Field "probability" adalah probabilitas nyata untuk selection dalam angka 0-1, bukan confidence dan bukan probabilitas implisit bandar. Field ini wajib untuk selection selain NO_BET. Jika confidence < 6.5, probabilitas nyata tidak valid, market/line tidak cocok, atau EV tidak positif, gunakan selection "NO_BET".`;
 
 /* ═══════════════════════════════════════════════════════════════
    LOAD AI CONFIG dari Supabase
@@ -1216,13 +1222,27 @@ function extractJsonObjects(text: string): Record<string, unknown>[] {
   return objects;
 }
 
-export function extractPredictionRecommendation(text: string): PredictionRecommendation {
+export function extractPredictionRecommendation(text: string, fixtureId?: string): PredictionRecommendation {
   const objects = extractJsonObjects(text);
-  const root = objects.find((candidate) => Array.isArray(candidate.selections)) ?? objects[objects.length - 1] ?? {};
-  const selections = Array.isArray(root.selections) ? root.selections : [];
-  const selected = (selections.find((item) => item && typeof item === "object") ?? root) as Record<string, unknown>;
-  const explicitSelection = String(selected.selection ?? "").trim();
-  const market = String(selected.market ?? selected.market_bet ?? root.market_bet ?? "").trim();
+   const root = objects.find((candidate) => Array.isArray(candidate.selections)) ?? objects[objects.length - 1] ?? {};
+   const selections = Array.isArray(root.selections) ? root.selections : [];
+   /*
+    * Prefer the fixture-specific selection when a model returns a multi-leg
+    * parlay. Falling back to the first object is only safe for single-fixture
+    * responses and previously caused the scanner to validate the wrong leg.
+    */
+   const selected = (
+     selections.find((item) =>
+       item &&
+       typeof item === "object" &&
+       (!fixtureId || String((item as Record<string, unknown>).fixture_id ?? "").trim() === fixtureId) &&
+       String((item as Record<string, unknown>).fixture_id ?? "").trim() !== "",
+     ) ??
+     selections.find((item) => item && typeof item === "object") ??
+     root
+   ) as Record<string, unknown>;
+   const explicitSelection = String(selected.selection ?? "").trim();
+   const market = String(selected.market ?? selected.market_bet ?? root.market_bet ?? "").trim();
   const marketBet = explicitSelection && explicitSelection.toLowerCase() !== "no_bet"
     ? explicitSelection
     : market && market.toLowerCase() !== "no_bet"
@@ -1479,15 +1499,26 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
    const aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
    const predictionText = aiResult.text;
-    const parsedRecommendation = extractPredictionRecommendation(predictionText);
+    const parsedRecommendation = extractPredictionRecommendation(predictionText, fixtureId);
     const verifiedOdds = parsedRecommendation.marketBet
       ? validatedOddsForRecommendation(parsedRecommendation.marketBet, oddsRows)
       : null;
-    const recommendation = verifiedOdds != null && parsedRecommendation.probability != null
+    const computedEvPercent = verifiedOdds != null && parsedRecommendation.probability != null
+      ? (parsedRecommendation.probability * verifiedOdds - 1) * 100
+      : 0;
+    const recommendationIsEligible = Boolean(
+      verifiedOdds != null &&
+      parsedRecommendation.probability != null &&
+      parsedRecommendation.probability > 0 &&
+      parsedRecommendation.probability < 1 &&
+      parsedRecommendation.confidence >= 6.5 &&
+      computedEvPercent > 0,
+    );
+    const recommendation = recommendationIsEligible
       ? {
           ...parsedRecommendation,
-          odds: verifiedOdds,
-          evPercent: (parsedRecommendation.probability * verifiedOdds - 1) * 100,
+           odds: verifiedOdds!,
+           evPercent: computedEvPercent,
         }
       : {
           ...parsedRecommendation,
@@ -1499,9 +1530,17 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
       ? "AI tidak memilih market taruhan."
       : verifiedOdds == null
         ? "Market atau line rekomendasi AI tidak ditemukan pada odds snapshot provider."
-        : parsedRecommendation.probability == null
-          ? "Probabilitas nyata eksplisit tidak tersedia; confidence tidak digunakan sebagai probabilitas."
-          : undefined;
+       : verifiedOdds == null
+         ? "Market atau line rekomendasi AI tidak ditemukan pada odds snapshot provider."
+         : parsedRecommendation.probability == null ||
+             parsedRecommendation.probability <= 0 ||
+             parsedRecommendation.probability >= 1
+           ? "Probabilitas nyata eksplisit tidak valid; confidence tidak digunakan sebagai probabilitas."
+           : parsedRecommendation.confidence < 6.5
+             ? "Confidence di bawah ambang minimum 6.5."
+             : computedEvPercent <= 0
+               ? "EV hasil perhitungan ulang tidak positif."
+               : undefined;
     const evAtAnalysis = recommendation.evPercent / 100;
 
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
@@ -1587,9 +1626,10 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
      insertError = result.error;
    }
 
-  if (insertError) {
-    logger.warn({ insertError }, "Failed to save prediction — returning result anyway");
-  }
+   if (insertError) {
+     logger.error({ insertError, fixtureId }, "Failed to save prediction");
+     throw new Error(`Failed to save AI prediction: ${insertError.message}`);
+   }
 
   return {
     fixture_id: fixtureId,

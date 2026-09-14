@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "wouter";
 import {
   useListSupabaseParlays,
   usePredictionBoard,
@@ -6,7 +7,6 @@ import {
   useVerifyParlays,
   useMergeParlays,
   type Parlay,
-  type ParlayLeg,
   type ParlayReadiness,
   type ParlayReadinessLeg,
   type AIPredictionBoardItem,
@@ -25,11 +25,15 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { TrendingUp, TrendingDown, Minus, AlertCircle, CalendarDays, Target, ShieldCheck, ShieldAlert, RefreshCw, GitMerge, CheckCircle2, XCircle } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, AlertCircle, CalendarDays, Target, ShieldCheck, ShieldAlert, RefreshCw, GitMerge, CheckCircle2, XCircle, ClipboardCheck, ArrowRight, X } from "lucide-react";
 import { format } from "date-fns";
 import { useAdminPassword } from "@/hooks/use-admin-password";
 import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
 import { useToast } from "@/hooks/use-toast";
+import {
+  readSelectedPredictionIds,
+  writeSelectedPredictionIds,
+} from "@/utils/prediction-selection";
 
 function ParlayStatusBadge({ status }: { status: string }) {
   const statusStyles: Record<string, string> = {
@@ -297,16 +301,16 @@ function ParlayDetailModal({ parlay, onClose }: { parlay: Parlay; onClose: () =>
   );
 }
 
-function PredictionBoard({
+function PredictionQueue({
   predictions,
   selectedIds,
-  onToggle,
+  onRemove,
   onCreate,
   isCreating,
 }: {
   predictions: AIPredictionBoardItem[];
   selectedIds: string[];
-  onToggle: (id: string) => void;
+  onRemove: (id: string) => void;
   onCreate: () => void;
   isCreating: boolean;
 }) {
@@ -316,87 +320,70 @@ function PredictionBoard({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardTitle className="flex items-center gap-2 text-lg">
-              <Target className="h-5 w-5 text-primary" />
-              AI Prediction Board
+              <ClipboardCheck className="h-5 w-5 text-primary" />
+              Prediction shortlist
             </CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              Prediksi individual dari batch scan dan analisis AI. Pilih beberapa prediksi untuk menyusun parlay manual.
+              Pilihan dari AI Prediction Board yang siap ditinjau dan dibuat menjadi parlay.
             </p>
           </div>
-          <Button onClick={onCreate} disabled={selectedIds.length < 2 || isCreating}>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline">
+              <Link href="/risk-center">
+                Kembali ke Prediction Board
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+            <Button onClick={onCreate} disabled={selectedIds.length < 2 || isCreating}>
             <GitMerge className="h-4 w-4" />
-            {isCreating ? "Creating..." : `Create from ${selectedIds.length} predictions`}
-          </Button>
+              {isCreating ? "Creating..." : `Create parlay (${selectedIds.length})`}
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent>
-        {predictions.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border p-5 text-center text-sm text-muted-foreground">
-            Belum ada prediksi aktif untuk fixture mendatang dengan odds dan probabilitas valid. Jalankan scanning setelah odds tersedia.
+        {selectedIds.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border p-6 text-center">
+            <p className="text-sm text-muted-foreground">
+              Belum ada pertandingan di shortlist. Pilih checkbox pada AI Prediction Board untuk memulai.
+            </p>
+            <Button asChild variant="outline" size="sm" className="mt-4">
+              <Link href="/risk-center">Buka AI Prediction Board</Link>
+            </Button>
           </div>
         ) : (
-          <div className="grid gap-3 md:grid-cols-2">
-            {predictions.map((prediction) => {
-              const selected = selectedIds.includes(prediction.id);
-              return (
-                <button
+          <div className="grid gap-3 lg:grid-cols-2">
+            {predictions.map((prediction) => (
+                <div
                   key={prediction.id}
-                  type="button"
-                  onClick={() => prediction.isSelectable && onToggle(prediction.id)}
-                  disabled={!prediction.isSelectable}
-                  className={`rounded-lg border p-3 text-left transition-colors ${
-                    selected ? "border-primary bg-primary/10" : "border-border bg-card/60 hover:bg-secondary/30"
-                  } ${!prediction.isSelectable ? "cursor-not-allowed opacity-70" : ""}`}
+                  className="rounded-lg border border-primary/30 bg-card/60 p-3"
                 >
-                  <div className="flex items-start gap-3">
-                    <input
-                      aria-label={`Select ${prediction.homeTeam} vs ${prediction.awayTeam}`}
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() => onToggle(prediction.id)}
-                      onClick={(event) => event.stopPropagation()}
-                      disabled={!prediction.isSelectable}
-                      className="mt-1 h-4 w-4 accent-primary"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-semibold">
-                          {prediction.homeTeam} <span className="text-muted-foreground">vs</span> {prediction.awayTeam}
-                        </span>
-                        <div className="flex gap-1">
-                          <Badge variant="outline" className="text-[10px]">{prediction.status}</Badge>
-                          {prediction.isInParlay && <Badge variant="outline" className="text-[10px]">In parlay</Badge>}
-                        </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold">
+                        {prediction.homeTeam} <span className="text-muted-foreground">vs</span> {prediction.awayTeam}
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {prediction.league} · {prediction.fixtureDate ? format(new Date(prediction.fixtureDate), "MMM dd, HH:mm") : "fixture date unavailable"}
+                        {prediction.market} · {prediction.selection} · {prediction.odds?.toFixed(2) ?? "—"}
                       </div>
-                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-                        <span className="font-medium text-primary">{prediction.market}</span>
-                        <span>Odds <strong>{prediction.odds?.toFixed(2) ?? "—"}</strong></span>
-                        <span>AI <strong>{prediction.probability == null ? "—" : `${(prediction.probability * 100).toFixed(1)}%`}</strong></span>
-                        <span>Conf <strong>{prediction.confidence.toFixed(1)}</strong></span>
-                        <span className={prediction.ev >= 0 ? "text-emerald-500" : "text-red-500"}>
-                          EV {(prediction.ev * 100).toFixed(1)}%
-                        </span>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                        <span>Probability {(prediction.probability == null ? "—" : `${(prediction.probability * 100).toFixed(1)}%`)}</span>
+                        <span>Confidence {prediction.confidence.toFixed(1)}</span>
+                        <span className={prediction.ev >= 0 ? "text-emerald-400" : "text-red-400"}>EV {(prediction.ev * 100).toFixed(1)}%</span>
                       </div>
-                      {!prediction.isSelectable && (
-                        <div className="mt-2 text-xs text-amber-500">
-                          {prediction.status.toLowerCase() !== "active"
-                            ? "Prediksi sudah memiliki hasil/status settlement; hanya untuk histori."
-                            : !prediction.isUpcoming
-                              ? "Fixture sudah kickoff/selesai; hanya untuk histori."
-                              : "Belum bisa dipilih: market, odds, atau probabilitas AI belum lengkap."}
-                        </div>
-                      )}
-                      {prediction.predictionText && (
-                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{prediction.predictionText}</p>
-                      )}
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-red-400"
+                      onClick={() => onRemove(prediction.id)}
+                      aria-label={`Hapus ${prediction.homeTeam} vs ${prediction.awayTeam} dari shortlist`}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
                   </div>
-                </button>
-              );
-            })}
+                </div>
+            ))}
           </div>
         )}
       </CardContent>
@@ -409,7 +396,7 @@ export default function Parlays() {
   const { data: predictions = [] } = usePredictionBoard();
   const [selectedParlay, setSelectedParlay] = useState<Parlay | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [selectedPredictionIds, setSelectedPredictionIds] = useState<string[]>([]);
+  const [selectedPredictionIds, setSelectedPredictionIds] = useState<string[]>(readSelectedPredictionIds);
   const [readiness, setReadiness] = useState<ParlayReadiness | null>(null);
   const [stake, setStake] = useState("");
   const verify = useVerifyParlays();
@@ -417,6 +404,10 @@ export default function Parlays() {
   const createFromPredictions = useCreateParlayFromPredictions();
   const { open, withPassword, onSubmit, onCancel } = useAdminPassword();
   const { toast } = useToast();
+
+  useEffect(() => {
+    writeSelectedPredictionIds(selectedPredictionIds);
+  }, [selectedPredictionIds]);
 
   const toggleParlay = (id: string) => {
     setSelectedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : current.length < 7 ? [...current, id] : current);
@@ -452,15 +443,6 @@ export default function Parlays() {
       });
     });
   };
-  const togglePrediction = (id: string) => {
-    setSelectedPredictionIds((current) =>
-      current.includes(id)
-        ? current.filter((value) => value !== id)
-        : current.length < 7
-          ? [...current, id]
-          : current,
-    );
-  };
   const runCreateFromPredictions = () => {
     withPassword((pwd) => {
       void pwd;
@@ -482,18 +464,23 @@ export default function Parlays() {
       });
     });
   };
+  const queuedPredictions = selectedPredictionIds
+    .map((id) => predictions.find((prediction) => prediction.id === id))
+    .filter((prediction): prediction is (typeof predictions)[number] => Boolean(prediction));
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-2">
         <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Parlays</h1>
-        <p className="text-muted-foreground">Review active AI parlays and see settled WIN/LOSS history. Click a row to view legs.</p>
+         <p className="text-muted-foreground">
+           Final workspace untuk meninjau shortlist dari AI Prediction Board, membuat parlay, dan memeriksa histori WIN/LOSS.
+         </p>
       </div>
 
-      <PredictionBoard
-        predictions={predictions}
+      <PredictionQueue
+        predictions={queuedPredictions}
         selectedIds={selectedPredictionIds}
-        onToggle={togglePrediction}
+        onRemove={(id) => setSelectedPredictionIds((current) => current.filter((value) => value !== id))}
         onCreate={runCreateFromPredictions}
         isCreating={createFromPredictions.isPending}
       />
