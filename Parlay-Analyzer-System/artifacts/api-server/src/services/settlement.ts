@@ -57,12 +57,12 @@ export function isNoBet(prediction: PendingPrediction): boolean {
   // recommendation is a real bet.
   const selectedMarket = (prediction.market_bet ?? prediction.best_market ?? "").trim().toLowerCase();
   if (selectedMarket !== "") {
-    return selectedMarket === "no_bet" || selectedMarket === "no bet";
+    return /^(no[\s_-]*bet|skip)$/.test(selectedMarket);
   }
 
   const text = (prediction.prediction_text ?? "").toLowerCase();
   return (
-    text.includes("no bet") ||
+    /no[\s_-]*bet/.test(text) ||
     text.includes("tidak disarankan") ||
     text.includes("tidak ada taruhan") ||
     text.includes("skip")
@@ -116,7 +116,11 @@ export function calculateResult(
   }
 
   /* Asian Handicap — dengan quarter line support */
-  if (market.includes("handicap") || market.includes("ah")) {
+  const isAsianHandicap = market.includes("handicap") ||
+    market.includes("spread") ||
+    market.includes("ah") ||
+    /\b(home|away|visitor|tamu)\b.*[-+]\d/.test(market);
+  if (isAsianHandicap) {
     const line = extractLine(market);
     if (line !== null) {
       const isAwaySelection = /\b(away|visitor|tamu)\b|(?:^|[_\s])2(?:$|[_\s])/.test(market);
@@ -150,14 +154,6 @@ export function calculateResult(
       : "LOSS";
   }
 
-  /* Fallback: coba inferensi dari teks prediksi */
-  if (text.includes("menang") && (text.includes("home") || text.includes("tuan rumah"))) {
-    return evaluatedHomeGoals > evaluatedAwayGoals ? "WIN" : "LOSS";
-  }
-  if (text.includes("menang") && (text.includes("away") || text.includes("tamu"))) {
-    return evaluatedAwayGoals > evaluatedHomeGoals ? "WIN" : "LOSS";
-  }
-
   /* 1x2 / Moneyline */
   if (market.includes("home") || market === "1" || market === "1x2_home") {
     return evaluatedHomeGoals > evaluatedAwayGoals ? "WIN" : "LOSS";
@@ -169,6 +165,14 @@ export function calculateResult(
     return evaluatedHomeGoals === evaluatedAwayGoals ? "WIN" : "LOSS";
   }
 
+  /* Fallback: coba inferensi dari teks prediksi */
+  if (text.includes("menang") && (text.includes("home") || text.includes("tuan rumah"))) {
+    return evaluatedHomeGoals > evaluatedAwayGoals ? "WIN" : "LOSS";
+  }
+  if (text.includes("menang") && (text.includes("away") || text.includes("tamu"))) {
+    return evaluatedAwayGoals > evaluatedHomeGoals ? "WIN" : "LOSS";
+  }
+
   return null; /* market tidak dikenali */
 }
 
@@ -176,7 +180,7 @@ export function calculateResult(
 function extractLine(market: string): number | null {
   const normalized = market.toLowerCase().replace(/,/g, ".");
   const lineMatch = normalized.match(
-    /(?:over|under|handicap|asian[\s_-]*handicap|spread|ah)[^\d+]*([-+]?\d+(?:[._]\d+)?)/,
+    /(?:over|under|handicap|asian[\s_-]*handicap|spread|ah).*?([-+]?\d+(?:[._]\d+)?)/,
   ) ?? normalized.match(/[-+]?\d+(?:[._]\d+)?/);
   if (!lineMatch) return null;
   const parsed = Number(lineMatch[1]!.replace("_", "."));
@@ -456,7 +460,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
 
     /* 3. Lewati prediksi "NO BET" — tidak ada taruhan → tidak ada settlement */
     if (isNoBet(prediction)) {
-      await supabase.from("ai_predictions").update({
+      const { error: noBetUpdateError } = await supabase.from("ai_predictions").update({
         status: "no_bet",
         home_score: homeGoals,
         away_score: awayGoals,
@@ -470,6 +474,9 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
           marketResolution: "no_selected_market",
         }),
       }).eq("id", prediction.id);
+      if (noBetUpdateError) {
+        logger.error({ err: noBetUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal menyimpan status NO BET");
+      }
       skipped++;
       continue;
     }
@@ -501,7 +508,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
         bestMarket: marketBet,
       }, "[SETTLEMENT] Market tidak dikenali — perlu review manual");
 
-      await supabase.from("ai_predictions").update({
+      const { error: manualUpdateError } = await supabase.from("ai_predictions").update({
         status: "settled_manual",
         home_score: homeGoals,
         away_score: awayGoals,
@@ -515,6 +522,9 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
           marketResolution: "unsupported_market",
         }),
       }).eq("id", prediction.id);
+      if (manualUpdateError) {
+        logger.error({ err: manualUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal menyimpan status manual");
+      }
 
       skipped++;
       continue;

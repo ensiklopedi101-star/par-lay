@@ -1052,7 +1052,14 @@ ${relationalBlock}
 8. Over 3.5 (% Home/Away): ${fmt(awayStats, "stats_over_35")}
 9. Under (0.5 hingga 5.5): ${fmt(awayStats, "stats_under")}
 10. Team Form (MP, W, D, L, Last 6, PPG): ${fmt(awayStats, "stats_team_form")}
-11. HT Win/Loss (Win/Draw/Loss %): ${fmt(awayStats, "stats_ht")}`;
+11. HT Win/Loss (Win/Draw/Loss %): ${fmt(awayStats, "stats_ht")}
+
+--- KONTRAK VALIDASI SEBELUM OUTPUT ---
+1. Bandingkan semua market yang memiliki odds; jangan memilih hanya karena market itu muncul lebih dulu.
+2. Pilih tepat satu market/line yang benar-benar ada pada snapshot jika edge terukur. Jika tidak, gunakan market/selection NO_BET.
+3. Tulis probability nyata eksplisit dalam rentang 0 sampai 1. Confidence 0-10 tidak boleh dipakai sebagai probability.
+4. Hitung ulang EV dengan odds snapshot selection: (probability × odds) - 1. Jika hasilnya <= 0, gunakan NO_BET.
+5. JSON selections hanya boleh merekomendasikan pertandingan ${homeTeam} vs ${awayTeam}; jangan menggabungkan fixture lain.`;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1231,23 +1238,23 @@ export function extractPredictionRecommendation(text: string, fixtureId?: string
     * parlay. Falling back to the first object is only safe for single-fixture
     * responses and previously caused the scanner to validate the wrong leg.
     */
+   const matchingSelection = fixtureId
+     ? selections.find((item) =>
+         item &&
+         typeof item === "object" &&
+         String((item as Record<string, unknown>).fixture_id ?? "").trim() === fixtureId,
+       )
+     : undefined;
    const selected = (
-     selections.find((item) =>
-       item &&
-       typeof item === "object" &&
-       (!fixtureId || String((item as Record<string, unknown>).fixture_id ?? "").trim() === fixtureId) &&
-       String((item as Record<string, unknown>).fixture_id ?? "").trim() !== "",
-     ) ??
-     selections.find((item) => item && typeof item === "object") ??
-     root
+     matchingSelection ??
+     (fixtureId && selections.length > 0
+       ? root
+       : selections.find((item) => item && typeof item === "object") ?? root)
    ) as Record<string, unknown>;
    const explicitSelection = String(selected.selection ?? "").trim();
    const market = String(selected.market ?? selected.market_bet ?? root.market_bet ?? "").trim();
-  const marketBet = explicitSelection && explicitSelection.toLowerCase() !== "no_bet"
-    ? explicitSelection
-    : market && market.toLowerCase() !== "no_bet"
-      ? market
-      : null;
+   const isNoBetToken = (value: string) => /^(no[\s_-]*bet|skip)$/i.test(value.trim());
+   const marketBet = [market, explicitSelection].find((value) => value && !isNoBetToken(value)) ?? null;
   const confidence = Math.max(0, Math.min(10, toFiniteNumber(selected.confidence ?? root.confidence)));
   const odds = Math.max(0, toFiniteNumber(selected.odds ?? root.odds));
   const rawEv = toFiniteNumber(selected.ev_percent ?? selected.ev ?? root.ev_percent ?? root.expected_value);
@@ -1530,17 +1537,15 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
       ? "AI tidak memilih market taruhan."
       : verifiedOdds == null
         ? "Market atau line rekomendasi AI tidak ditemukan pada odds snapshot provider."
-       : verifiedOdds == null
-         ? "Market atau line rekomendasi AI tidak ditemukan pada odds snapshot provider."
-         : parsedRecommendation.probability == null ||
-             parsedRecommendation.probability <= 0 ||
-             parsedRecommendation.probability >= 1
-           ? "Probabilitas nyata eksplisit tidak valid; confidence tidak digunakan sebagai probabilitas."
-           : parsedRecommendation.confidence < 6.5
-             ? "Confidence di bawah ambang minimum 6.5."
-             : computedEvPercent <= 0
-               ? "EV hasil perhitungan ulang tidak positif."
-               : undefined;
+        : parsedRecommendation.probability == null ||
+            parsedRecommendation.probability <= 0 ||
+            parsedRecommendation.probability >= 1
+          ? "Probabilitas nyata eksplisit tidak valid; confidence tidak digunakan sebagai probabilitas."
+          : parsedRecommendation.confidence < 6.5
+            ? "Confidence di bawah ambang minimum 6.5."
+            : computedEvPercent <= 0
+              ? "EV hasil perhitungan ulang tidak positif."
+              : undefined;
     const evAtAnalysis = recommendation.evPercent / 100;
 
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
