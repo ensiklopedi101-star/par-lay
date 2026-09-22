@@ -12,6 +12,7 @@ import Upload from "@/pages/upload";
 import Parlays from "@/pages/parlays";
 import SettingsPage from "@/pages/settings";
 import RiskCenter from "@/pages/risk-center";
+import AILearning from "@/pages/ai-learning";
 
 const queryClient = new QueryClient();
 
@@ -27,6 +28,7 @@ function Router() {
         <Route path="/upload" component={Upload} />
         <Route path="/settings" component={SettingsPage} />
         <Route path="/risk-center" component={RiskCenter} />
+        <Route path="/ai-learning" component={AILearning} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
