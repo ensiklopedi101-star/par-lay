@@ -28,7 +28,19 @@ export interface Health {
     invalidatedPredictions?: number;
     [key: string]: unknown;
   };
-  aiLearning?: { status?: string; hitRate?: number | null; [key: string]: unknown };
+  aiLearning?: {
+    status?: string;
+    hitRate?: number | null;
+    wins?: number;
+    losses?: number;
+    halfWins?: number;
+    halfLosses?: number;
+    pushes?: number;
+    settled?: number;
+    sampleSize?: number;
+    recommendedMarket?: string | null;
+    [key: string]: unknown;
+  };
   oddsApi?: { status?: string; [key: string]: unknown };
   timestamp?: string;
 }
@@ -601,6 +613,71 @@ export function useGetHealth() {
   return useQuery<Health>({
     queryKey: getGetHealthQueryKey(),
     queryFn: () => apiGet<Health>(`${API_BASE}/health`),
+  });
+}
+
+export interface LearningMarketBreakdown {
+  market: string;
+  family: string;
+  sampleSize: number;
+  wins: number;
+  losses: number;
+  halfWins: number;
+  halfLosses: number;
+  pushes: number;
+  hitRate: number | null;
+  averageEv: number | null;
+  averageOdds: number | null;
+  roiPercent: number | null;
+  roiSamples: number;
+}
+
+export interface LearningSummary {
+  generatedAt: string;
+  dataQuality: {
+    status: "usable" | "early_signal" | "insufficient";
+    sampleSize: number;
+    minimumRecommendedSample: number;
+    explanation: string;
+  };
+  totals: {
+    settled: number;
+    decisive: number;
+    wins: number;
+    losses: number;
+    halfWins: number;
+    halfLosses: number;
+    pushes: number;
+    noBetExcluded: number;
+    unknownOutcomes: number;
+    hitRate: number | null;
+    averageEv: number | null;
+    roiPercent: number | null;
+    roiSamples: number;
+  };
+  recommendedMarket: (LearningMarketBreakdown & { reason: string }) | null;
+  marketBreakdown: LearningMarketBreakdown[];
+  recentLessons: Array<{
+    fixtureId: number;
+    homeTeam: string;
+    awayTeam: string;
+    league: string;
+    market: string;
+    outcome: "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH";
+    odds: number | null;
+    ev: number | null;
+    lessonText: string;
+    createdAt: string | null;
+  }>;
+  learningRules: string[];
+}
+
+export const getLearningSummaryQueryKey = () => ["learning/summary"];
+export function useGetLearningSummary() {
+  return useQuery<LearningSummary>({
+    queryKey: getLearningSummaryQueryKey(),
+    queryFn: () => apiGet<LearningSummary>(`${API_BASE}/learning/summary`),
+    refetchInterval: 60_000,
   });
 }
 
