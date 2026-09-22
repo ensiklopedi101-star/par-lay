@@ -8,20 +8,24 @@ import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { cleanTeamName } from "../lib/team-name-cleaner";
-import { VALID_STAT_TYPES } from "../utils/stats-dictionary";
+import { VALID_STAT_TYPES, validateStatPayload } from "../utils/stats-dictionary";
 
 const router: IRouter = Router();
-
-/* API Key untuk ekstensi Chrome (bisa di-set via env var) */
-const EXTENSION_API_KEY = process.env["EXTENSION_API_KEY"];
 
 /**
  * Middleware: autentikasi API Key dari header x-api-key
  */
 function requireApiKey(req: any, res: any, next: any) {
-  const key = req.headers["x-api-key"] ?? req.headers["X-API-Key"] ?? "";
+  const configuredKey = process.env["EXTENSION_API_KEY"];
+  const authorization = String(req.headers.authorization ?? "");
+  const bearerKey = authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
+  const key = req.headers["x-api-key"]
+    ?? req.headers["X-API-Key"]
+    ?? req.headers["x-extension-api-key"]
+    ?? bearerKey
+    ?? "";
 
-  if (!EXTENSION_API_KEY) {
+  if (!configuredKey) {
     logger.error("EXTENSION_API_KEY not configured on server");
     res.status(500).json({
       error: "Server error: EXTENSION_API_KEY not configured. Add it to Replit Secrets.",
@@ -29,7 +33,7 @@ function requireApiKey(req: any, res: any, next: any) {
     return;
   }
 
-  if (!key || String(key) !== EXTENSION_API_KEY) {
+  if (!key || String(key) !== configuredKey) {
     logger.warn({ ip: req.ip }, "Unauthorized stats ingestion attempt");
     res.status(401).json({ error: "Unauthorized — invalid or missing x-api-key" });
     return;
@@ -43,10 +47,26 @@ function requireApiKey(req: any, res: any, next: any) {
  * Contoh: "england/premier-league" → "england-premier-league"
  */
 function normalizeLeagueSlug(raw: string): string {
-  return raw
+  let value = raw.trim();
+  try {
+    if (/^https?:\/\//i.test(value)) {
+      value = new URL(value).pathname;
+    }
+  } catch {
+    // Fall back to the raw value; validation below still prevents an empty slug.
+  }
+
+  const parts = value
+    .split(/[?#]/)[0]!
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !/^(www\.)?footystats\.org$/i.test(part))
+    .filter((part) => !/^\d{4}([-/]\d{2,4})?$/.test(part));
+
+  return parts
+    .join("-")
     .toLowerCase()
-    .trim()
-    .replace(/\//g, "-")     // slash → dash
     .replace(/\s+/g, "-")    // space → dash
     .replace(/-+/g, "-")      // collapse multiple dashes
     .replace(/^-|-$/g, "");  // trim dashes
@@ -89,6 +109,7 @@ async function upsertTeamStat(
     .eq("league_slug", leagueSlug)
     .eq("season", season)
     .ilike("team_name", cleanTeam)
+    .limit(1)
     .maybeSingle();
 
   if (lookupError) {
@@ -140,15 +161,15 @@ async function upsertTeamStat(
 
 router.post("/stats/ingest", requireApiKey, async (req, res) => {
   try {
-    const { raw_url_path, stat_type, season, teams } = req.body as {
-      raw_url_path?: string;
-      stat_type?: string;
-      season?: string;
-      teams?: Array<{ raw_team_name?: string; stat_data?: Record<string, unknown> }>;
-    };
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawUrlPath = body.raw_url_path ?? body.league_slug ?? body.leagueSlug ?? body.league_url ?? body.url;
+    const statType = body.stat_type ?? body.statType ?? body.category;
+    const rawSeason = body.season ?? body.season_id ?? body.seasonId;
+    const rawTeams = body.teams ?? body.data ?? body.rows;
+    const teams = Array.isArray(rawTeams) ? rawTeams as Array<Record<string, unknown>> : null;
 
     /* Validasi input */
-    if (!raw_url_path || !stat_type || !season || !teams || !Array.isArray(teams)) {
+    if (typeof rawUrlPath !== "string" || typeof statType !== "string" || typeof rawSeason !== "string" || !teams) {
       res.status(400).json({
         error: "Missing required fields: raw_url_path, stat_type, season, teams",
         example: {
@@ -162,19 +183,26 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
     }
 
     /* Validasi stat_type */
-    if (!VALID_STAT_TYPES.includes(stat_type)) {
+    if (!VALID_STAT_TYPES.includes(statType)) {
       res.status(400).json({
-        error: `Invalid stat_type: "${stat_type}"`,
+        error: `Invalid stat_type: "${statType}"`,
         valid_types: VALID_STAT_TYPES,
       });
       return;
     }
 
-    const leagueSlug = normalizeLeagueSlug(raw_url_path);
-    const normalizedSeason = normalizeSeason(season);
+    const leagueSlug = normalizeLeagueSlug(rawUrlPath);
+    const normalizedSeason = normalizeSeason(rawSeason);
+    if (!leagueSlug || !normalizedSeason || teams.length === 0) {
+      res.status(400).json({
+        error: "League, season, and at least one team are required after normalization",
+        normalized: { league_slug: leagueSlug, season: normalizedSeason, team_count: teams.length },
+      });
+      return;
+    }
 
     logger.info(
-      { leagueSlug, stat_type, season: normalizedSeason, teamCount: teams.length },
+      { leagueSlug, stat_type: statType, season: normalizedSeason, teamCount: teams.length },
       "STATS INGEST: Processing payload",
     );
 
@@ -183,11 +211,18 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
       team: string;
       success: boolean;
       error?: string;
+      warnings?: string[];
     }> = [];
 
     for (const team of teams) {
-      const rawName = team.raw_team_name;
-      const statData = team.stat_data;
+      const rawNameValue = team.raw_team_name ?? team.team_name ?? team.teamName ?? team.name ?? team.team;
+      const rawName = typeof rawNameValue === "string" ? rawNameValue.trim() : "";
+      const candidateData = team.stat_data ?? team.stats ?? team.values ?? team.data;
+      const statData = candidateData && typeof candidateData === "object" && !Array.isArray(candidateData)
+        ? candidateData as Record<string, unknown>
+        : Object.fromEntries(
+            Object.entries(team).filter(([key]) => !["raw_team_name", "team_name", "teamName", "name", "team"].includes(key)),
+          );
 
       if (!rawName || !statData || typeof statData !== "object") {
         results.push({
@@ -198,11 +233,17 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
         continue;
       }
 
-      const result = await upsertTeamStat(leagueSlug, normalizedSeason, rawName, stat_type, statData);
+      const validation = validateStatPayload(statType, statData);
+      const warnings = [
+        ...(validation.missing.length > 0 ? [`Missing expected metrics: ${validation.missing.join(", ")}`] : []),
+        ...(validation.unknown.length > 0 ? [`Unrecognized metrics preserved: ${validation.unknown.join(", ")}`] : []),
+      ];
+      const result = await upsertTeamStat(leagueSlug, normalizedSeason, rawName, statType, statData);
       results.push({
         team: rawName,
         success: result.success,
         error: result.error,
+        warnings: warnings.length > 0 ? warnings : undefined,
       });
     }
 
@@ -210,14 +251,15 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
     const failCount = results.length - successCount;
 
     logger.info(
-      { success: successCount, failed: failCount, league: leagueSlug, stat_type },
+      { success: successCount, failed: failCount, league: leagueSlug, stat_type: statType },
       "STATS INGEST: Done",
     );
 
     res.json({
-      success: true,
+      success: failCount === 0,
       // Compatibility fields for the Chrome extension contract.
-      ok: true,
+      ok: failCount === 0,
+      partial: successCount > 0 && failCount > 0,
       processed: results.length,
       success_count: successCount,
       fail_count: failCount,
@@ -226,7 +268,7 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
       result_rows: results,
       league_slug: leagueSlug,
       season: normalizedSeason,
-      stat_type,
+      stat_type: statType,
       details: results,
     });
   } catch (err) {
@@ -238,13 +280,15 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
 
 /* GET /api/stats/ingest-info — Info untuk ekstensi Chrome */
 router.get("/stats/ingest-info", (req, res) => {
-  const hasKey = !!EXTENSION_API_KEY;
+  const hasKey = !!process.env["EXTENSION_API_KEY"];
   res.json({
     endpoint: "POST /api/stats/ingest",
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-api-key": hasKey ? "<configured>" : "NOT CONFIGURED",
+      "x-extension-api-key": hasKey ? "<configured>" : "NOT CONFIGURED",
+      "Authorization": hasKey ? "Bearer <configured>" : "NOT CONFIGURED",
     },
     body_format: {
       raw_url_path: "string (e.g., england/premier-league)",
@@ -256,6 +300,14 @@ router.get("/stats/ingest-info", (req, res) => {
           stat_data: "object (key-value pairs)",
         },
       ],
+    },
+    accepted_aliases: {
+      league: ["raw_url_path", "league_slug", "leagueSlug", "league_url", "url"],
+      stat_type: ["stat_type", "statType", "category"],
+      season: ["season", "season_id", "seasonId"],
+      teams: ["teams", "data", "rows"],
+      team_name: ["raw_team_name", "team_name", "teamName", "name", "team"],
+      stat_data: ["stat_data", "stats", "values", "data"],
     },
     valid_stat_types: VALID_STAT_TYPES,
     api_key_configured: hasKey,

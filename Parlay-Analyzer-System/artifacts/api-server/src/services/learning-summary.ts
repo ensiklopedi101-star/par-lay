@@ -1,5 +1,4 @@
 import { supabase } from "../lib/supabase-client";
-import { logger } from "../lib/logger";
 
 export type LearningOutcome = "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH";
 
@@ -46,12 +45,16 @@ function normalizeOutcome(value: unknown): LearningOutcome | null {
 }
 
 function normalizeMarket(value: unknown): string {
-  const market = String(value ?? "")
+  const rawMarket = String(value ?? "")
     .trim()
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ");
-  if (!market) return "Unknown market";
-  return market
+  if (!rawMarket) return "Unknown market";
+  const lower = rawMarket.toLowerCase();
+  if (lower.includes("btts") || lower.includes("both teams to score")) {
+    return lower.includes("no") ? "BTTS No" : "BTTS Yes";
+  }
+  return rawMarket
     .split(" ")
     .map((part) => part.length <= 3 ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
@@ -83,7 +86,12 @@ function roiFor(outcome: LearningOutcome, odds: number | null): number | null {
   }
 }
 
-function finalizeMarket(accumulator: MarketAccumulator & { evTotal: number; evSamples: number; roiTotal: number }) {
+function finalizeMarket(accumulator: MarketAccumulator & {
+  evTotal: number;
+  evSamples: number;
+  oddsTotal: number;
+  roiTotal: number;
+}) {
   const decisive = accumulator.wins + accumulator.losses + accumulator.halfWins + accumulator.halfLosses;
   return {
     market: accumulator.market,
@@ -96,9 +104,7 @@ function finalizeMarket(accumulator: MarketAccumulator & { evTotal: number; evSa
     pushes: accumulator.pushes,
     hitRate: decisive > 0 ? (accumulator.wins + accumulator.halfWins) / decisive : null,
     averageEv: accumulator.evSamples > 0 ? accumulator.evTotal / accumulator.evSamples : null,
-    averageOdds: accumulator.roiSamples > 0
-      ? (accumulator.roiTotal + accumulator.roiSamples) / accumulator.roiSamples
-      : null,
+    averageOdds: accumulator.roiSamples > 0 ? accumulator.oddsTotal / accumulator.roiSamples : null,
     roiPercent: accumulator.roiSamples > 0 ? accumulator.roiTotal / accumulator.roiSamples : null,
     roiSamples: accumulator.roiSamples,
   };
@@ -133,13 +139,18 @@ export async function getLearningSummary() {
   let evSamples = 0;
   let totalRoi = 0;
   let roiSamples = 0;
-  const marketMap = new Map<string, MarketAccumulator & { evTotal: number; evSamples: number; roiTotal: number }>();
+  const marketMap = new Map<string, MarketAccumulator & {
+    evTotal: number;
+    evSamples: number;
+    oddsTotal: number;
+    roiTotal: number;
+  }>();
 
   const recentLessons = ((lessons ?? []) as LessonRow[])
     .map((lesson) => {
-      const outcome = normalizeOutcome(lesson.bet_result);
-      const market = normalizeMarket(lesson.market_bet);
       const prediction = predictionByFixture.get(String(lesson.fixture_id ?? ""));
+      const outcome = normalizeOutcome(lesson.bet_result);
+      const market = normalizeMarket(lesson.market_bet ?? prediction?.market_bet ?? prediction?.best_market);
       const odds = numberOrNull(prediction?.best_odds);
       const ev = numberOrNull(lesson.ev_at_bet);
       if (!outcome) {
@@ -179,6 +190,7 @@ export async function getLearningSummary() {
         roiSamples: 0,
         evTotal: 0,
         evSamples: 0,
+        oddsTotal: 0,
         roiTotal: 0,
       };
       current.total++;
@@ -192,6 +204,7 @@ export async function getLearningSummary() {
         current.evSamples++;
       }
       if (roi != null) {
+        current.oddsTotal += odds ?? 0;
         current.roiTotal += roi;
         current.roiSamples++;
       }

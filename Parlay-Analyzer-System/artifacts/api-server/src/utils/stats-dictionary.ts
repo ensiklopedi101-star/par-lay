@@ -135,10 +135,17 @@ export function validateStatPayload(
     return { valid: false, missing: [], unknown: ["Invalid stat_type"] };
   }
 
+  const normalizeMetric = (value: string) => value
+    .trim()
+    .toLowerCase()
+    .replace(/[%()]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
   const keys = Object.keys(statData);
-  const expected = meta.metrics.map((m) => m.toLowerCase().replace(/\s+/g, "_"));
-  const missing = expected.filter((e) => !keys.includes(e) && !keys.includes(e.replace(/_/g, " ")));
-  const unknown = keys.filter((k) => !expected.includes(k.toLowerCase().replace(/\s+/g, "_")));
+  const normalizedKeys = new Set(keys.map(normalizeMetric));
+  const expected = meta.metrics.map(normalizeMetric);
+  const missing = expected.filter((e) => !normalizedKeys.has(e));
+  const unknown = keys.filter((k) => !expected.includes(normalizeMetric(k)));
 
   return { valid: missing.length === 0, missing, unknown };
 }

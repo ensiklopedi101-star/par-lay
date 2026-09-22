@@ -30,3 +30,5 @@
 - [Performance log schema](performance-log-schema.md) — Feedback aggregates use `total_parlays`, `wins`, and `losses`; legacy column names fail silently if errors are ignored.
 - [Complete evaluation snapshot](evaluation-snapshot.md) — Keep full analysis inputs and append settlement outcomes in the versioned prediction JSON context.
 - [Scanner retry and learning integrity](scanner-learning-integrity.md) — Only usable selected markets suppress re-scan; write learning before settlement state so failed feedback remains retryable.
+- [AI learning transparency](ai-learning-transparency.md) — Hit rate alone is insufficient; show sample quality, outcomes, market ranking, and ROI limitations.
+- [Team stats extension ingestion](team-stats-extension.md) — Extension input is normalized at the API boundary; ingestion requires a matching EXTENSION_API_KEY.
