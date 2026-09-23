@@ -1610,9 +1610,15 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     home_team: homeTeam,
     away_team: awayTeam,
     league: leagueName,
+     // Keep the canonical recommendation fields and the legacy readers in
+     // sync. Risk Center, parlay history, and learning-summary still read
+     // best_market/expected_value/confidence_score from this table.
      market_bet: recommendation.marketBet,
+     best_market: recommendation.marketBet,
     best_odds: recommendation.odds > 1 ? recommendation.odds : null,
+     expected_value: evAtAnalysis,
     ev_at_analysis: evAtAnalysis,
+     confidence_score: recommendation.confidence,
      manual_context: {
        ...evaluationSnapshot,
        // Keep the compact legacy fields for existing readers.
