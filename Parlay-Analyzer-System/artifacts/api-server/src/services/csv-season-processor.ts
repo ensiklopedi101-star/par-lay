@@ -1,6 +1,6 @@
 import { parse } from "csv-parse";
 import { logger } from "../lib/logger";
-import { cleanTeamName, slugifyTeamName } from "../lib/team-name-cleaner";
+import { canonicalTeamName, slugifyTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
 import { supabase } from "../lib/supabase-client";
 
 /* ────────────────────────────────────────────────
@@ -317,7 +317,7 @@ export async function parseSeasonCsv(
       continue;
     }
 
-    const cleaned = cleanTeamName(teamRaw);
+    const cleaned = canonicalTeamName(teamRaw, leagueSlug);
     const slug = slugifyTeamName(cleaned);
 
     if (!slug) {
@@ -400,13 +400,12 @@ export async function upsertSeasonStats(
   for (const row of rows) {
     try {
       // 1. Fetch existing row
-      const { data: existing, error: fetchError } = await supabase
+      const { data: existingRows, error: fetchError } = await supabase
         .from("team_season_stats")
         .select("*")
         .eq("league_slug", row.league_slug)
         .eq("season", row.season)
-        .eq("team_name", row.team_name)
-        .single();
+        .limit(500);
 
       if (fetchError && fetchError.code !== "PGRST116") {
         // PGRST116 = "JSON object requested, multiple (or no) rows returned"
@@ -417,6 +416,10 @@ export async function upsertSeasonStats(
         errors++;
         continue;
       }
+
+      const existing = (existingRows ?? []).find((candidate) =>
+        teamIdentityKey(String(candidate.team_name ?? ""), row.league_slug) === teamIdentityKey(row.team_name, row.league_slug),
+      );
 
       // 2. Build data object: merge existing data with new data
       const dataToInsert: Record<string, unknown> = {
@@ -478,11 +481,12 @@ export async function upsertSeasonStats(
       }
 
       // 4. Upsert
-      const { error } = await supabase
-        .from("team_season_stats")
-        .upsert(dataToInsert, {
-          onConflict: "league_slug, season, team_name",
-        });
+      const write = existing?.id
+        ? supabase.from("team_season_stats").update(dataToInsert).eq("id", existing.id)
+        : supabase.from("team_season_stats").upsert(dataToInsert, {
+            onConflict: "league_slug, season, team_name",
+          });
+      const { error } = await write;
 
       if (error) {
         logger.error(

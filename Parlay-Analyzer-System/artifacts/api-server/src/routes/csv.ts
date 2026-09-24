@@ -3,7 +3,7 @@ import multer from "multer";
 import { parse } from "csv-parse";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
-import { cleanTeamName } from "../lib/team-name-cleaner";
+import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
 
 const router: IRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -125,7 +125,7 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
         continue;
       }
 
-      const teamName = cleanTeamName(rawTeam);
+       const teamName = canonicalTeamName(rawTeam, leagueSlug);
       if (!teamName) {
         logger.debug({ rawTeam }, "Row skipped: empty after cleaning");
         skipped++;
@@ -134,13 +134,15 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
 
       try {
         // Fetch existing row from Supabase
-        const { data: existing } = await supabase
+        const { data: existingRows } = await supabase
           .from("team_season_stats")
           .select("*")
           .eq("league_slug", leagueSlug)
           .eq("season", season)
-          .eq("team_name", teamName)
-          .single();
+          .limit(500);
+        const existing = (existingRows ?? []).find((candidate) =>
+          teamIdentityKey(String(candidate.team_name ?? ""), leagueSlug) === teamIdentityKey(teamName, leagueSlug),
+        );
 
         // Build the JSON payload for this csvType
         const jsonPayload = { ...row };   // keep as-is (strings)
@@ -171,11 +173,12 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
 
         logger.debug({ teamName, csvType, keys: Object.keys(jsonPayload) }, "Upserting row");
 
-        const { error } = await supabase
-          .from("team_season_stats")
-          .upsert(dataToInsert, {
-            onConflict: "league_slug, season, team_name",
-          });
+         const write = existing?.id
+           ? supabase.from("team_season_stats").update(dataToInsert).eq("id", existing.id)
+           : supabase.from("team_season_stats").upsert(dataToInsert, {
+               onConflict: "league_slug, season, team_name",
+             });
+         const { error } = await write;
 
         if (error) {
           logger.error({ error, teamName, csvType }, "Supabase upsert error");

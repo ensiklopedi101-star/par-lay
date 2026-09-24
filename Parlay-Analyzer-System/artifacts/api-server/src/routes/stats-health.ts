@@ -1,6 +1,8 @@
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
+import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
+import { mergeTeamStatsRows } from "../lib/team-stats-merge";
 import { assessTeamStatsQuality, REQUIRED_STAT_KEYS } from "../services/ai-analysis";
 
 const router: IRouter = Router();
@@ -68,11 +70,27 @@ router.get("/stats/health", async (_req, res) => {
     const scanDays = Number.isInteger(Number(config?.scan_days)) ? Number(config?.scan_days) : 11;
     const now = Date.now();
     const staleCutoff = now - STATS_STALE_DAYS * 24 * 60 * 60 * 1000;
-    const rowsByLeague = new Map<string, StatsRow[]>();
+    const mergedByTeam = new Map<string, StatsRow>();
 
     for (const row of (statsRows ?? []) as unknown as StatsRow[]) {
       if (!row.league_slug) continue;
-      const key = canonicalLeague(row.league_slug);
+      const canonicalTeam = canonicalTeamName(String(row.team_name ?? ""), row.league_slug);
+      if (!canonicalTeam) continue;
+      const key = [
+        canonicalLeague(row.league_slug),
+        String(row.season ?? ""),
+        teamIdentityKey(canonicalTeam, row.league_slug),
+      ].join("::");
+      const current = mergedByTeam.get(key);
+      const merged = mergeTeamStatsRows(current ? [current, row] : [row]) as StatsRow;
+      merged.team_name = canonicalTeam;
+      merged.league_slug = row.league_slug;
+      mergedByTeam.set(key, merged);
+    }
+
+    const rowsByLeague = new Map<string, StatsRow[]>();
+    for (const row of mergedByTeam.values()) {
+      const key = canonicalLeague(String(row.league_slug));
       const current = rowsByLeague.get(key) ?? [];
       current.push(row);
       rowsByLeague.set(key, current);

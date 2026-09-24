@@ -7,7 +7,7 @@
 import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
-import { cleanTeamName } from "../lib/team-name-cleaner";
+import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
 import { VALID_STAT_TYPES, validateStatPayload } from "../utils/stats-dictionary";
 
 const router: IRouter = Router();
@@ -100,21 +100,22 @@ async function upsertTeamStat(
   statType: string,
   statData: Record<string, unknown>,
 ): Promise<{ success: boolean; error?: string }> {
-  const cleanTeam = cleanTeamName(teamName);
+  const cleanTeam = canonicalTeamName(teamName, leagueSlug);
 
   // 1. Cek apakah row sudah ada
-  const { data: existing, error: lookupError } = await supabase
+  const { data: existingRows, error: lookupError } = await supabase
     .from("team_season_stats")
     .select("id, " + statType)
     .eq("league_slug", leagueSlug)
     .eq("season", season)
-    .ilike("team_name", cleanTeam)
-    .limit(1)
-    .maybeSingle();
+    .limit(500);
 
   if (lookupError) {
     return { success: false, error: `Existing-row lookup failed: ${lookupError.message}` };
   }
+  const existing = (existingRows ?? []).find((row) =>
+    teamIdentityKey(String((row as Record<string, unknown>).team_name ?? ""), leagueSlug) === teamIdentityKey(cleanTeam, leagueSlug),
+  );
   const existingId = existing && typeof existing === "object" && "id" in existing
     ? String((existing as { id: string }).id)
     : null;

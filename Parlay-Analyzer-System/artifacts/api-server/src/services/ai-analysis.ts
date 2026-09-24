@@ -1,7 +1,8 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
-import { cleanTeamName } from "../lib/team-name-cleaner";
+import { teamIdentityKey } from "../lib/team-name-cleaner";
+import { mergeTeamStatsRows } from "../lib/team-stats-merge";
 import { latestOddsByMarket } from "./odds-history";
 import { getGeminiModel } from "./model-discovery";
 import { classifyOddsMarket } from "./odds-fetcher";
@@ -584,47 +585,8 @@ interface StandingContext {
   form: string;
 }
 
-const TEAM_NAME_ALIASES: Record<string, string> = {
-  united: "utd",
-  "manchester utd": "man utd",
-  // Serie A provider names → canonical stats names.
-  "ac milan": "milan",
-  "ac monza": "monza",
-  "acf fiorentina": "fiorentina",
-  "atalanta bc": "atalanta",
-  "bologna fc": "bologna",
-  "cagliari calcio": "cagliari",
-  "como 1907": "como",
-  "empoli fc": "empoli",
-  "frosinone calcio": "frosinone",
-  "genoa cfc": "genoa",
-  "hellas verona": "verona",
-  "inter milan": "inter",
-  "inter milano": "inter",
-  "internazionale": "inter",
-  "juventus fc": "juventus",
-  "juventus turin": "juventus",
-  "lazio fc": "lazio",
-  "lazio rome": "lazio",
-  "lecce us": "lecce",
-  "parma calcio": "parma",
-  "roma fc": "roma",
-  "sassuolo calcio": "sassuolo",
-  "ssc napoli": "napoli",
-  "torino fc": "torino",
-  "udinese calcio": "udinese",
-  "venezia fc": "venezia",
-  psg: "paris",
-};
-
-function normalizeTeamForMatch(name: string): string {
-  const cleaned = cleanTeamName(name)
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-  return TEAM_NAME_ALIASES[cleaned] ?? cleaned.replace(/\bunited\b/g, "utd");
+function normalizeTeamForMatch(name: string, leagueSlug?: string): string {
+  return teamIdentityKey(name, leagueSlug);
 }
 
 function leagueSlugCandidates(leagueSlug: string): string[] {
@@ -666,9 +628,9 @@ function matchesPlayedFromStats(row: Record<string, unknown> | undefined): numbe
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function teamMatchScore(requested: string, candidate: string): number {
-  const wanted = normalizeTeamForMatch(requested);
-  const actual = normalizeTeamForMatch(candidate);
+function teamMatchScore(requested: string, candidate: string, leagueSlug?: string): number {
+  const wanted = normalizeTeamForMatch(requested, leagueSlug);
+  const actual = normalizeTeamForMatch(candidate, leagueSlug);
   if (!wanted || !actual) return 0;
   if (wanted === actual) return 100;
   const wantedTokens = new Set(wanted.split(" "));
@@ -680,10 +642,10 @@ function teamMatchScore(requested: string, candidate: string): number {
   return 0;
 }
 
-const STATS_COLUMNS = "stats_xg, stats_fts, stats_btts, stats_goals_conceded, stats_goals_scored, stats_shots, stats_over_25, stats_over_35, stats_under, stats_team_form, stats_ht, season, team_name, league_slug";
+const STATS_COLUMNS = "stats_xg, stats_fts, stats_btts, stats_goals_conceded, stats_goals_scored, stats_shots, stats_over_25, stats_over_35, stats_under, stats_team_form, stats_ht, season, team_name, league_slug, updated_at";
 
 function teamStatsCacheKey(teamName: string, leagueSlug: string): string {
-  return `${normalizeTeamForMatch(teamName)}::${leagueSlug.trim().toLowerCase()}`;
+  return `${normalizeTeamForMatch(teamName, leagueSlug)}::${leagueSlug.trim().toLowerCase()}`;
 }
 
 /**
@@ -721,18 +683,38 @@ async function findTeamStats(teamName: string, leagueSlug: string): Promise<Reco
   }
 
   const matches = (data ?? [])
-    .map((row) => ({ row: row as Record<string, unknown>, score: teamMatchScore(teamName, String(row.team_name ?? "")) }))
+    .map((row) => ({ row: row as Record<string, unknown>, score: teamMatchScore(teamName, String(row.team_name ?? ""), leagueSlug) }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       return seasonStart(b.row.season) - seasonStart(a.row.season);
     });
 
-  const best = matches[0]?.row;
+  /*
+   * Legacy imports can contain multiple rows for one entity, such as
+   * "Leipzig" and "RB Leipzig". Merge those rows in memory as a safety net
+   * while persisted data is being normalized.
+   */
+  const grouped = new Map<string, Record<string, unknown>[]>();
+  for (const match of matches) {
+    const key = `${teamIdentityKey(String(match.row.team_name ?? ""), leagueSlug)}::${String(match.row.season ?? "")}`;
+    const group = grouped.get(key) ?? [];
+    group.push(match.row);
+    grouped.set(key, group);
+  }
+  const mergedMatches = Array.from(grouped.values()).map((rows) => ({
+    row: mergeTeamStatsRows(rows),
+    score: Math.max(...rows.map((row) => teamMatchScore(teamName, String(row.team_name ?? ""), leagueSlug))),
+  })).sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return seasonStart(b.row.season) - seasonStart(a.row.season);
+  });
+
+  const best = mergedMatches[0]?.row;
   if (!best) return {};
 
   const currentYear = new Date().getFullYear();
-  const currentRows = matches.filter((entry) => seasonIncludesYear(entry.row.season, currentYear));
+  const currentRows = mergedMatches.filter((entry) => seasonIncludesYear(entry.row.season, currentYear));
   const current = currentRows[0]?.row;
   const baseline = best;
   const matchesPlayed = matchesPlayedFromStats(current);

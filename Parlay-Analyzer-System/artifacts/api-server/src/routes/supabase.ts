@@ -1,6 +1,8 @@
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
+import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
+import { mergeTeamStatsRows } from "../lib/team-stats-merge";
 
 const router: IRouter = Router();
 
@@ -173,7 +175,24 @@ router.get("/supabase/standings", async (req, res) => {
       return "";
     }
 
-    const rows = (data ?? []).map((row) => {
+    const mergedByTeam = new Map<string, Record<string, unknown>>();
+    for (const row of data ?? []) {
+      const leagueSlug = String(row.league_slug ?? "");
+      const canonicalTeam = canonicalTeamName(String(row.team_name ?? ""), leagueSlug);
+      const key = [
+        leagueSlug,
+        String(row.season ?? ""),
+        teamIdentityKey(canonicalTeam, leagueSlug),
+      ].join("::");
+      const merged = mergeTeamStatsRows([
+        ...(mergedByTeam.has(key) ? [mergedByTeam.get(key)!] : []),
+        row as Record<string, unknown>,
+      ]);
+      merged.team_name = canonicalTeam;
+      mergedByTeam.set(key, merged);
+    }
+
+    const rows = Array.from(mergedByTeam.values()).map((row) => {
       const form = (row.stats_team_form as Record<string, unknown>) ?? {};
       const toNum = (v: unknown) => {
         const n = typeof v === "string" ? Number(v) : Number(v ?? 0);
@@ -203,7 +222,7 @@ router.get("/supabase/standings", async (req, res) => {
 
     // Sort per league, then assign position per league (not global)
     const groupedByLeague = rows.reduce<Record<string, typeof rows>>((acc, row) => {
-      const lg = row.league_name;
+      const lg = String(row.league_name ?? "");
       if (!acc[lg]) acc[lg] = [];
       acc[lg].push(row);
       return acc;
