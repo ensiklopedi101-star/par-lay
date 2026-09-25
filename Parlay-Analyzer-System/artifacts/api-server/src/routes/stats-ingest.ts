@@ -7,8 +7,14 @@
 import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
-import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
+import { canonicalTeamName } from "../lib/team-name-cleaner";
 import { VALID_STAT_TYPES, validateStatPayload } from "../utils/stats-dictionary";
+import {
+  findEquivalentTeamStatsRows,
+  mergeTeamStatsRows,
+  preferredTeamDisplayName,
+  TEAM_STATS_JSON_COLUMNS,
+} from "../lib/team-stats-merge";
 
 const router: IRouter = Router();
 
@@ -105,7 +111,7 @@ async function upsertTeamStat(
   // 1. Cek apakah row sudah ada
   const { data: existingRows, error: lookupError } = await supabase
     .from("team_season_stats")
-    .select("id, " + statType)
+    .select("*")
     .eq("league_slug", leagueSlug)
     .eq("season", season)
     .limit(500);
@@ -113,24 +119,39 @@ async function upsertTeamStat(
   if (lookupError) {
     return { success: false, error: `Existing-row lookup failed: ${lookupError.message}` };
   }
-  const existing = (existingRows ?? []).find((row) =>
-    teamIdentityKey(String((row as Record<string, unknown>).team_name ?? ""), leagueSlug) === teamIdentityKey(cleanTeam, leagueSlug),
+  const candidates = findEquivalentTeamStatsRows(
+    (existingRows ?? []) as unknown as Array<Record<string, unknown>>,
+    cleanTeam,
+    leagueSlug,
   );
-  const existingId = existing && typeof existing === "object" && "id" in existing
-    ? String((existing as { id: string }).id)
-    : null;
+  const displayTeam = preferredTeamDisplayName(cleanTeam, candidates, leagueSlug);
+  const target = candidates.find((row) =>
+    String(row.team_name ?? "").trim().toLowerCase() === displayTeam.trim().toLowerCase(),
+  ) ?? candidates[0];
+  const existingId = target?.id == null ? null : String(target.id);
+  const mergedExisting = mergeTeamStatsRows(candidates);
 
   const payload: Record<string, unknown> = {
     league_slug: leagueSlug,
     season,
-    team_name: cleanTeam,
+    team_name: displayTeam,
     updated_at: new Date().toISOString(),
   };
 
-  // 2. Hanya set kolom yang sesuai stat_type
-  payload[statType] = statData;
+  // Fold complementary categories from any legacy aliases into the row being updated.
+  for (const column of TEAM_STATS_JSON_COLUMNS) {
+    const existingValue = mergedExisting[column];
+    if (existingValue !== null && existingValue !== undefined) payload[column] = existingValue;
+  }
+  const existingStat = mergedExisting[statType];
+  payload[statType] = {
+    ...(existingStat && typeof existingStat === "object" && !Array.isArray(existingStat)
+      ? existingStat as Record<string, unknown>
+      : {}),
+    ...statData,
+  };
 
-  if (existing && existingId) {
+  if (target && existingId) {
     // Update existing row (hanya kolom stat_type yang berubah)
     // Match by the same natural key to avoid relying on id typing.
     const { error } = await supabase

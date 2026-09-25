@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { teamIdentityKey } from "../lib/team-name-cleaner";
-import { mergeTeamStatsRows } from "../lib/team-stats-merge";
+import { findEquivalentTeamStatsRows, mergeTeamStatsRows } from "../lib/team-stats-merge";
 import { latestOddsByMarket } from "./odds-history";
 import { getGeminiModel } from "./model-discovery";
 import { classifyOddsMarket } from "./odds-fetcher";
@@ -628,20 +628,6 @@ function matchesPlayedFromStats(row: Record<string, unknown> | undefined): numbe
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function teamMatchScore(requested: string, candidate: string, leagueSlug?: string): number {
-  const wanted = normalizeTeamForMatch(requested, leagueSlug);
-  const actual = normalizeTeamForMatch(candidate, leagueSlug);
-  if (!wanted || !actual) return 0;
-  if (wanted === actual) return 100;
-  const wantedTokens = new Set(wanted.split(" "));
-  const actualTokens = new Set(actual.split(" "));
-  const overlap = [...wantedTokens].filter((token) => actualTokens.has(token)).length;
-  const coverage = overlap / Math.max(wantedTokens.size, actualTokens.size);
-  if (coverage >= 0.75) return 70 + Math.round(coverage * 20);
-  if (coverage >= 0.5 && (wanted.includes(actual) || actual.includes(wanted))) return 55;
-  return 0;
-}
-
 const STATS_COLUMNS = "stats_xg, stats_fts, stats_btts, stats_goals_conceded, stats_goals_scored, stats_shots, stats_over_25, stats_over_35, stats_under, stats_team_form, stats_ht, season, team_name, league_slug, updated_at";
 
 function teamStatsCacheKey(teamName: string, leagueSlug: string): string {
@@ -682,40 +668,28 @@ async function findTeamStats(teamName: string, leagueSlug: string): Promise<Reco
     return {};
   }
 
-  const matches = (data ?? [])
-    .map((row) => ({ row: row as Record<string, unknown>, score: teamMatchScore(teamName, String(row.team_name ?? ""), leagueSlug) }))
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return seasonStart(b.row.season) - seasonStart(a.row.season);
-    });
-
-  /*
-   * Legacy imports can contain multiple rows for one entity, such as
-   * "Leipzig" and "RB Leipzig". Merge those rows in memory as a safety net
-   * while persisted data is being normalized.
-   */
+  const matchingRows = findEquivalentTeamStatsRows(
+    (data ?? []) as unknown as Array<Record<string, unknown>>,
+    teamName,
+    leagueSlug,
+  );
   const grouped = new Map<string, Record<string, unknown>[]>();
-  for (const match of matches) {
-    const key = `${teamIdentityKey(String(match.row.team_name ?? ""), leagueSlug)}::${String(match.row.season ?? "")}`;
+  for (const row of matchingRows) {
+    const key = String(row.season ?? "");
     const group = grouped.get(key) ?? [];
-    group.push(match.row);
+    group.push(row);
     grouped.set(key, group);
   }
-  const mergedMatches = Array.from(grouped.values()).map((rows) => ({
-    row: mergeTeamStatsRows(rows),
-    score: Math.max(...rows.map((row) => teamMatchScore(teamName, String(row.team_name ?? ""), leagueSlug))),
-  })).sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return seasonStart(b.row.season) - seasonStart(a.row.season);
-  });
+  const mergedMatches = Array.from(grouped.values())
+    .map((rows) => mergeTeamStatsRows(rows))
+    .sort((a, b) => seasonStart(b.season) - seasonStart(a.season));
 
-  const best = mergedMatches[0]?.row;
+  const best = mergedMatches[0];
   if (!best) return {};
 
   const currentYear = new Date().getFullYear();
-  const currentRows = mergedMatches.filter((entry) => seasonIncludesYear(entry.row.season, currentYear));
-  const current = currentRows[0]?.row;
+  const currentRows = mergedMatches.filter((row) => seasonIncludesYear(row.season, currentYear));
+  const current = currentRows[0];
   const baseline = best;
   const matchesPlayed = matchesPlayedFromStats(current);
 

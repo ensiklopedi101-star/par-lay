@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
-import { mergeTeamStatsRows } from "../lib/team-stats-merge";
+import { groupEquivalentTeamStatsRows, mergeTeamStatsRows } from "../lib/team-stats-merge";
 import { assessTeamStatsQuality, REQUIRED_STAT_KEYS } from "../services/ai-analysis";
 
 const router: IRouter = Router();
@@ -58,7 +58,7 @@ router.get("/stats/health", async (_req, res) => {
       supabase.from("scheduler_config").select("leagues, scan_days").limit(1).maybeSingle(),
        supabase
          .from("team_season_stats")
-         .select(`league_slug, team_name, updated_at, ${REQUIRED_STAT_KEYS.join(", ")}`)
+         .select(`league_slug, season, team_name, updated_at, ${REQUIRED_STAT_KEYS.join(", ")}`)
          .limit(5000),
     ]);
 
@@ -72,7 +72,10 @@ router.get("/stats/health", async (_req, res) => {
     const staleCutoff = now - STATS_STALE_DAYS * 24 * 60 * 60 * 1000;
     const mergedByTeam = new Map<string, StatsRow>();
 
-    for (const row of (statsRows ?? []) as unknown as StatsRow[]) {
+    const groupedStatsRows = groupEquivalentTeamStatsRows(
+      (statsRows ?? []) as unknown as Array<Record<string, unknown>>,
+    ) as unknown as StatsRow[];
+    for (const row of groupedStatsRows) {
       if (!row.league_slug) continue;
       const canonicalTeam = canonicalTeamName(String(row.team_name ?? ""), row.league_slug);
       if (!canonicalTeam) continue;

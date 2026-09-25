@@ -3,7 +3,13 @@ import multer from "multer";
 import { parse } from "csv-parse";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
-import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
+import { canonicalTeamName } from "../lib/team-name-cleaner";
+import {
+  findEquivalentTeamStatsRows,
+  groupEquivalentTeamStatsRows,
+  mergeTeamStatsRows,
+  preferredTeamDisplayName,
+} from "../lib/team-stats-merge";
 
 const router: IRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -140,9 +146,16 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
           .eq("league_slug", leagueSlug)
           .eq("season", season)
           .limit(500);
-        const existing = (existingRows ?? []).find((candidate) =>
-          teamIdentityKey(String(candidate.team_name ?? ""), leagueSlug) === teamIdentityKey(teamName, leagueSlug),
+        const matchingRows = findEquivalentTeamStatsRows(
+          (existingRows ?? []) as unknown as Array<Record<string, unknown>>,
+          teamName,
+          leagueSlug,
         );
+        const existing = mergeTeamStatsRows(matchingRows);
+        const displayTeam = preferredTeamDisplayName(teamName, matchingRows, leagueSlug);
+        const target = matchingRows.find((candidate) =>
+          String(candidate.team_name ?? "").trim().toLowerCase() === displayTeam.trim().toLowerCase(),
+        ) ?? matchingRows[0];
 
         // Build the JSON payload for this csvType
         const jsonPayload = { ...row };   // keep as-is (strings)
@@ -152,7 +165,7 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
         const dataToInsert: Record<string, unknown> = {
           league_slug: leagueSlug,
           season,
-          team_name: teamName,
+          team_name: displayTeam,
         };
 
         // Preserve existing JSONB columns
@@ -173,8 +186,8 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
 
         logger.debug({ teamName, csvType, keys: Object.keys(jsonPayload) }, "Upserting row");
 
-         const write = existing?.id
-           ? supabase.from("team_season_stats").update(dataToInsert).eq("id", existing.id)
+         const write = target?.id
+           ? supabase.from("team_season_stats").update(dataToInsert).eq("id", target.id)
            : supabase.from("team_season_stats").upsert(dataToInsert, {
                onConflict: "league_slug, season, team_name",
              });
@@ -216,7 +229,7 @@ router.get("/csv/teams", async (req, res) => {
       return;
     }
 
-    res.json(data ?? []);
+    res.json(groupEquivalentTeamStatsRows((data ?? []) as unknown as Array<Record<string, unknown>>));
   } catch (err) {
     logger.error({ err }, "Failed to fetch team stats");
     res.status(500).json({ error: "Failed to fetch team stats" });

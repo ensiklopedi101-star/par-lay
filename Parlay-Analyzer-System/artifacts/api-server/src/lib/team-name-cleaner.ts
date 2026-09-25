@@ -108,12 +108,18 @@ function normalizeNameKey(value: string): string {
     .replace(/\s+/g, " ");
 }
 
-function normalizeLeagueKey(value: string | null | undefined): string {
+export function normalizeLeagueKey(value: string | null | undefined): string {
   return String(value ?? "")
     .trim()
     .toLowerCase()
     .replace(/[\/_\s]+/g, "-")
     .replace(/-+/g, "-");
+}
+
+function normalizeLeagueIdentity(value: string | null | undefined): string {
+  return normalizeLeagueKey(value)
+    .replace(/-la-liga$/, "-laliga")
+    .replace(/republic-of-korea/g, "south-korea");
 }
 
 /**
@@ -200,6 +206,78 @@ export function teamIdentityKey(raw: string, leagueSlug?: string | null): string
   return normalizeNameKey(canonicalTeamName(raw, leagueSlug));
 }
 
+const TEAM_NAME_DESCRIPTORS = new Set([
+  "fc", "afc", "cf", "sc", "ssc", "ac", "as", "us", "pfc", "dfc",
+  "sv", "tsv", "bsc", "rb", "club", "football", "futbol", "calcio",
+  "the", "de", "da", "do", "del",
+]);
+
+const TEAM_TOKEN_ALIASES: Record<string, string> = {
+  man: "manchester",
+  utd: "united",
+  munchen: "munich",
+  koln: "cologne",
+  st: "saint",
+};
+
+function teamNameTokens(raw: string, leagueSlug?: string | null): string[] {
+  const normalized = normalizeNameKey(canonicalTeamName(raw, leagueSlug));
+  const rawTokens = normalized.split(" ").filter(Boolean);
+  return rawTokens
+    .filter((token, index) => !(token === "1" && rawTokens[index + 1] === "fc"))
+    .filter((token) => !TEAM_NAME_DESCRIPTORS.has(token))
+    .map((token) => TEAM_TOKEN_ALIASES[token] ?? token);
+}
+
+/**
+ * Compare two team labels conservatively. Exact/canonical aliases always match;
+ * otherwise, token variants are accepted only when the shorter name is
+ * distinctive within the league's known team names. This supports provider
+ * labels such as "Leeds" / "Leeds United" without guessing between clubs such
+ * as Manchester United and Newcastle United for the label "United".
+ */
+export function teamNamesEquivalent(
+  first: string,
+  second: string,
+  leagueSlug?: string | null,
+  teamUniverse: string[] = [],
+): boolean {
+  const firstKey = teamIdentityKey(first, leagueSlug);
+  const secondKey = teamIdentityKey(second, leagueSlug);
+  if (!firstKey || !secondKey) return false;
+  if (firstKey === secondKey) return true;
+
+  const firstTokens = teamNameTokens(first, leagueSlug);
+  const secondTokens = teamNameTokens(second, leagueSlug);
+  if (firstTokens.length === 0 || secondTokens.length === 0) return false;
+
+  const firstSet = new Set(firstTokens);
+  const secondSet = new Set(secondTokens);
+  if (firstSet.size === secondSet.size && [...firstSet].every((token) => secondSet.has(token))) {
+    return true;
+  }
+
+  const shorter = firstSet.size < secondSet.size ? firstSet : secondSet;
+  const longer = shorter === firstSet ? secondSet : firstSet;
+  if (![...shorter].every((token) => longer.has(token))) return false;
+
+  const aliasKey = shorter === firstSet ? firstKey : secondKey;
+  const competingEntityKeys = new Set(
+    teamUniverse
+      .filter((name) => teamIdentityKey(name, leagueSlug) !== aliasKey)
+      .filter((name) => {
+        const candidateTokens = new Set(teamNameTokens(name, leagueSlug));
+        return [...shorter].every((token) => candidateTokens.has(token));
+      })
+      .map((name) => teamIdentityKey(name, leagueSlug)),
+  );
+  return competingEntityKeys.size <= 1;
+}
+
+function leagueIdentityKey(value: unknown): string {
+  return normalizeLeagueIdentity(String(value ?? ""));
+}
+
 /**
  * Expose the alias dictionaries for diagnostics and admin tooling without
  * allowing callers to mutate the internal maps.
@@ -215,6 +293,8 @@ export function getTeamAliasDictionary(): {
     ),
   };
 }
+
+export { leagueIdentityKey };
 
 /**
  * Convert a cleaned name to a slug for uniqueness.

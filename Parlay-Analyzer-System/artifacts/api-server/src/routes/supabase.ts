@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
-import { mergeTeamStatsRows } from "../lib/team-stats-merge";
+import { groupEquivalentTeamStatsRows, mergeTeamStatsRows } from "../lib/team-stats-merge";
 
 const router: IRouter = Router();
 
@@ -176,7 +176,10 @@ router.get("/supabase/standings", async (req, res) => {
     }
 
     const mergedByTeam = new Map<string, Record<string, unknown>>();
-    for (const row of data ?? []) {
+    const groupedRows = groupEquivalentTeamStatsRows(
+      (data ?? []) as unknown as Array<Record<string, unknown>>,
+    ) as unknown as NonNullable<typeof data>;
+    for (const row of groupedRows) {
       const leagueSlug = String(row.league_slug ?? "");
       const canonicalTeam = canonicalTeamName(String(row.team_name ?? ""), leagueSlug);
       const key = [

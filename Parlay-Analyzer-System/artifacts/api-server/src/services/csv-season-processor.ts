@@ -1,6 +1,11 @@
 import { parse } from "csv-parse";
 import { logger } from "../lib/logger";
-import { canonicalTeamName, slugifyTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
+import { canonicalTeamName, slugifyTeamName } from "../lib/team-name-cleaner";
+import {
+  findEquivalentTeamStatsRows,
+  mergeTeamStatsRows,
+  preferredTeamDisplayName,
+} from "../lib/team-stats-merge";
 import { supabase } from "../lib/supabase-client";
 
 /* ────────────────────────────────────────────────
@@ -417,15 +422,22 @@ export async function upsertSeasonStats(
         continue;
       }
 
-      const existing = (existingRows ?? []).find((candidate) =>
-        teamIdentityKey(String(candidate.team_name ?? ""), row.league_slug) === teamIdentityKey(row.team_name, row.league_slug),
+      const matchingRows = findEquivalentTeamStatsRows(
+        (existingRows ?? []) as unknown as Array<Record<string, unknown>>,
+        row.team_name,
+        row.league_slug,
       );
+      const existing = matchingRows.length ? mergeTeamStatsRows(matchingRows) : undefined;
+      const displayTeam = preferredTeamDisplayName(row.team_name, matchingRows, row.league_slug);
+      const target = matchingRows.find((candidate) =>
+        String(candidate.team_name ?? "").trim().toLowerCase() === displayTeam.trim().toLowerCase(),
+      ) ?? matchingRows[0];
 
       // 2. Build data object: merge existing data with new data
       const dataToInsert: Record<string, unknown> = {
         league_slug: row.league_slug,
         season: row.season,
-        team_name: row.team_name,
+        team_name: displayTeam,
       };
 
       // If row exists, start with its values
@@ -481,8 +493,8 @@ export async function upsertSeasonStats(
       }
 
       // 4. Upsert
-      const write = existing?.id
-        ? supabase.from("team_season_stats").update(dataToInsert).eq("id", existing.id)
+      const write = target?.id
+        ? supabase.from("team_season_stats").update(dataToInsert).eq("id", target.id)
         : supabase.from("team_season_stats").upsert(dataToInsert, {
             onConflict: "league_slug, season, team_name",
           });
