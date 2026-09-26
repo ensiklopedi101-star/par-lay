@@ -190,6 +190,7 @@ export interface AIPredictionBoardItem {
   isUpcoming: boolean;
   status: string;
   isSelectable: boolean;
+  selectabilityReason: string | null;
 }
 
 export interface CreateParlayFromPredictionsResult {

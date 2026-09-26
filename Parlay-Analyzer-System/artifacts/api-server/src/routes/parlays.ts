@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
+import { predictionProbabilityFromContext } from "../lib/prediction-probability";
 import { requireAdmin } from "../middlewares/admin";
 import { refreshOddsForFixtures } from "../services/odds-fetcher";
 import { runRevalidation, type RevalidationCandidate } from "../services/revalidation";
@@ -121,8 +122,30 @@ function candidateFrom(
 }
 
 function predictionProbability(prediction: PredictionBoardRow): number {
-  const value = Number(prediction.manual_context?.probability);
-  return Number.isFinite(value) && value > 0 && value < 1 ? value : 0;
+  return predictionProbabilityFromContext(prediction.manual_context);
+}
+
+function predictionSelectabilityReason(
+  prediction: PredictionBoardRow,
+  market: string,
+  odds: number,
+  probability: number,
+  isUpcoming: boolean,
+): string | null {
+  if (String(prediction.status).toLowerCase() !== "active") {
+    return "Prediksi berstatus histori atau settlement.";
+  }
+  if (!isUpcoming) return "Fixture sudah kickoff atau selesai.";
+  if (!market || /^no[\s_/-]*bet/i.test(market)) {
+    return "AI belum menyimpan market terverifikasi. Teks analisis saja belum cukup untuk memilih bet.";
+  }
+  if (!Number.isFinite(odds) || odds <= 1) {
+    return "Odds provider untuk market terpilih belum tersedia atau belum terverifikasi.";
+  }
+  if (!(probability > 0 && probability < 1)) {
+    return "Probabilitas nyata eksplisit belum tersimpan. Confidence tidak digunakan sebagai pengganti probabilitas.";
+  }
+  return null;
 }
 
 /* Individual AI signals for manual parlay construction. This intentionally
@@ -160,6 +183,13 @@ router.get("/parlays/predictions", async (_req, res) => {
       const market = prediction.market_bet ?? prediction.best_market ?? "";
       const probability = predictionProbability(prediction);
       const odds = Number(prediction.best_odds);
+      const selectabilityReason = predictionSelectabilityReason(
+        prediction,
+        market,
+        odds,
+        probability,
+        isUpcoming,
+      );
       return [{
         id: String(prediction.id),
         fixtureId: Number(prediction.fixture_id),
@@ -178,7 +208,8 @@ router.get("/parlays/predictions", async (_req, res) => {
         isInParlay: inParlay.has(Number(prediction.fixture_id)),
         isUpcoming,
         status: String(prediction.status ?? "active"),
-        isSelectable: Boolean(String(prediction.status).toLowerCase() === "active" && isUpcoming && market && Number.isFinite(odds) && odds > 1 && probability > 0 && probability < 1),
+        isSelectable: selectabilityReason == null,
+        selectabilityReason,
       }];
     }));
   } catch (error) {
@@ -498,8 +529,7 @@ router.post("/parlays/from-predictions", requireAdmin, async (req, res) => {
     const fixtureById = new Map((fixtures ?? []).map((fixture) => [Number(fixture.fixture_id), fixture]));
     const candidates: ParlayCandidate[] = rows.flatMap((row) => {
       const fixture = fixtureById.get(Number(row.fixture_id));
-      const context = (row.manual_context ?? {}) as Record<string, unknown>;
-      const probability = Number(context.probability);
+      const probability = predictionProbabilityFromContext(row.manual_context);
       const odds = Number(row.best_odds);
       const market = String(row.market_bet ?? row.best_market ?? "").trim();
       if (!fixture || new Date(fixture.fixture_date).getTime() <= Date.now() || !market || odds <= 1 || !Number.isFinite(probability) || probability <= 0 || probability >= 1) return [];

@@ -155,11 +155,7 @@ function PredictionCard({
 
           {!prediction.isSelectable && (
             <div className="mt-3 text-xs text-amber-400">
-              {prediction.status.toLowerCase() !== "active"
-                ? "Prediksi berstatus histori atau settlement."
-                : !prediction.isUpcoming
-                  ? "Fixture sudah kickoff atau selesai."
-                  : "Belum bisa dipilih: market, odds, atau probabilitas belum lengkap."}
+                {prediction.selectabilityReason ?? "Prediksi belum memenuhi syarat pemilihan."}
             </div>
           )}
         </div>

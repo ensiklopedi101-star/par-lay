@@ -32,3 +32,4 @@
 - [Scanner retry and learning integrity](scanner-learning-integrity.md) — Only usable selected markets suppress re-scan; write learning before settlement state so failed feedback remains retryable.
 - [AI learning transparency](ai-learning-transparency.md) — Hit rate alone is insufficient; show sample quality, outcomes, market ranking, and ROI limitations.
 - [Team stats extension ingestion](team-stats-extension.md) — Extension input is normalized at the API boundary; ingestion requires a matching EXTENSION_API_KEY.
+- [Prediction board readiness](prediction-board-readiness.md) — Structured market, verified odds, and explicit probability are required; prose recommendations never unlock a bet.
