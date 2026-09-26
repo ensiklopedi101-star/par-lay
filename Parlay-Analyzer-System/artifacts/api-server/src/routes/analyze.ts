@@ -2,7 +2,6 @@ import { Router, type IRouter } from "express";
 import {
   analyzeFixture,
   assessOddsAvailability,
-  extractPredictionRecommendation,
   loadAIConfig,
   OddsUnavailableError,
   PredictionAlreadyExistsError,
@@ -30,6 +29,8 @@ type BatchTicket = {
   odds: number;
   ev_percent: number;
   odds_status?: "valid" | "stale";
+  readiness_status?: "bet_ready" | "analytical_no_bet" | "technical_review";
+  rejection_reason?: string;
   kelly_stake: string;
   kelly_edge: number;
   prediction_text: string;
@@ -54,6 +55,7 @@ type BatchJob = {
 
 const batchJobs = new Map<string, BatchJob>();
 const MAX_BATCH_JOBS = 20;
+const MAX_BATCH_FIXTURES = 20;
 
 function trimBatchJobs() {
   while (batchJobs.size > MAX_BATCH_JOBS) {
@@ -75,6 +77,7 @@ function publicBatchJob(job: BatchJob) {
     parlayLegs: job.tickets.filter((ticket) => ticket.is_parlay_leg).length,
     waitingOdds: job.tickets.filter((ticket) => ticket.status === "waiting_odds").length,
     noBet: job.tickets.filter((ticket) => ticket.status === "scanned" && ticket.selection === "NO_BET").length,
+    technicalReview: job.tickets.filter((ticket) => ticket.readiness_status === "technical_review").length,
     tickets: job.status === "running" ? job.tickets : job.tickets,
     parlayId: job.parlayId,
     error: job.error,
@@ -164,7 +167,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
   );
   const toScan = pendingFixtures
     .filter((fixture) => !waitingFixtures.some((waiting) => waiting.fixture_id === fixture.fixture_id))
-    .slice(0, 10);
+    .slice(0, MAX_BATCH_FIXTURES);
 
   // Load the scheduler persona once for the whole batch instead of on every
   // fixture, and share one team-stats cache across fixtures so a team that
@@ -190,6 +193,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
       kelly_edge: 0,
       prediction_text: "Menunggu data odds dari provider. AI belum dipanggil.",
       status: "waiting_odds",
+       readiness_status: "technical_review",
       is_parlay_leg: false,
     });
   }
@@ -222,16 +226,21 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
         statsCache,
       });
       backoffMs = result.rateLimited ? Math.min(backoffMs === 0 ? 5_000 : backoffMs * 2, 20_000) : 0;
-       const recommendation = extractPredictionRecommendation(result.prediction_text);
+       const recommendation = {
+         marketBet: result.market_bet ?? null,
+         odds: Number(result.odds ?? 0),
+         confidence: Number(result.confidence ?? 0),
+         evPercent: Number(result.ev_percent ?? 0),
+       };
        const prob = result.probability ?? null;
-      const kelly = prob && recommendation.odds > 1
-        ? calculateKelly(recommendation.odds, prob)
+       const kelly = prob && recommendation.odds > 1
+         ? calculateKelly(recommendation.odds, prob)
         : { recommendedUnit: "N/A", edge: 0, isPositiveEdge: false };
        const isParlayLeg = Boolean(
         result.odds_status !== "stale" &&
         recommendation.marketBet &&
         recommendation.odds > 1 &&
-        recommendation.confidence >= 8 &&
+         recommendation.confidence >= 6.5 &&
         recommendation.marketBet.toLowerCase() !== "no_bet",
        ) &&
          prob != null &&
@@ -255,6 +264,8 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
         kelly_edge: kelly.edge,
         prediction_text: result.prediction_text.substring(0, 500),
         status: "scanned",
+         readiness_status: result.readiness_status,
+         rejection_reason: result.data_quality?.rejectionReason,
         is_parlay_leg: isParlayLeg,
       };
       job.tickets.push(ticket);
@@ -292,6 +303,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
           kelly_edge: 0,
           prediction_text: "Menunggu data odds dari provider. AI belum dipanggil.",
           status: "waiting_odds",
+           readiness_status: "technical_review",
           is_parlay_leg: false,
         });
         continue;
@@ -310,6 +322,8 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
         kelly_edge: 0,
         prediction_text: message,
         status: "error",
+         readiness_status: "technical_review",
+         rejection_reason: message,
         is_parlay_leg: false,
       });
     } finally {
@@ -319,7 +333,9 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
 
   job.currentMatch = null;
   job.parlayId = await createParlayFromCandidates(parlayCandidates);
-  const validTickets = job.tickets.filter((ticket) => ticket.confidence >= 6.5 && ticket.status === "scanned");
+  const validTickets = job.tickets.filter((ticket) =>
+    ticket.readiness_status === "bet_ready" && ticket.status === "scanned",
+  );
   const parlayLegs = job.tickets.filter((ticket) => ticket.is_parlay_leg);
   const { error: logErr } = await supabase.from("performance_log").insert({
     date: new Date().toISOString().split("T")[0],

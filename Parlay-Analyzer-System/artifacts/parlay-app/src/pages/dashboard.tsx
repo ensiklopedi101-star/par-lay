@@ -77,6 +77,7 @@ export default function Dashboard() {
     parlayLegs: number;
     waitingOdds: number;
     noBet: number;
+    technicalReview: number;
     message?: string;
     tickets?: Array<{
       home_team: string;
@@ -87,6 +88,8 @@ export default function Dashboard() {
       prediction_text: string;
       is_parlay_leg: boolean;
       odds_status?: "valid" | "stale";
+      readiness_status?: "bet_ready" | "analytical_no_bet" | "technical_review";
+      rejection_reason?: string;
     }>;
   } | null>(null);
   const { open, withPassword, onSubmit, onCancel } = useAdminPassword();
@@ -117,6 +120,7 @@ export default function Dashboard() {
         parlayLegs: number;
         waitingOdds: number;
         noBet: number;
+        technicalReview: number;
         parlayId?: string | null;
         error?: string | null;
         tickets?: Array<{
@@ -128,6 +132,8 @@ export default function Dashboard() {
           prediction_text: string;
           is_parlay_leg: boolean;
           odds_status?: "valid" | "stale";
+          readiness_status?: "bet_ready" | "analytical_no_bet" | "technical_review";
+          rejection_reason?: string;
         }>;
       };
       let result: BatchStatus;
@@ -148,17 +154,18 @@ export default function Dashboard() {
         });
         setScanResult({
           scanned: result.scanned,
-          validTickets: result.tickets?.filter((ticket) => ticket.confidence >= 6.5 && ticket.status === "scanned").length ?? 0,
+          validTickets: result.tickets?.filter((ticket) => ticket.readiness_status === "bet_ready").length ?? 0,
           parlayLegs: result.parlayLegs,
           waitingOdds: result.waitingOdds,
           noBet: result.noBet,
+          technicalReview: result.technicalReview,
           message: result.status === "running"
             ? `Memproses ${result.completed} dari ${result.total} fixture${result.currentMatch ? ` — ${result.currentMatch}` : ""}`
-            : result.waitingOdds > 0
-              ? `Scanning selesai. ${result.waitingOdds} fixture menunggu data odds; ${result.noBet} fixture memiliki odds tetapi tidak memenuhi value.`
+            : result.technicalReview > 0
+              ? `Scanning selesai. ${result.technicalReview} fixture perlu review teknis; ${result.noBet} fixture adalah NO BET analitis.`
             : result.parlayId
               ? "Scanning selesai dan parlay otomatis berhasil dibuat."
-              : "Scanning selesai. Minimal dua leg confidence tinggi diperlukan untuk membuat parlay.",
+                : "Scanning selesai. Tidak ada kandidat yang memenuhi syarat parlay.",
           tickets: result.tickets,
         });
         if (result.status === "failed") throw new Error(result.error ?? "Batch scanner gagal");
@@ -242,7 +249,8 @@ export default function Dashboard() {
                 <span>Valid: <strong>{scanResult.validTickets}</strong></span>
                 <span>Parlay legs: <strong>{scanResult.parlayLegs}</strong></span>
                 <span className="text-amber-500">Waiting odds: <strong>{scanResult.waitingOdds}</strong></span>
-                <span className="text-muted-foreground">No bet: <strong>{scanResult.noBet}</strong></span>
+                <span className="text-muted-foreground">Technical review: <strong>{scanResult.technicalReview}</strong></span>
+                <span className="text-muted-foreground">Analytical no bet: <strong>{scanResult.noBet}</strong></span>
               </div>
             </div>
             {scanResult.tickets && scanResult.tickets.length > 0 && (
@@ -255,12 +263,14 @@ export default function Dashboard() {
                     <span className="font-medium">
                       {ticket.home_team} vs {ticket.away_team}
                     </span>
-                      <span className={ticket.status === "waiting_odds" ? "text-amber-500" : "text-muted-foreground"}>
+                      <span className={ticket.status === "waiting_odds" || ticket.readiness_status === "technical_review" ? "text-amber-500" : "text-muted-foreground"}>
                         {ticket.status === "error"
                           ? ticket.prediction_text
                           : ticket.status === "waiting_odds"
                             ? "WAITING FOR ODDS · AI belum dipanggil"
-                            : `${ticket.selection || "NO_BET"} · confidence ${ticket.confidence}${ticket.odds_status === "stale" ? " · stale odds" : ""}${ticket.is_parlay_leg ? " · parlay leg" : ""}`}
+                            : ticket.readiness_status === "technical_review"
+                              ? `${ticket.selection || "NO_BET"} · ${ticket.rejection_reason ?? "perlu review teknis"}`
+                              : `${ticket.selection || "NO_BET"} · confidence ${ticket.confidence}${ticket.odds_status === "stale" ? " · stale odds" : ""}${ticket.is_parlay_leg ? " · parlay leg" : ""}`}
                     </span>
                   </div>
                 ))}

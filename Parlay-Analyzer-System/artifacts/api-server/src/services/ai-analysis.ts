@@ -78,7 +78,9 @@ OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
 
 VALIDATION GATE:
 - Bandingkan semua market yang tersedia (ML, HT, Totals, AH, BTTS) sebelum memilih.
-- Market dan line wajib cocok persis dengan snapshot odds provider.
+- Market harus berasal dari market family yang tersedia pada snapshot provider. Cocokkan line
+  bila provider menyimpannya; jika provider gratis tidak menyimpan line, gunakan market family
+  yang sama dan jangan mengarang line atau odds baru.
 - Probability wajib eksplisit, 0 < probability < 1, dan bukan confidence atau probabilitas implisit.
 - Hitung ulang EV = (probability × odds provider) - 1. Jika EV tidak positif atau confidence < 6.5, gunakan "NO_BET".
 
@@ -275,6 +277,7 @@ interface StructuredOdds {
 
 export type OddsAvailabilityStatus = "valid" | "stale" | "missing";
 const ODDS_MAX_AGE_HOURS = 3;
+type OddsMatchMode = "exact_line" | "market_family_no_line" | "unmatched";
 
 export interface OddsAvailability {
   status: OddsAvailabilityStatus;
@@ -301,35 +304,57 @@ function recommendationMarketType(market: string): RecommendationMarketType {
   return null;
 }
 
-function validatedOddsForRecommendation(market: string, rows: OddsRow[]): number | null {
+function lineFromOddsRow(row: OddsRow): number | null {
+  const storedLine = Number(row.odds_draw);
+  if (Number.isFinite(storedLine) && Math.abs(storedLine) <= 20) return storedLine;
+  return parseMarketLine(String(row.market_type ?? "").toLowerCase());
+}
+
+function validatedOddsForRecommendation(
+  market: string,
+  rows: OddsRow[],
+): { odds: number | null; matchMode: OddsMatchMode } {
   const marketType = recommendationMarketType(market);
-  if (!marketType) return null;
+  if (!marketType) return { odds: null, matchMode: "unmatched" };
   const value = market.toLowerCase();
   const line = marketType === "Totals" || marketType === "AH" ? parseMarketLine(value) : null;
   const candidates = rows
     .filter((row) => classifyOddsMarket(row.market_type) === marketType)
-    .filter((row) => {
-      if (line == null) return true;
-      const storedLine = Number(row.odds_draw);
-      if (Number.isFinite(storedLine) && Math.abs(storedLine - line) <= 0.01) return true;
-      const marketLine = parseMarketLine(String(row.market_type ?? "").toLowerCase());
-      return marketLine != null && Math.abs(marketLine - line) <= 0.01;
-    })
     .sort((a, b) => new Date(String(b.captured_at ?? "")).getTime() - new Date(String(a.captured_at ?? "")).getTime());
-  const row = candidates[0];
-  if (!row) return null;
+  if (candidates.length === 0) return { odds: null, matchMode: "unmatched" };
+
+  const exactCandidates = line == null
+    ? candidates
+    : candidates.filter((row) => {
+        const storedLine = lineFromOddsRow(row);
+        // A small tolerance handles provider serialization such as 2.5 vs 2.50.
+        return storedLine != null && Math.abs(storedLine - line) <= 0.05;
+      });
+  const familyOnlyCandidates = line == null
+    ? []
+    : candidates.filter((row) => lineFromOddsRow(row) == null);
+  const row = exactCandidates[0] ?? familyOnlyCandidates[0];
+  if (!row) return { odds: null, matchMode: "unmatched" };
+  const matchMode: OddsMatchMode = exactCandidates.length > 0
+    ? "exact_line"
+    : "market_family_no_line";
+  let odds: number | null;
   if (marketType === "BTTS") {
-    return value.includes("no") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+    odds = value.includes("no") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+    return { odds, matchMode };
   }
   if (marketType === "Totals") {
-    return value.includes("under") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+    odds = value.includes("under") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+    return { odds, matchMode };
   }
   if (marketType === "AH") {
-    return value.includes("away") || value.includes("visitor") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+    odds = value.includes("away") || value.includes("visitor") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+    return { odds, matchMode };
   }
-  if (value.includes("away") || value === "2") return Number(row.odds_2) > 1 ? Number(row.odds_2) : null;
-  if (value.includes("draw") || value === "x") return Number(row.odds_draw) > 1 ? Number(row.odds_draw) : null;
-  return Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+  if (value.includes("away") || value === "2") odds = Number(row.odds_2) > 1 ? Number(row.odds_2) : null;
+  else if (value.includes("draw") || value === "x") odds = Number(row.odds_draw) > 1 ? Number(row.odds_draw) : null;
+  else odds = Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
+  return { odds, matchMode };
 }
 
 export function assessOddsAvailability(rows: OddsRow[]): OddsAvailability {
@@ -1012,7 +1037,9 @@ ${relationalBlock}
 
 --- KONTRAK VALIDASI SEBELUM OUTPUT ---
 1. Bandingkan semua market yang memiliki odds; jangan memilih hanya karena market itu muncul lebih dulu.
-2. Pilih tepat satu market/line yang benar-benar ada pada snapshot jika edge terukur. Jika tidak, gunakan market/selection NO_BET.
+2. Pilih tepat satu market dari market family yang tersedia pada snapshot. Jika provider gratis
+   tidak menyimpan line, gunakan snapshot terbaru dari family yang sama tanpa mengarang line.
+   Jika line eksplisit tersedia tetapi berbeda, jangan menganggapnya sama.
 3. Tulis probability nyata eksplisit dalam rentang 0 sampai 1. Confidence 0-10 tidak boleh dipakai sebagai probability.
 4. Hitung ulang EV dengan odds snapshot selection: (probability × odds) - 1. Jika hasilnya <= 0, gunakan NO_BET.
 5. JSON selections hanya boleh merekomendasikan pertandingan ${homeTeam} vs ${awayTeam}; jangan menggabungkan fixture lain.`;
@@ -1051,14 +1078,21 @@ export interface AnalysisResult {
   ev_at_analysis?: number;
   odds_status?: OddsAvailabilityStatus;
   odds_captured_at?: string | null;
+  readiness_status?: "bet_ready" | "analytical_no_bet" | "technical_review";
   /** True if the AI provider had to be retried due to 429/503 rate limiting. */
   rateLimited?: boolean;
   provider?: string;
   model?: string;
   data_quality?: {
     stats: { home: TeamStatsQuality; away: TeamStatsQuality };
-    odds: { status: OddsAvailabilityStatus; capturedAt: string | null; verifiedMarket: boolean };
+    odds: {
+      status: OddsAvailabilityStatus;
+      capturedAt: string | null;
+      verifiedMarket: boolean;
+      matchMode?: OddsMatchMode;
+    };
     rejectionReason?: string;
+    readinessStatus?: "bet_ready" | "analytical_no_bet" | "technical_review";
   };
 }
 
@@ -1090,6 +1124,7 @@ interface EvaluationSnapshot {
       status: OddsAvailabilityStatus;
       capturedAt: string | null;
       selectedMarketVerified: boolean;
+      matchMode?: OddsMatchMode;
       snapshot: OddsRow[];
     };
     teamStats: {
@@ -1459,15 +1494,46 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     : persona;
   console.log(`[AI-ANALYSIS] Persona sumber: ${persona === DEFAULT_SYSTEM_INSTRUCTION ? "DEFAULT (fallback)" : "SUPABASE (kustom)"}`);
 
-  const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
-   const aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
-   const predictionText = aiResult.text;
-    const parsedRecommendation = extractPredictionRecommendation(predictionText, fixtureId);
-    const verifiedOdds = parsedRecommendation.marketBet
-      ? validatedOddsForRecommendation(parsedRecommendation.marketBet, oddsRows)
-      : null;
-    const computedEvPercent = verifiedOdds != null && parsedRecommendation.probability != null
-      ? (parsedRecommendation.probability * verifiedOdds - 1) * 100
+   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
+    let aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
+    let predictionText = aiResult.text;
+    let parsedRecommendation = extractPredictionRecommendation(predictionText, fixtureId);
+
+    /*
+     * Some providers follow the prose instructions but omit probability from
+     * the structured selection. Retry only that recoverable contract failure;
+     * do not retry a deliberate NO BET or spend another provider request on a
+     * negative-EV recommendation.
+     */
+    if (parsedRecommendation.marketBet && parsedRecommendation.probability == null) {
+      const repairPrompt = [
+        `Perbaiki output terstruktur untuk fixture ${fixtureId}: ${homeTeam} vs ${awayTeam}.`,
+        "Respons sebelumnya memilih market tetapi tidak menyimpan probability eksplisit.",
+        "Kirim hanya satu objek JSON valid dengan format:",
+        '{"selections":[{"fixture_id":"' + fixtureId + '","market":"Over 2.5","probability":0.58,"confidence":7.5,"odds":1.85,"ev_percent":7.3,"rationale":"..."}]}',
+        "Pertahankan market yang dipilih bila masih kompatibel dengan odds snapshot.",
+        "Probability harus angka 0 sampai 1 untuk market tersebut, bukan confidence dan bukan implied probability.",
+        "Jika tidak dapat memberi probability yang bertanggung jawab, gunakan market NO_BET dan probability null.",
+      ].join("\n");
+      const repaired = await generateAIResponse(apiKey, finalPersona, repairPrompt);
+      const repairedRecommendation = extractPredictionRecommendation(repaired.text, fixtureId);
+      if (repairedRecommendation.marketBet && repairedRecommendation.probability != null) {
+        aiResult = {
+          ...repaired,
+          rateLimited: aiResult.rateLimited || repaired.rateLimited,
+        };
+        predictionText = `${predictionText}\n\n## STRUCTURED OUTPUT RETRY\n${repaired.text}`;
+        parsedRecommendation = repairedRecommendation;
+        logger.info({ fixtureId }, "[AI-RETRY] Repaired missing structured probability");
+      }
+    }
+
+     const oddsMatch = parsedRecommendation.marketBet
+       ? validatedOddsForRecommendation(parsedRecommendation.marketBet, oddsRows)
+       : { odds: null, matchMode: "unmatched" as OddsMatchMode };
+     const verifiedOdds = oddsMatch.odds;
+     const computedEvPercent = verifiedOdds != null && parsedRecommendation.probability != null
+       ? (parsedRecommendation.probability * verifiedOdds - 1) * 100
       : 0;
     const recommendationIsEligible = Boolean(
       verifiedOdds != null &&
@@ -1492,7 +1558,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     const rejectionReason = parsedRecommendation.marketBet == null
       ? "AI tidak memilih market taruhan."
       : verifiedOdds == null
-        ? "Market atau line rekomendasi AI tidak ditemukan pada odds snapshot provider."
+        ? "Market family atau line rekomendasi AI tidak dapat dipetakan ke odds snapshot provider."
         : parsedRecommendation.probability == null ||
             parsedRecommendation.probability <= 0 ||
             parsedRecommendation.probability >= 1
@@ -1502,6 +1568,19 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
             : computedEvPercent <= 0
               ? "EV hasil perhitungan ulang tidak positif."
               : undefined;
+    const hasValidProbability = parsedRecommendation.probability != null &&
+      parsedRecommendation.probability > 0 &&
+      parsedRecommendation.probability < 1;
+    const hasTechnicalGap = Boolean(
+      parsedRecommendation.marketBet &&
+      (verifiedOdds == null || !hasValidProbability),
+    );
+    const readinessStatus: AnalysisResult["readiness_status"] = recommendationIsEligible
+      ? "bet_ready"
+      : hasTechnicalGap
+        ? "technical_review"
+        : "analytical_no_bet";
+    const selectedOddsMatchMode = verifiedOdds != null ? oddsMatch.matchMode : "unmatched";
     const evAtAnalysis = recommendation.evPercent / 100;
 
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
@@ -1535,6 +1614,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
          status: oddsAvailability.status,
          capturedAt: oddsAvailability.latestCapturedAt,
          selectedMarketVerified: verifiedOdds != null,
+          matchMode: selectedOddsMatchMode,
          snapshot: oddsRows.slice(0, 60),
        },
        teamStats: { home: homeStats, away: awayStats },
@@ -1550,8 +1630,10 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
          status: oddsAvailability.status,
          capturedAt: oddsAvailability.latestCapturedAt,
          verifiedMarket: verifiedOdds != null,
+          matchMode: selectedOddsMatchMode,
        },
        rejectionReason,
+        readinessStatus,
      },
      settlement: null,
    };
@@ -1579,6 +1661,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
        ...evaluationSnapshot,
        // Keep the compact legacy fields for existing readers.
        data_quality: evaluationSnapshot.dataQuality,
+        readinessStatus,
        probability: recommendation.probability,
        probabilitySource: recommendation.probability != null ? "ai_explicit" : null,
        oddsSource: recommendation.odds > 1 ? "provider_snapshot" : null,
@@ -1613,6 +1696,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     ev_at_analysis: evAtAnalysis,
     odds_status: oddsAvailability.status,
     odds_captured_at: oddsAvailability.latestCapturedAt,
+     readiness_status: readinessStatus,
     rateLimited: aiResult.rateLimited,
     provider: aiResult.provider,
     model: aiResult.model,
@@ -1622,8 +1706,10 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
         status: oddsAvailability.status,
         capturedAt: oddsAvailability.latestCapturedAt,
         verifiedMarket: verifiedOdds != null,
+         matchMode: selectedOddsMatchMode,
       },
       rejectionReason,
+       readinessStatus,
     },
   };
 }
