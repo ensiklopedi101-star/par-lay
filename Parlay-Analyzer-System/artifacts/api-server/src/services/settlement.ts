@@ -2,17 +2,19 @@
  * Settlement Service
  *
  * Arsitektur bersih:
- *   - TUGAS SAYA   : ambil data (skor dari tabel `fixtures`), hitung WIN/LOSS secara matematika
+ *   - TUGAS SAYA   : refresh skor final, ambil data, hitung WIN/LOSS secara matematika
  *   - TUGAS GEMINI : evaluasi kenapa LOSS terjadi, buat pelajaran untuk RAG
  *
- * Tidak ada pemanggilan API eksternal di sini.
- * Semua skor sudah disimpan oleh odds-fetcher ke tabel `fixtures`.
+ * Settlement me-refresh hanya fixture yang terhubung dengan prediction aktif
+ * dari endpoint historical events Odds-API, lalu menggunakan `fixtures` sebagai
+ * snapshot lokal untuk perhitungan yang fail-closed.
  */
 
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { generateAIResponse } from "./ai-analysis";
 import { settleParlaysForFixtures } from "./parlay-builder";
+import { refreshFixtureResultsForSettlement } from "./odds-fetcher";
 
 /* ─────────────────────────────────────────
    Tipe
@@ -425,8 +427,17 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
 
   const fixtureIds = pendingPredictions.map((p) => p.fixture_id);
 
-  /* 2. Ambil fixtures yang sudah selesai BESERTA SKOR dari DB kita sendiri
-        Inilah sumber kebenaran — tidak perlu panggil API eksternal */
+  /*
+   * 2. Refresh hasil final dari Odds-API terlebih dahulu. Normal odds sync
+   * memakai status=pending, sehingga pertandingan selesai tidak selalu muncul
+   * di sana. Refresh dibatasi pada fixture yang punya prediction unsettled.
+   * Jika provider gagal/rate-limited, settlement tetap memakai skor lokal yang
+   * sudah tersedia dan tidak pernah mengarang hasil.
+   */
+  const refreshedResults = await refreshFixtureResultsForSettlement(fixtureIds);
+  logger.info(refreshedResults, "[SETTLEMENT] Refresh hasil dari Odds-API selesai");
+
+  /* 3. Ambil fixtures yang sudah selesai BESERTA SKOR dari DB kita sendiri */
   const { data: completedFixtures } = await supabase
     .from("fixtures")
     .select("fixture_id, home_team_name, away_team_name, league_name, status_short, home_goals, away_goals, home_goals_ht, away_goals_ht")
@@ -458,7 +469,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
     const homeGoals = fixture.home_goals!;
     const awayGoals = fixture.away_goals!;
 
-    /* 3. Lewati prediksi "NO BET" — tidak ada taruhan → tidak ada settlement */
+    /* 4. Lewati prediksi "NO BET" — tidak ada taruhan → tidak ada settlement */
     if (isNoBet(prediction)) {
       const { error: noBetUpdateError } = await supabase.from("ai_predictions").update({
         status: "no_bet",
@@ -481,7 +492,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
       continue;
     }
 
-    /* 4. Hitung WIN/LOSS secara matematis murni dari skor */
+    /* 5. Hitung WIN/LOSS secara matematis murni dari skor */
     const marketBet = prediction.market_bet ?? prediction.best_market;
     if (requiresHalfTimeScore(marketBet) &&
       (fixture.home_goals_ht == null || fixture.away_goals_ht == null)) {
@@ -537,7 +548,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
       result: betResult,
     }, "[SETTLEMENT] Hasil dihitung");
 
-    /* 5. Simpan setiap hasil taruhan ke knowledge base.
+    /* 6. Simpan setiap hasil taruhan ke knowledge base.
           NO BET sudah dilewati di atas; WIN/LOSS/partial/push semuanya
           menjadi feedback yang dapat dipakai oleh RAG. */
     const evAtBet = prediction.ev_at_analysis ?? prediction.expected_value ?? 0;
@@ -583,7 +594,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
       continue;
     }
 
-    /* 6. Update prediction dengan hasil dan snapshot evaluasi lengkap.
+    /* 7. Update prediction dengan hasil dan snapshot evaluasi lengkap.
           Snapshot analisis asli tetap dipertahankan; settlement hanya menambah
           bagian hasil aktual sehingga evaluasi tidak kehilangan input awal. */
     const { error: predictionUpdateError } = await supabase.from("ai_predictions").update({

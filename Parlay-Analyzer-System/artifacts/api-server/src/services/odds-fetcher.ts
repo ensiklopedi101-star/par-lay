@@ -311,6 +311,21 @@ interface ApiEvent {
   bookmakers?: Record<string, ApiMarket[]>;
 }
 
+interface SettlementFixture {
+  fixture_id: number;
+  league_name: string | null;
+  fixture_date: string | null;
+}
+
+export interface SettlementResultsRefresh {
+  requested: number;
+  refreshed: number;
+  notFound: number;
+  skipped: number;
+  errors: number;
+  rateLimitedSeconds?: number;
+}
+
 function parseRetryAfter(body: string, headerValue?: string | null): number {
   if (headerValue != null && headerValue.trim() !== "") {
     const headerSeconds = Number(headerValue);
@@ -386,6 +401,193 @@ async function fetchEventOdds(eventId: number, apiKey: string, bookmakers: strin
   logger.info({ url: redactApiKey(url), eventId, bookmakers }, "RADAR: Fetching event odds from Odds-API");
   const result = await apiGet<ApiEvent>(url, `odds:${eventId}`);
   logger.info({ eventId, hasBookmakers: !!result.bookmakers, bookmakerCount: result.bookmakers ? Object.keys(result.bookmakers).length : 0 }, "RADAR: Response from Odds-API odds");
+  return result;
+}
+
+function parseScore(value: unknown): number | null {
+  const score = Number(value);
+  return Number.isInteger(score) && score >= 0 ? score : null;
+}
+
+function isFinalEventStatus(status: unknown): boolean {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return ["ft", "aet", "pen", "finished", "completed", "final"].includes(normalized);
+}
+
+function eventScores(event: ApiEvent): {
+  homeGoals: number | null;
+  awayGoals: number | null;
+  homeGoalsHT: number | null;
+  awayGoalsHT: number | null;
+} {
+  return {
+    homeGoals: parseScore(event.home_goals ?? event.scores?.home ?? event.result?.home),
+    awayGoals: parseScore(event.away_goals ?? event.scores?.away ?? event.result?.away),
+    homeGoalsHT: parseScore(event.home_goals_ht ?? event.scores?.home_ht),
+    awayGoalsHT: parseScore(event.away_goals_ht ?? event.scores?.away_ht),
+  };
+}
+
+async function fetchHistoricalLeagueEvents(
+  leagueSlug: string,
+  from: string,
+  to: string,
+  apiKey: string,
+): Promise<ApiEvent[]> {
+  const params = new URLSearchParams({
+    apiKey,
+    sport: "football",
+    league: leagueSlug,
+    from,
+    to,
+  });
+  const url = `${BASE_URL}/historical/events?${params}`;
+  logger.info(
+    { url: redactApiKey(url), leagueSlug, from, to },
+    "RADAR: Fetching historical results from Odds-API",
+  );
+  const data = await apiGet<ApiEvent[] | ApiEvent>(url, `historical-events:${leagueSlug}`);
+  return Array.isArray(data) ? data : [data];
+}
+
+/**
+ * Refresh only fixtures connected to unsettled predictions.
+ *
+ * The normal odds sync intentionally requests pending events. Settlement needs
+ * a separate historical-events request because completed events leave that
+ * pending feed. Historical results are written only when the provider returns
+ * a final status and both full-time scores.
+ */
+export async function refreshFixtureResultsForSettlement(
+  fixtureIds: number[],
+): Promise<SettlementResultsRefresh> {
+  const uniqueIds = [...new Set(fixtureIds.filter((id) => Number.isInteger(id)))];
+  const result: SettlementResultsRefresh = {
+    requested: uniqueIds.length,
+    refreshed: 0,
+    notFound: 0,
+    skipped: 0,
+    errors: 0,
+  };
+
+  if (uniqueIds.length === 0) return result;
+
+  const apiKey = process.env["ODDS_API_KEY"];
+  if (!apiKey) {
+    logger.warn("[SETTLEMENT] ODDS_API_KEY tidak tersedia — refresh hasil dilewati");
+    result.skipped = uniqueIds.length;
+    return result;
+  }
+
+  const { data: fixtures, error: fixtureError } = await supabase
+    .from("fixtures")
+    .select("fixture_id, league_name, fixture_date")
+    .in("fixture_id", uniqueIds) as { data: SettlementFixture[] | null; error: Error | null };
+
+  if (fixtureError) {
+    logger.error({ err: fixtureError }, "[SETTLEMENT] Gagal membaca fixture untuk refresh hasil");
+    result.errors = uniqueIds.length;
+    return result;
+  }
+
+  const knownFixtures = (fixtures ?? []).filter(
+    (fixture) => fixture.league_name && fixture.fixture_date,
+  );
+  result.notFound += uniqueIds.length - knownFixtures.length;
+
+  const byLeague = new Map<string, SettlementFixture[]>();
+  for (const fixture of knownFixtures) {
+    const league = fixture.league_name!.trim();
+    const current = byLeague.get(league) ?? [];
+    current.push(fixture);
+    byLeague.set(league, current);
+  }
+
+  const now = Date.now();
+  for (const [leagueSlug, leagueFixtures] of byLeague) {
+    /*
+     * Odds-API limits historical queries to a 31-day span. Active
+     * predictions normally fall inside this window; older rows are left
+     * untouched rather than making a large, quota-expensive backfill.
+     */
+    const fixtureTimes = leagueFixtures
+      .map((fixture) => new Date(fixture.fixture_date!).getTime())
+      .filter((time) => Number.isFinite(time) && time <= now);
+    if (fixtureTimes.length === 0) {
+      result.skipped += leagueFixtures.length;
+      continue;
+    }
+
+    const fromTime = Math.max(Math.min(...fixtureTimes) - 24 * 60 * 60 * 1000, now - 31 * 24 * 60 * 60 * 1000);
+    const from = new Date(fromTime).toISOString();
+    const to = new Date(now).toISOString();
+
+    let events: ApiEvent[];
+    try {
+      events = await fetchHistoricalLeagueEvents(leagueSlug, from, to, apiKey);
+    } catch (err) {
+      if (err instanceof RateLimitError) {
+        result.rateLimitedSeconds = Math.max(result.rateLimitedSeconds ?? 0, err.retryAfterSeconds);
+      }
+      result.errors += leagueFixtures.length;
+      logger.error({ err, leagueSlug }, "[SETTLEMENT] Gagal mengambil hasil historis dari Odds-API");
+      continue;
+    }
+
+    const eventsById = new Map(events.map((event) => [event.id, event]));
+    for (const fixture of leagueFixtures) {
+      const event = eventsById.get(fixture.fixture_id);
+      if (!event || !isFinalEventStatus(event.status)) {
+        result.notFound++;
+        continue;
+      }
+
+      const scores = eventScores(event);
+      if (scores.homeGoals == null || scores.awayGoals == null) {
+        result.skipped++;
+        logger.warn(
+          { fixtureId: fixture.fixture_id, status: event.status },
+          "[SETTLEMENT] Event final tanpa skor lengkap — tidak disimpan",
+        );
+        continue;
+      }
+
+      const payload: Record<string, unknown> = {
+        status_short: event.status,
+        status_long: event.status,
+        home_goals: scores.homeGoals,
+        away_goals: scores.awayGoals,
+        last_updated: new Date().toISOString(),
+      };
+      if (scores.homeGoalsHT != null) payload.home_goals_ht = scores.homeGoalsHT;
+      if (scores.awayGoalsHT != null) payload.away_goals_ht = scores.awayGoalsHT;
+
+      const { error } = await supabase
+        .from("fixtures")
+        .update(payload)
+        .eq("fixture_id", fixture.fixture_id);
+      if (error) {
+        result.errors++;
+        logger.error(
+          { err: error, fixtureId: fixture.fixture_id },
+          "[SETTLEMENT] Gagal menyimpan skor final dari Odds-API",
+        );
+        continue;
+      }
+
+      result.refreshed++;
+      logger.info(
+        {
+          fixtureId: fixture.fixture_id,
+          status: event.status,
+          homeGoals: scores.homeGoals,
+          awayGoals: scores.awayGoals,
+        },
+        "[SETTLEMENT] Skor final berhasil di-refresh dari Odds-API",
+      );
+    }
+  }
+
   return result;
 }
 
