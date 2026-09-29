@@ -6,6 +6,7 @@ import { requireAdmin } from "../middlewares/admin";
 import { refreshOddsForFixtures } from "../services/odds-fetcher";
 import { runRevalidation, type RevalidationCandidate } from "../services/revalidation";
 import { runTriggeredReanalysis } from "../services/reanalysis";
+import { marketFromPredictionText } from "../services/settlement";
 import {
   calculateParlayMetrics,
   createMergedParlay,
@@ -49,6 +50,9 @@ type PredictionRow = {
   home_team: string | null;
   away_team: string | null;
   league: string | null;
+  home_score: number | null;
+  away_score: number | null;
+  settled_at: string | null;
 };
 
 type PredictionBoardRow = PredictionRow & {
@@ -66,6 +70,9 @@ type FixtureRow = {
   home_team_name: string;
   away_team_name: string;
   league_name: string | null;
+  status_short?: string | null;
+  home_goals?: number | null;
+  away_goals?: number | null;
 };
 
 type RevisionRow = {
@@ -125,6 +132,14 @@ function predictionProbability(prediction: PredictionBoardRow): number {
   return predictionProbabilityFromContext(prediction.manual_context);
 }
 
+function finalDecision(text: string | null): "AMBIL" | "NO BET" | null {
+  const decision = text?.match(
+    /keputusan\s*:\s*(?:\*\*)?\s*(ambil|no[\s_-]*bet)\b/i,
+  )?.[1];
+  if (!decision) return null;
+  return /^ambil$/i.test(decision) ? "AMBIL" : "NO BET";
+}
+
 function predictionSelectabilityReason(
   prediction: PredictionBoardRow,
   market: string,
@@ -155,8 +170,8 @@ router.get("/parlays/predictions", async (_req, res) => {
     const now = new Date().toISOString();
     const { data: predictions, error } = await supabase
       .from("ai_predictions")
-      .select("id, fixture_id, status, prediction_text, market_bet, best_market, best_odds, confidence_score, ev_at_analysis, expected_value, home_team, away_team, league, manual_context, created_at")
-      .in("status", ["active", "WIN", "LOSS", "win", "loss", "no_bet", "settled_manual"])
+      .select("id, fixture_id, status, prediction_text, market_bet, best_market, best_odds, confidence_score, ev_at_analysis, expected_value, home_team, away_team, league, manual_context, created_at, home_score, away_score, settled_at")
+      .in("status", ["active", "pending_result", "WIN", "LOSS", "HALF_WIN", "HALF_LOSS", "PUSH", "win", "loss", "half_win", "half_loss", "push", "no_bet", "settled_manual"])
       .gte("fixture_id", 0)
       .order("created_at", { ascending: false })
       .limit(200);
@@ -166,7 +181,7 @@ router.get("/parlays/predictions", async (_req, res) => {
     const fixtureIds = rows.map((row) => Number(row.fixture_id)).filter(Number.isFinite);
     const [{ data: fixtures, error: fixturesError }, { data: parlayLegs, error: legsError }] = await Promise.all([
       fixtureIds.length
-        ? supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name, league_name").in("fixture_id", fixtureIds)
+        ? supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name, league_name, status_short, home_goals, away_goals").in("fixture_id", fixtureIds)
         : Promise.resolve({ data: [], error: null }),
       fixtureIds.length
         ? supabase.from("parlay_legs").select("fixture_id").in("fixture_id", fixtureIds)
@@ -180,11 +195,22 @@ router.get("/parlays/predictions", async (_req, res) => {
     res.json(rows.flatMap((prediction) => {
       const fixture = fixtureById.get(Number(prediction.fixture_id));
       const isUpcoming = Boolean(fixture?.fixture_date && new Date(fixture.fixture_date).getTime() > Date.now());
-      const market = prediction.market_bet ?? prediction.best_market ?? "";
+      const fixtureFinished = Boolean(
+        fixture?.status_short &&
+        ["FT", "AET", "PEN", "finished", "completed"].includes(String(fixture.status_short)),
+      );
+      const rawStatus = String(prediction.status ?? "active");
+      const status = rawStatus.toLowerCase() === "active" && !isUpcoming
+        ? "pending_result"
+        : rawStatus;
+      const storedMarket = String(prediction.market_bet ?? prediction.best_market ?? "").trim();
+      const market = /^no[\s_-]*bet$/i.test(storedMarket)
+        ? ""
+        : storedMarket || marketFromPredictionText(prediction.prediction_text, prediction.home_team, prediction.away_team) || "";
       const probability = predictionProbability(prediction);
       const odds = Number(prediction.best_odds);
       const selectabilityReason = predictionSelectabilityReason(
-        prediction,
+        status === rawStatus ? prediction : { ...prediction, status },
         market,
         odds,
         probability,
@@ -207,7 +233,16 @@ router.get("/parlays/predictions", async (_req, res) => {
         createdAt: prediction.created_at,
         isInParlay: inParlay.has(Number(prediction.fixture_id)),
         isUpcoming,
-        status: String(prediction.status ?? "active"),
+         status,
+         result: ["WIN", "LOSS", "HALF_WIN", "HALF_LOSS", "PUSH"].includes(status.toUpperCase())
+           ? status.toUpperCase()
+           : null,
+         decision: finalDecision(prediction.prediction_text),
+         homeScore: prediction.home_score ?? fixture?.home_goals ?? null,
+         awayScore: prediction.away_score ?? fixture?.away_goals ?? null,
+         settledAt: prediction.settled_at ?? null,
+         fixtureStatus: fixture?.status_short ?? null,
+         fixtureFinished,
         isSelectable: selectabilityReason == null,
         selectabilityReason,
       }];

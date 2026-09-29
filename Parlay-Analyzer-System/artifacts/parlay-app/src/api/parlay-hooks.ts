@@ -165,6 +165,7 @@ export interface Parlay {
   expected_value: number;
   win_probability: number;
   status: string;
+  decision: "AMBIL" | "NO BET" | null;
   actual_result?: string | null;
   created_at: string;
   updated_at?: string | null;
@@ -189,6 +190,13 @@ export interface AIPredictionBoardItem {
   isInParlay: boolean;
   isUpcoming: boolean;
   status: string;
+  decision: "AMBIL" | "NO BET" | null;
+  result: "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH" | null;
+  homeScore: number | null;
+  awayScore: number | null;
+  settledAt: string | null;
+  fixtureStatus: string | null;
+  fixtureFinished: boolean;
   isSelectable: boolean;
   selectabilityReason: string | null;
 }

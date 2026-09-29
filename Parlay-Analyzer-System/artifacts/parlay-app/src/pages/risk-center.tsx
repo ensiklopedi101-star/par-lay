@@ -27,6 +27,13 @@ import {
 
 function predictionStatusClass(prediction: AIPredictionBoardItem) {
   if (prediction.isSelectable) return "border-emerald-500/30 bg-emerald-500/5 text-emerald-400";
+  if (prediction.result === "WIN" || prediction.result === "HALF_WIN") {
+    return "border-emerald-500/30 bg-emerald-500/5 text-emerald-400";
+  }
+  if (prediction.result === "LOSS" || prediction.result === "HALF_LOSS") {
+    return "border-red-500/30 bg-red-500/5 text-red-400";
+  }
+  if (prediction.result === "PUSH") return "border-sky-500/30 bg-sky-500/5 text-sky-400";
   if (prediction.status.toLowerCase() === "invalidated") return "border-red-500/30 bg-red-500/5 text-red-400";
   return "border-amber-500/30 bg-amber-500/5 text-amber-400";
 }
@@ -48,11 +55,13 @@ function PredictionCard({
   selected: boolean;
   onToggle: () => void;
 }) {
-  const statusLabel = prediction.isSelectable
-    ? prediction.isInParlay
-      ? "IN PARLAY"
-      : "READY"
-    : prediction.status.toUpperCase();
+  const statusLabel = prediction.result
+    ?? (prediction.status.toLowerCase() === "pending_result" ? "PENDING RESULT" : null)
+    ?? (prediction.isSelectable
+      ? prediction.isInParlay
+        ? "IN PARLAY"
+        : "READY"
+      : prediction.status.toUpperCase());
 
   return (
     <article
@@ -90,6 +99,18 @@ function PredictionCard({
               <Badge variant="outline" className={predictionStatusClass(prediction)}>
                 {statusLabel}
               </Badge>
+              {prediction.decision && (
+                <Badge
+                  variant="outline"
+                  className={
+                    prediction.decision === "AMBIL"
+                      ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-400"
+                      : "border-red-500/30 bg-red-500/5 text-red-400"
+                  }
+                >
+                  {prediction.decision}
+                </Badge>
+              )}
               {selected && (
                 <Badge className="gap-1 bg-primary/20 text-primary hover:bg-primary/20">
                   <ClipboardCheck className="h-3 w-3" />
@@ -127,6 +148,22 @@ function PredictionCard({
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
+            {prediction.homeScore != null && prediction.awayScore != null && (
+              <span className="font-semibold text-foreground">
+                Score {prediction.homeScore}–{prediction.awayScore}
+              </span>
+            )}
+            {prediction.result && (
+              <span className={`font-semibold ${
+                prediction.result === "WIN" || prediction.result === "HALF_WIN"
+                  ? "text-emerald-400"
+                  : prediction.result === "LOSS" || prediction.result === "HALF_LOSS"
+                    ? "text-red-400"
+                    : "text-sky-400"
+              }`}>
+                Hasil masuk learning
+              </span>
+            )}
             <span className={`font-semibold ${prediction.ev >= 0 ? "text-emerald-400" : "text-red-400"}`}>
               EV {formatEv(prediction.ev)}
             </span>
@@ -201,8 +238,8 @@ export default function RiskCenter() {
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Prediction Board</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            Semua hasil scanning dan analisis AI ada di sini. Tinjau market, selection, odds, probabilitas, confidence,
-            EV, dan ringkasan analisis sebelum memilih pertandingan untuk AI Parlays.
+            Semua hasil scanning dan analisis AI ada di sini. Prediksi upcoming dapat dipilih untuk AI Parlays;
+            prediksi yang sudah kickoff tetap tersedia sebagai histori dengan skor dan hasil settlement.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -262,6 +299,7 @@ export default function RiskCenter() {
             </CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
               Checkbox tetap tersimpan saat berpindah halaman atau reload. Maksimal 7 prediksi per parlay.
+              Hasil WIN/LOSS/partial/PUSH yang tampil sebagai histori juga dipakai untuk AI learning.
             </p>
           </div>
           {selectedIds.length > 0 && (
@@ -295,7 +333,7 @@ export default function RiskCenter() {
             <div className="rounded-lg border border-dashed border-border p-8 text-center">
               <BrainCircuit className="mx-auto h-8 w-8 text-muted-foreground" />
               <p className="mt-3 text-sm text-muted-foreground">
-                Belum ada hasil analisis untuk fixture mendatang dengan odds dan probabilitas valid.
+                Belum ada hasil analisis untuk fixture mendatang. Gunakan “Show history” untuk melihat hasil settlement.
               </p>
               <Button asChild variant="outline" size="sm" className="mt-4">
                 <Link href="/fixtures">Periksa fixtures & odds</Link>

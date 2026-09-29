@@ -23,6 +23,7 @@ import { refreshFixtureResultsForSettlement } from "./odds-fetcher";
 interface PendingPrediction {
   id: string;
   fixture_id: number;
+  status: string | null;
   prediction_text: string | null;
   best_market: string | null;
   market_bet: string | null;
@@ -63,12 +64,85 @@ export function isNoBet(prediction: PendingPrediction): boolean {
   }
 
   const text = (prediction.prediction_text ?? "").toLowerCase();
+  /*
+   * Do not scan the whole response for "NO BET": the market comparison table
+   * legitimately contains that label for rejected alternatives. The final
+   * decision is the only authoritative prose fallback for legacy rows.
+   */
+  const finalDecision = text.match(
+    /keputusan\s*:\s*(?:\*\*)?\s*(ambil|no[\s_-]*bet)\b/i,
+  )?.[1]?.replace(/\s+/g, " ");
+  if (finalDecision?.toLowerCase() === "ambil") return false;
+  if (finalDecision && /no[\s_-]*bet/i.test(finalDecision)) return true;
+
   return (
     /no[\s_-]*bet/.test(text) ||
     text.includes("tidak disarankan") ||
     text.includes("tidak ada taruhan") ||
     text.includes("skip")
   );
+}
+
+/**
+ * Recover the final selected market from older AI responses that predate the
+ * structured `market_bet` contract. This is used only for post-match
+ * evaluation; it must never be used by parlay selection before kickoff.
+ */
+export function marketFromPredictionText(
+  text: string | null,
+  homeTeam?: string | null,
+  awayTeam?: string | null,
+): string | null {
+  const recommendation = (text ?? "").match(
+    /pasaran\s+terpilih\s*:\s*(?:\*\*)?([^\n]+?)(?:\*\*)?\s*-\s*keputusan\s*:/i,
+  )?.[1];
+  if (!recommendation) return null;
+
+  const raw = recommendation
+    .replace(/\*\*/g, "")
+    .replace(/\*/g, "")
+    .replace(/[`_]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.,;:]+$/, "");
+  if (!raw || /^(n\/?a|none|tidak ada|no[\s_-]*bet|skip)$/i.test(raw)) return null;
+
+  const normalized = raw
+    .replace(/\s*\([^)]*\)\s*$/, "")
+    .replace(/\s+goals?\b/i, "")
+    .trim();
+  if (/both teams to score|btts/i.test(normalized)) {
+    return /\bno\b/i.test(normalized) ? "BTTS No" : "BTTS Yes";
+  }
+  if (/half\s*time|first\s*half/i.test(normalized)) {
+    if (/\baway\b|\btamu\b/i.test(normalized)) return "HT Away";
+    if (/\bdraw\b|\bseri\b/i.test(normalized)) return "HT Draw";
+    if (awayTeam && normalized.toLowerCase().includes(awayTeam.toLowerCase())) return "HT Away";
+    if (homeTeam && normalized.toLowerCase().includes(homeTeam.toLowerCase())) return "HT Home";
+    return "HT Home";
+  }
+  if (/^1x2\b/i.test(normalized)) {
+    if (/\baway\b|\btamu\b/i.test(normalized)) return "1X2 Away";
+    if (/\bdraw\b|\bseri\b/i.test(normalized)) return "1X2 Draw";
+    if (/\bhome\b|\btuan rumah\b/i.test(normalized)) return "1X2 Home";
+    if (awayTeam && normalized.toLowerCase().includes(awayTeam.toLowerCase())) return "1X2 Away";
+    if (homeTeam && normalized.toLowerCase().includes(homeTeam.toLowerCase())) return "1X2 Home";
+  }
+  const totals = normalized.match(/\b(over|under)\s*([+-]?\d+(?:[.,]\d+)?)/i);
+  if (totals) return `${totals[1]!.toLowerCase() === "over" ? "Over" : "Under"} ${totals[2]!.replace(",", ".")}`;
+  if (/asian\s+handicap|handicap|spread|\bah\b/i.test(normalized)) {
+    return normalized
+      .replace(/asian\s+handicap/i, "AH")
+      .replace(/handicap/i, "AH")
+      .replace(/spread/i, "AH")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  if (/draw\s+no\s+bet|dnb/i.test(normalized)) {
+    if (awayTeam && normalized.toLowerCase().includes(awayTeam.toLowerCase())) return "DNB Away";
+    if (homeTeam && normalized.toLowerCase().includes(homeTeam.toLowerCase())) return "DNB Home";
+  }
+  return normalized;
 }
 
 /* ─────────────────────────────────────────
@@ -115,6 +189,13 @@ export function calculateResult(
       return evaluatedHomeGoals > 0 && evaluatedAwayGoals > 0 ? "WIN" : "LOSS";
     }
     return evaluatedHomeGoals > 0 && evaluatedAwayGoals > 0 ? "WIN" : "LOSS";
+  }
+
+  /* Asian Handicap — dengan quarter line support */
+  if (market.includes("draw no bet") || /\bdnb\b/.test(market)) {
+    const isAwaySelection = /\b(away|visitor|tamu)\b/.test(market);
+    const selectedTeamDiff = isAwaySelection ? -evaluatedDiff : evaluatedDiff;
+    return selectedTeamDiff > 0 ? "WIN" : selectedTeamDiff === 0 ? "PUSH" : "LOSS";
   }
 
   /* Asian Handicap — dengan quarter line support */
@@ -414,8 +495,8 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
      The latter must be recoverable after the recommendation parser is fixed. */
   const { data: pendingPredictions, error: predErr } = await supabase
     .from("ai_predictions")
-    .select("id, fixture_id, prediction_text, best_market, market_bet, home_team, away_team, expected_value, ev_at_analysis, best_odds, confidence_score, uncertainty_score, league, created_at, manual_context")
-    .in("status", ["active", "no_bet", "settled_manual"])
+    .select("id, fixture_id, status, prediction_text, best_market, market_bet, home_team, away_team, expected_value, ev_at_analysis, best_odds, confidence_score, uncertainty_score, league, created_at, manual_context")
+    .in("status", ["active", "pending_result", "no_bet", "settled_manual"])
     .not("prediction_text", "is", null)
     .limit(100);
 
@@ -426,6 +507,32 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
   }
 
   const fixtureIds = pendingPredictions.map((p) => p.fixture_id);
+
+  /*
+   * A row must not remain "active" after kickoff merely because the provider
+   * has not returned its final result yet. Keep it retryable, but expose the
+   * honest intermediate state as pending_result.
+   */
+  const { data: elapsedFixtures } = await supabase
+    .from("fixtures")
+    .select("fixture_id, fixture_date")
+    .in("fixture_id", fixtureIds)
+    .lte("fixture_date", new Date().toISOString());
+  const elapsedIds = new Set((elapsedFixtures ?? []).map((fixture) => Number(fixture.fixture_id)));
+  for (const prediction of pendingPredictions as PendingPrediction[]) {
+    if (prediction.status === "active" && elapsedIds.has(Number(prediction.fixture_id))) {
+      const nextStatus = isNoBet(prediction) ? "no_bet" : "pending_result";
+      const { error: pendingUpdateError } = await supabase
+        .from("ai_predictions")
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .eq("id", prediction.id);
+      if (pendingUpdateError) {
+        logger.warn({ err: pendingUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal menandai pending result");
+      } else {
+        prediction.status = nextStatus;
+      }
+    }
+  }
 
   /*
    * 2. Refresh hasil final dari Odds-API terlebih dahulu. Normal odds sync
@@ -493,7 +600,9 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
     }
 
     /* 5. Hitung WIN/LOSS secara matematis murni dari skor */
-    const marketBet = prediction.market_bet ?? prediction.best_market;
+    const marketBet = prediction.market_bet
+      ?? prediction.best_market
+      ?? marketFromPredictionText(prediction.prediction_text, prediction.home_team, prediction.away_team);
     if (requiresHalfTimeScore(marketBet) &&
       (fixture.home_goals_ht == null || fixture.away_goals_ht == null)) {
       logger.warn(
@@ -525,7 +634,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
         away_score: awayGoals,
         settled_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        manual_context: withSettlementContext(prediction, {
+      manual_context: withSettlementContext(prediction, {
           status: "settled_manual",
           marketBet,
           homeScore: homeGoals,
@@ -599,6 +708,10 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
           bagian hasil aktual sehingga evaluasi tidak kehilangan input awal. */
     const { error: predictionUpdateError } = await supabase.from("ai_predictions").update({
       status: betResult,
+      // Preserve the recovered historical selection so the board and learning
+      // summary can explain the result even for legacy rows.
+      market_bet: marketBet,
+      best_market: marketBet,
       home_score: homeGoals,
       away_score: awayGoals,
       settled_at: new Date().toISOString(),
