@@ -309,8 +309,11 @@ async function apiPost<T>(url: string, body?: unknown): Promise<T> {
     headers: Object.keys(headers).length > 0 ? headers : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`API ${res.status}`);
-  return res.json();
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(json && typeof json.error === "string" ? json.error : `API ${res.status}`);
+  }
+  return json as T;
 }
 
 /* ─── Sync Status ─── */
@@ -581,6 +584,45 @@ export interface SettlementResult {
 export function useTriggerSettlement() {
   return useMutation<SettlementResult, Error>({
     mutationFn: () => apiPost<SettlementResult>(`${API_BASE}/sync/settle`),
+  });
+}
+
+export interface ManualPredictionResultInput {
+  predictionId: string;
+  homeScore: number;
+  awayScore: number;
+  homeScoreHT?: number;
+  awayScoreHT?: number;
+}
+
+export interface ManualPredictionResultResponse {
+  predictionId: string;
+  fixtureId: number;
+  scoreSaved: boolean;
+  settled: boolean;
+  learningIncluded: boolean;
+  result?: "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH";
+  status?: string;
+  homeScore?: number;
+  awayScore?: number;
+  settledAt?: string | null;
+  message?: string;
+  settlement?: { settled: number; lessons: number; skipped: number };
+}
+
+export function useRecordManualPredictionResult() {
+  const queryClient = useQueryClient();
+  return useMutation<ManualPredictionResultResponse, Error, ManualPredictionResultInput>({
+    mutationFn: ({ predictionId, ...scores }) =>
+      apiPost<ManualPredictionResultResponse>(
+        `${API_BASE}/parlays/predictions/${encodeURIComponent(predictionId)}/manual-result`,
+        scores,
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getPredictionBoardQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getLearningSummaryQueryKey() });
+      queryClient.invalidateQueries({ queryKey: ["health"] });
+    },
   });
 }
 

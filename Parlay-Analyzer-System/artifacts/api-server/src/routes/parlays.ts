@@ -6,7 +6,12 @@ import { requireAdmin } from "../middlewares/admin";
 import { refreshOddsForFixtures } from "../services/odds-fetcher";
 import { runRevalidation, type RevalidationCandidate } from "../services/revalidation";
 import { runTriggeredReanalysis } from "../services/reanalysis";
-import { marketFromPredictionText } from "../services/settlement";
+import {
+  calculateResult,
+  isNoBet,
+  marketFromPredictionText,
+  runSettlement,
+} from "../services/settlement";
 import {
   calculateParlayMetrics,
   createMergedParlay,
@@ -250,6 +255,166 @@ router.get("/parlays/predictions", async (_req, res) => {
   } catch (error) {
     logger.error({ error }, "[PARLAY-PREDICTIONS] Failed");
     res.status(500).json({ error: error instanceof Error ? error.message : "Failed to load predictions" });
+  }
+});
+
+router.post("/parlays/predictions/:predictionId/manual-result", requireAdmin, async (req, res) => {
+  const readScore = (value: unknown): number | null =>
+    typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 30
+      ? value
+      : null;
+  const homeScore = readScore(req.body?.homeScore);
+  const awayScore = readScore(req.body?.awayScore);
+  if (homeScore == null || awayScore == null) {
+    res.status(400).json({ error: "Skor penuh waktu harus berupa bilangan bulat antara 0 dan 30." });
+    return;
+  }
+
+  const rawHomeHT = req.body?.homeScoreHT;
+  const rawAwayHT = req.body?.awayScoreHT;
+  const homeScoreHT = rawHomeHT == null || rawHomeHT === "" ? null : readScore(rawHomeHT);
+  const awayScoreHT = rawAwayHT == null || rawAwayHT === "" ? null : readScore(rawAwayHT);
+  if ((rawHomeHT != null && rawHomeHT !== "" && homeScoreHT == null) ||
+      (rawAwayHT != null && rawAwayHT !== "" && awayScoreHT == null) ||
+      ((homeScoreHT == null) !== (awayScoreHT == null))) {
+    res.status(400).json({ error: "Skor babak pertama harus diisi berpasangan sebagai bilangan bulat 0–30." });
+    return;
+  }
+
+  const predictionId = String(req.params.predictionId);
+  try {
+    const { data: prediction, error: predictionError } = await supabase
+      .from("ai_predictions")
+      .select("id, fixture_id, status, prediction_text, market_bet, best_market, home_team, away_team")
+      .eq("id", predictionId)
+      .maybeSingle();
+    if (predictionError) throw predictionError;
+    if (!prediction) {
+      res.status(404).json({ error: "Prediksi tidak ditemukan." });
+      return;
+    }
+    if (!["active", "pending_result"].includes(String(prediction.status).toLowerCase())) {
+      res.status(409).json({ error: `Prediksi berstatus ${prediction.status}; hasilnya sudah diproses atau tidak dapat disettle.` });
+      return;
+    }
+    if (isNoBet(prediction)) {
+      res.status(422).json({ error: "Prediksi NO BET tidak dihitung sebagai hasil taruhan dan tidak masuk AI Learning." });
+      return;
+    }
+
+    const fixtureId = Number(prediction.fixture_id);
+    const { data: fixture, error: fixtureError } = await supabase
+      .from("fixtures")
+      .select("fixture_id, fixture_date, home_team_name, away_team_name, league_name, status_short, home_goals, away_goals, home_goals_ht, away_goals_ht")
+      .eq("fixture_id", fixtureId)
+      .maybeSingle();
+    if (fixtureError) throw fixtureError;
+    if (!fixture) {
+      res.status(404).json({ error: "Fixture terkait tidak ditemukan." });
+      return;
+    }
+    if (new Date(fixture.fixture_date).getTime() > Date.now()) {
+      res.status(409).json({ error: "Skor manual hanya dapat dimasukkan setelah waktu kickoff." });
+      return;
+    }
+
+    const finalFixtureStatuses = new Set(["FT", "AET", "PEN", "finished", "completed"]);
+    const fixtureAlreadyFinal = finalFixtureStatuses.has(String(fixture.status_short));
+    if (fixtureAlreadyFinal &&
+        ((fixture.home_goals != null && Number(fixture.home_goals) !== homeScore) ||
+         (fixture.away_goals != null && Number(fixture.away_goals) !== awayScore))) {
+      res.status(409).json({
+        code: "FINAL_SCORE_CONFLICT",
+        error: `Fixture sudah memiliki skor final ${fixture.home_goals}–${fixture.away_goals}. Skor manual yang berbeda tidak disimpan.`,
+      });
+      return;
+    }
+
+    const market = prediction.market_bet
+      ?? prediction.best_market
+      ?? marketFromPredictionText(prediction.prediction_text, prediction.home_team, prediction.away_team);
+    const effectiveHomeHT = homeScoreHT ?? fixture.home_goals_ht;
+    const effectiveAwayHT = awayScoreHT ?? fixture.away_goals_ht;
+    const needsHalfTime = /\b(ht|half[\s-]?time|first[\s-]?half)\b/i.test(market ?? "");
+    if (needsHalfTime && (effectiveHomeHT == null || effectiveAwayHT == null)) {
+      res.status(422).json({ error: "Market babak pertama memerlukan skor babak pertama untuk evaluasi yang benar." });
+      return;
+    }
+    if (calculateResult(
+      homeScore,
+      awayScore,
+      market,
+      prediction.prediction_text,
+      effectiveHomeHT,
+      effectiveAwayHT,
+    ) == null) {
+      res.status(422).json({
+        error: "Market prediksi belum dapat dievaluasi secara terstruktur. Skor tidak disimpan agar hasil AI Learning tidak keliru.",
+      });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const { error: scoreUpdateError } = await supabase
+      .from("fixtures")
+      .update({
+        home_goals: homeScore,
+        away_goals: awayScore,
+        home_goals_ht: effectiveHomeHT,
+        away_goals_ht: effectiveAwayHT,
+        status_short: "FT",
+        status_long: "finished",
+        last_updated: now,
+      })
+      .eq("fixture_id", fixtureId);
+    if (scoreUpdateError) throw scoreUpdateError;
+
+    const settlement = await runSettlement({
+      fixtureIds: [fixtureId],
+      predictionId,
+      refreshResults: false,
+      evaluationSource: "manual_score_entry",
+    });
+    const { data: updated, error: updatedError } = await supabase
+      .from("ai_predictions")
+      .select("status, home_score, away_score, settled_at")
+      .eq("id", predictionId)
+      .maybeSingle();
+    if (updatedError) throw updatedError;
+
+    const result = String(updated?.status ?? "").toUpperCase();
+    const learningIncluded = ["WIN", "LOSS", "HALF_WIN", "HALF_LOSS", "PUSH"].includes(result);
+    if (!learningIncluded) {
+      res.status(202).json({
+        predictionId,
+        fixtureId,
+        scoreSaved: true,
+        settled: false,
+        learningIncluded: false,
+        status: updated?.status ?? "pending_result",
+        message: "Skor tersimpan. Settlement belum selesai; prediksi tetap retryable dan akan dicoba lagi.",
+        settlement,
+      });
+      return;
+    }
+
+    res.json({
+      predictionId,
+      fixtureId,
+      scoreSaved: true,
+      settled: true,
+      learningIncluded: true,
+      result,
+      homeScore: Number(updated?.home_score ?? homeScore),
+      awayScore: Number(updated?.away_score ?? awayScore),
+      settledAt: updated?.settled_at ?? null,
+      settlement,
+    });
+  } catch (error) {
+    logger.error({ error, predictionId }, "[MANUAL-SETTLEMENT] Failed");
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Gagal menyimpan hasil manual.",
+    });
   }
 });
 

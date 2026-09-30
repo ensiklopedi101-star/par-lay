@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "wouter";
 import ReactMarkdown from "react-markdown";
 import {
@@ -8,7 +8,9 @@ import {
   ClipboardCheck,
   ExternalLink,
   Filter,
+  Loader2,
   RefreshCw,
+  Save,
   Sparkles,
   Target,
 } from "lucide-react";
@@ -17,9 +19,25 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { usePredictionBoard, type AIPredictionBoardItem } from "@/api/parlay-hooks";
+import {
+  usePredictionBoard,
+  useRecordManualPredictionResult,
+  type AIPredictionBoardItem,
+} from "@/api/parlay-hooks";
 import { formatLeagueName } from "@/utils/format-league";
+import { useAdminPassword } from "@/hooks/use-admin-password";
+import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
+import { useToast } from "@/hooks/use-toast";
 import {
   readSelectedPredictionIds,
   writeSelectedPredictionIds,
@@ -50,10 +68,12 @@ function PredictionCard({
   prediction,
   selected,
   onToggle,
+  onEnterScore,
 }: {
   prediction: AIPredictionBoardItem;
   selected: boolean;
   onToggle: () => void;
+  onEnterScore: () => void;
 }) {
   const statusLabel = prediction.result
     ?? (prediction.status.toLowerCase() === "pending_result" ? "PENDING RESULT" : null)
@@ -195,6 +215,20 @@ function PredictionCard({
                 {prediction.selectabilityReason ?? "Prediksi belum memenuhi syarat pemilihan."}
             </div>
           )}
+          {prediction.status.toLowerCase() === "pending_result"
+            && prediction.decision !== "NO BET"
+            && !/^no[\s_-]*bet\b/i.test(prediction.market)
+            && (
+            <div className="mt-4 flex flex-col gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs text-muted-foreground">
+                Skor provider belum tersedia. Masukkan skor final untuk menghitung hasil prediksi dan mengirimkannya ke AI Learning.
+              </div>
+              <Button type="button" size="sm" variant="outline" className="shrink-0 border-primary/40 text-primary" onClick={onEnterScore}>
+                <Save className="h-4 w-4" />
+                Input final score
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     </article>
@@ -203,18 +237,87 @@ function PredictionCard({
 
 export default function RiskCenter() {
   const { data: predictions = [], isLoading, isError, refetch, isFetching } = usePredictionBoard();
+  const recordManualResult = useRecordManualPredictionResult();
+  const { open: adminDialogOpen, withPassword, onSubmit, onCancel } = useAdminPassword();
+  const { toast } = useToast();
   const [selectedIds, setSelectedIds] = useState<string[]>(readSelectedPredictionIds);
   const [showHistory, setShowHistory] = useState(false);
+  const [pendingOnly, setPendingOnly] = useState(false);
+  const [manualScorePrediction, setManualScorePrediction] = useState<AIPredictionBoardItem | null>(null);
+  const [homeScore, setHomeScore] = useState("");
+  const [awayScore, setAwayScore] = useState("");
+  const [homeScoreHT, setHomeScoreHT] = useState("");
+  const [awayScoreHT, setAwayScoreHT] = useState("");
 
   useEffect(() => {
     writeSelectedPredictionIds(selectedIds);
   }, [selectedIds]);
 
   const visiblePredictions = useMemo(
-    () => predictions.filter((prediction) => showHistory || prediction.isUpcoming),
-    [predictions, showHistory],
+    () => predictions.filter((prediction) => pendingOnly
+      ? prediction.status.toLowerCase() === "pending_result"
+      : showHistory || prediction.isUpcoming),
+    [predictions, showHistory, pendingOnly],
   );
   const selectableCount = predictions.filter((prediction) => prediction.isSelectable).length;
+  const pendingResultCount = predictions.filter(
+    (prediction) => prediction.status.toLowerCase() === "pending_result"
+      && prediction.decision !== "NO BET"
+      && !/^no[\s_-]*bet\b/i.test(prediction.market),
+  ).length;
+
+  const openManualScore = (prediction: AIPredictionBoardItem) => {
+    setManualScorePrediction(prediction);
+    setHomeScore("");
+    setAwayScore("");
+    setHomeScoreHT("");
+    setAwayScoreHT("");
+  };
+
+  const submitManualScore = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!manualScorePrediction || homeScore === "" || awayScore === "") return;
+    const input = {
+      predictionId: manualScorePrediction.id,
+      homeScore: Number(homeScore),
+      awayScore: Number(awayScore),
+      ...(homeScoreHT !== "" && awayScoreHT !== ""
+        ? { homeScoreHT: Number(homeScoreHT), awayScoreHT: Number(awayScoreHT) }
+        : {}),
+    };
+    withPassword(() => {
+      recordManualResult.mutate(input, {
+        onSuccess: (result) => {
+          setManualScorePrediction(null);
+          toast({
+            title: result.learningIncluded
+              ? `Hasil ${result.result} disimpan`
+              : "Skor tersimpan; settlement menunggu retry",
+            description: result.learningIncluded
+              ? "Skor fixture dan hasil prediksi tersimpan. Feedback sudah masuk ke AI Learning."
+              : result.message ?? "Prediksi tetap bisa dicoba ulang oleh settlement.",
+          });
+        },
+        onError: (error) => toast({
+          title: "Hasil manual gagal disimpan",
+          description: error.message,
+          variant: "destructive",
+        }),
+      });
+    });
+  };
+
+  const requiresHalfTimeScore = /\b(ht|half[\s-]?time|first[\s-]?half)\b/i.test(manualScorePrediction?.market ?? "");
+  const validFullTimeScore = homeScore !== "" && awayScore !== ""
+    && Number.isInteger(Number(homeScore)) && Number.isInteger(Number(awayScore))
+    && Number(homeScore) >= 0 && Number(awayScore) >= 0
+    && Number(homeScore) <= 30 && Number(awayScore) <= 30;
+  const validHalfTimeScore = !requiresHalfTimeScore || (
+    homeScoreHT !== "" && awayScoreHT !== ""
+    && Number.isInteger(Number(homeScoreHT)) && Number.isInteger(Number(awayScoreHT))
+    && Number(homeScoreHT) >= 0 && Number(awayScoreHT) >= 0
+    && Number(homeScoreHT) <= 30 && Number(awayScoreHT) <= 30
+  );
 
   const togglePrediction = (id: string) => {
     setSelectedIds((current) => {
@@ -239,7 +342,8 @@ export default function RiskCenter() {
           <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Prediction Board</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
             Semua hasil scanning dan analisis AI ada di sini. Prediksi upcoming dapat dipilih untuk AI Parlays;
-            prediksi yang sudah kickoff tetap tersedia sebagai histori dengan skor dan hasil settlement.
+            prediksi yang sudah kickoff tetap tersedia sebagai histori dengan skor dan hasil settlement. Jika provider tidak mengirim skor,
+            masukkan skor final secara manual dari kartu pending result.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -247,10 +351,29 @@ export default function RiskCenter() {
             <RefreshCw className={isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
             Refresh board
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowHistory((current) => !current)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setPendingOnly(false);
+              setShowHistory((current) => !current);
+            }}
+          >
             <Filter className="h-4 w-4" />
             {showHistory ? "Hide history" : "Show history"}
           </Button>
+          {pendingResultCount > 0 && (
+            <Button
+              variant={pendingOnly ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => {
+                setPendingOnly((current) => !current);
+                setShowHistory(true);
+              }}
+            >
+              {pendingOnly ? "Show all history" : `Pending results (${pendingResultCount})`}
+            </Button>
+          )}
           <Button asChild size="sm" disabled={selectedIds.length === 0}>
             <Link href="/parlays">
               Buka AI Parlays ({selectedIds.length})
@@ -266,7 +389,7 @@ export default function RiskCenter() {
             <Target className="h-5 w-5 text-primary" />
             <div>
               <div className="text-2xl font-semibold tabular-nums">{visiblePredictions.length}</div>
-              <div className="text-xs text-muted-foreground">{showHistory ? "Visible predictions" : "Upcoming predictions"}</div>
+              <div className="text-xs text-muted-foreground">{pendingOnly ? "Pending results" : showHistory ? "Visible predictions" : "Upcoming predictions"}</div>
             </div>
           </CardContent>
         </Card>
@@ -326,6 +449,7 @@ export default function RiskCenter() {
                   prediction={prediction}
                   selected={selectedIds.includes(prediction.id)}
                   onToggle={() => togglePrediction(prediction.id)}
+                  onEnterScore={() => openManualScore(prediction)}
                 />
               ))}
             </div>
@@ -342,6 +466,121 @@ export default function RiskCenter() {
           )}
         </CardContent>
       </Card>
+      <Dialog
+        open={Boolean(manualScorePrediction)}
+        onOpenChange={(isOpen) => {
+          if (!isOpen && !recordManualResult.isPending) setManualScorePrediction(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Input hasil pertandingan</DialogTitle>
+            <DialogDescription>
+              {manualScorePrediction
+                ? `${manualScorePrediction.homeTeam} vs ${manualScorePrediction.awayTeam} · ${formatLeagueName(manualScorePrediction.league)}`
+                : "Masukkan skor final pertandingan."}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitManualScore} className="space-y-5">
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Skor penuh waktu</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="manual-home-score">{manualScorePrediction?.homeTeam ?? "Home"}</Label>
+                  <Input
+                    id="manual-home-score"
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="1"
+                    inputMode="numeric"
+                    required
+                    value={homeScore}
+                    onChange={(event) => setHomeScore(event.target.value)}
+                    disabled={recordManualResult.isPending}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="manual-away-score">{manualScorePrediction?.awayTeam ?? "Away"}</Label>
+                  <Input
+                    id="manual-away-score"
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="1"
+                    inputMode="numeric"
+                    required
+                    value={awayScore}
+                    onChange={(event) => setAwayScore(event.target.value)}
+                    disabled={recordManualResult.isPending}
+                  />
+                </div>
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Skor babak pertama {requiresHalfTimeScore ? "(wajib untuk market ini)" : "(opsional)"}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="manual-home-score-ht">{manualScorePrediction?.homeTeam ?? "Home"} HT</Label>
+                  <Input
+                    id="manual-home-score-ht"
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="1"
+                    placeholder="—"
+                    value={homeScoreHT}
+                    onChange={(event) => setHomeScoreHT(event.target.value)}
+                    disabled={recordManualResult.isPending}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="manual-away-score-ht">{manualScorePrediction?.awayTeam ?? "Away"} HT</Label>
+                  <Input
+                    id="manual-away-score-ht"
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="1"
+                    placeholder="—"
+                    value={awayScoreHT}
+                    onChange={(event) => setAwayScoreHT(event.target.value)}
+                    disabled={recordManualResult.isPending}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
+              Sistem akan menghitung WIN/LOSS dari market prediksi. Skor fixture dan pelajaran hasil akan disimpan; NO BET tidak dihitung sebagai sampel taruhan.
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setManualScorePrediction(null)}
+                disabled={recordManualResult.isPending}
+              >
+                Batal
+              </Button>
+              <Button type="submit" disabled={!validFullTimeScore || !validHalfTimeScore || recordManualResult.isPending}>
+                {recordManualResult.isPending
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <Save className="h-4 w-4" />}
+                {recordManualResult.isPending ? "Menyimpan..." : "Simpan skor & settle"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <AdminPasswordDialog
+        open={adminDialogOpen}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) onCancel();
+        }}
+        onSubmit={onSubmit}
+      />
     </div>
   );
 }

@@ -54,7 +54,9 @@ interface CompletedFixture {
 /* ─────────────────────────────────────────
    Tentukan apakah prediksi adalah "NO BET"
 ───────────────────────────────────────── */
-export function isNoBet(prediction: PendingPrediction): boolean {
+export function isNoBet(
+  prediction: Pick<PendingPrediction, "market_bet" | "best_market" | "prediction_text">,
+): boolean {
   // A selected market is authoritative. The full Gemini response often
   // contains "NO BET" for alternative markets even when the final
   // recommendation is a real bet.
@@ -283,6 +285,7 @@ function requiresHalfTimeScore(market: string | null): boolean {
 function withSettlementContext(
   prediction: PendingPrediction,
   settlement: Record<string, unknown>,
+  evaluationSource = "fixture_final_score",
 ): Record<string, unknown> {
   const existing = prediction.manual_context && typeof prediction.manual_context === "object"
     ? prediction.manual_context
@@ -292,7 +295,7 @@ function withSettlementContext(
     settlement: {
       ...settlement,
       evaluatedAt: new Date().toISOString(),
-      evaluationSource: "fixture_final_score",
+      evaluationSource,
     },
   };
 }
@@ -485,7 +488,12 @@ async function rebuildPerformanceLog(): Promise<void> {
    Main runner — dipanggil oleh scheduler
    dan endpoint POST /api/sync/settle
 ───────────────────────────────────────── */
-export async function runSettlement(): Promise<{ settled: number; lessons: number; skipped: number }> {
+export async function runSettlement(options: {
+  fixtureIds?: number[];
+  predictionId?: string;
+  refreshResults?: boolean;
+  evaluationSource?: "fixture_final_score" | "manual_score_entry";
+} = {}): Promise<{ settled: number; lessons: number; skipped: number }> {
   logger.info("[SETTLEMENT] Memulai pengecekan hasil pertandingan...");
 
   const geminiKey = process.env["GEMINI_API_KEY"];
@@ -493,12 +501,18 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
 
   /* 1. Ambil prediksi aktif dan prediksi yang sebelumnya salah ditandai no_bet.
      The latter must be recoverable after the recommendation parser is fixed. */
-  const { data: pendingPredictions, error: predErr } = await supabase
+  let pendingQuery = supabase
     .from("ai_predictions")
     .select("id, fixture_id, status, prediction_text, best_market, market_bet, home_team, away_team, expected_value, ev_at_analysis, best_odds, confidence_score, uncertainty_score, league, created_at, manual_context")
     .in("status", ["active", "pending_result", "no_bet", "settled_manual"])
-    .not("prediction_text", "is", null)
-    .limit(100);
+    .not("prediction_text", "is", null);
+  if (options.fixtureIds?.length) {
+    pendingQuery = pendingQuery.in("fixture_id", options.fixtureIds);
+  }
+  if (options.predictionId) {
+    pendingQuery = pendingQuery.eq("id", options.predictionId);
+  }
+  const { data: pendingPredictions, error: predErr } = await pendingQuery.limit(100);
 
   if (predErr || !pendingPredictions?.length) {
     logger.info("[SETTLEMENT] Tidak ada prediksi aktif untuk di-settle");
@@ -541,7 +555,9 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
    * Jika provider gagal/rate-limited, settlement tetap memakai skor lokal yang
    * sudah tersedia dan tidak pernah mengarang hasil.
    */
-  const refreshedResults = await refreshFixtureResultsForSettlement(fixtureIds);
+  const refreshedResults = options.refreshResults === false
+    ? { skipped: fixtureIds.length, reason: "manual_score_entry" }
+    : await refreshFixtureResultsForSettlement(fixtureIds);
   logger.info(refreshedResults, "[SETTLEMENT] Refresh hasil dari Odds-API selesai");
 
   /* 3. Ambil fixtures yang sudah selesai BESERTA SKOR dari DB kita sendiri */
@@ -590,7 +606,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
           homeScore: homeGoals,
           awayScore: awayGoals,
           marketResolution: "no_selected_market",
-        }),
+        }, options.evaluationSource),
       }).eq("id", prediction.id);
       if (noBetUpdateError) {
         logger.error({ err: noBetUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal menyimpan status NO BET");
@@ -634,13 +650,13 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
         away_score: awayGoals,
         settled_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      manual_context: withSettlementContext(prediction, {
+        manual_context: withSettlementContext(prediction, {
           status: "settled_manual",
           marketBet,
           homeScore: homeGoals,
           awayScore: awayGoals,
           marketResolution: "unsupported_market",
-        }),
+        }, options.evaluationSource),
       }).eq("id", prediction.id);
       if (manualUpdateError) {
         logger.error({ err: manualUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal menyimpan status manual");
@@ -726,7 +742,7 @@ export async function runSettlement(): Promise<{ settled: number; lessons: numbe
         homeScore: homeGoals,
         awayScore: awayGoals,
         lessonText,
-      }),
+      }, options.evaluationSource),
     }).eq("id", prediction.id);
     if (predictionUpdateError) {
       logger.error({ err: predictionUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal update hasil prediksi");
