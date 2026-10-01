@@ -2,19 +2,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeManualContext(value: unknown): Record<string, unknown> {
-  if (isRecord(value)) return { ...value };
+export function parseManualContext(value: unknown): Record<string, unknown> | null {
+  if (isRecord(value)) return value;
 
   if (typeof value === "string") {
     try {
       const parsed: unknown = JSON.parse(value);
-      if (isRecord(parsed)) return { ...parsed };
+      if (isRecord(parsed)) return parsed;
     } catch {
-      // Keep non-JSON legacy content below rather than discarding it.
+      return null;
     }
   }
 
-  return value == null ? {} : { legacyManualContext: value };
+  return null;
 }
 
 export function appendSettlementContext(
@@ -23,8 +23,14 @@ export function appendSettlementContext(
   evaluationSource = "fixture_final_score",
   evaluatedAt = new Date().toISOString(),
 ): Record<string, unknown> {
+  const parsedContext = parseManualContext(manualContext);
+  const existing = parsedContext
+    ? { ...parsedContext }
+    : manualContext == null
+      ? {}
+      : { legacyManualContext: manualContext };
   return {
-    ...normalizeManualContext(manualContext),
+    ...existing,
     settlement: {
       ...settlement,
       evaluatedAt,

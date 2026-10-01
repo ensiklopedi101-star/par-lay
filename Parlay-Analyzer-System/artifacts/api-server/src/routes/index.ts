@@ -12,6 +12,7 @@ import statsHealthRouter from "./stats-health";
 import riskCenterRouter from "./risk-center";
 import parlaysRouter from "./parlays";
 import learningRouter from "./learning";
+import baselineDatasetRouter from "./baseline-dataset";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(statsHealthRouter);
 router.use(riskCenterRouter);
 router.use(parlaysRouter);
 router.use(learningRouter);
+router.use(baselineDatasetRouter);
 
 export default router;
