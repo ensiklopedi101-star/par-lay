@@ -15,6 +15,7 @@ import { logger } from "../lib/logger";
 import { generateAIResponse } from "./ai-analysis";
 import { settleParlaysForFixtures } from "./parlay-builder";
 import { refreshFixtureResultsForSettlement } from "./odds-fetcher";
+import { appendSettlementContext } from "../lib/settlement-context";
 
 /* ─────────────────────────────────────────
    Tipe
@@ -36,7 +37,7 @@ interface PendingPrediction {
   uncertainty_score: number | null;
   league: string | null;
   created_at: string | null;
-  manual_context: Record<string, unknown> | null;
+  manual_context: unknown;
 }
 
 interface CompletedFixture {
@@ -287,17 +288,7 @@ function withSettlementContext(
   settlement: Record<string, unknown>,
   evaluationSource = "fixture_final_score",
 ): Record<string, unknown> {
-  const existing = prediction.manual_context && typeof prediction.manual_context === "object"
-    ? prediction.manual_context
-    : {};
-  return {
-    ...existing,
-    settlement: {
-      ...settlement,
-      evaluatedAt: new Date().toISOString(),
-      evaluationSource,
-    },
-  };
+  return appendSettlementContext(prediction.manual_context, settlement, evaluationSource);
 }
 
 /* ─────────────────────────────────────────
