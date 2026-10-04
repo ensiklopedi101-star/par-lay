@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "PbR2EV0_vAN0E-ZlXBLxL"
+uri = "file://research/notes.md"
+type = "text"
+title = "Research Notes: Football Data Source Fit"
+description = "Scope and checklist for reviewing the four football data sources."
+logical_id = "e8d4e9e6-6d54-4044-8c16-ec07f0bdfdc3"
+content_hash = "sha256:80ea470ca2b13970e439e09d34aca300ae83281ebd8e6641350833dcc8eb9f60"
+size = 2259
+mtime_ms = 1791103927446
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:cf631fcd-e70f-4eb8-94b5-64d2117c4a61/e8d4e9e6-6d54-4044-8c16-ec07f0bdfdc3/f3fbe232-2be9-48bf-a4c3-a4fa73d2e6ff"
+storage_version_token = "1791103955401369"
+content_type = "text/markdown"
