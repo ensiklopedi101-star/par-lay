@@ -20,7 +20,7 @@
 - [Cross-league Stats Resolver](stats-resolver.md) — Resolver stats toleran terhadap variasi slug liga, rentang musim, suffix nama tim, dan membaca MP dari JSONB form.
 - [Prediction Revalidation](prediction-revalidation.md) — Pisahkan sinyal risiko pre-kickoff dari status settlement; revalidasi odds tidak boleh mengubah histori parlay atau status active.
 - [Risk Center Health](risk-center-health.md) — Health AI memakai count prediksi aktif; Risk Center hanya menampilkan prediksi active yang fixture-nya belum kickoff.
-- [Canonical Frontend Workflow](canonical-frontend-workflow.md) — Gunakan `Start application` di port 5000; workflow artifact frontend duplikat dibiarkan stopped karena dikelola platform.
+- [Canonical Frontend Workflow](canonical-frontend-workflow.md) — `Start application` menjalankan frontend di 5000 dan API di 8080; workflow artifact duplikat dibiarkan stopped.
 - [Odds Baseline and AI Revisions](odds-baseline-revisions.md) — Baseline legacy hanya dari snapshot historis yang cocok; re-analysis AI disimpan sebagai revision terpisah dan fail-closed saat matching tidak aman.
 - [Data Integrity Audit](data-integrity-audit.md) — Legacy odds duplicates and team-name alias rows require retention/merge policy; older parlays may lack matching legs.
 - [Odds Refresh Contract](odds-refresh-contract.md) — Three-hour verified freshness, rate-limited last-known odds stay unverified, and AI receives explicit market-slot mappings.
