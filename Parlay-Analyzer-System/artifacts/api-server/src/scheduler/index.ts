@@ -93,14 +93,15 @@ export function startScheduler() {
      completed fixtures and previously active predictions unsettled. The
      settlement runner is idempotent because it only selects unsettled
      prediction statuses. */
-  runDailySettlement().catch((err) =>
-    logger.error({ err }, "Startup settlement catch-up failed"),
-  );
-
-  /* Initial odds sync on startup */
-  loadConfigAndSync().catch((err) =>
-    logger.error({ err }, "Initial odds sync failed"),
-  );
+  runDailySettlement()
+    .catch((err) => logger.error({ err }, "Startup settlement catch-up failed"))
+    .finally(() => {
+      /* Settlement and odds sync share the provider quota; avoid overlapping
+         both startup requests against the same free-plan rate limit. */
+      loadConfigAndSync().catch((err) =>
+        logger.error({ err }, "Initial odds sync failed"),
+      );
+    });
 
   /* Stop existing tasks before re-creating */
   if (currentOddsTask)         { currentOddsTask.stop(); }

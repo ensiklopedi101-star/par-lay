@@ -556,7 +556,7 @@ export async function runSettlement(options: {
     .from("fixtures")
     .select("fixture_id, home_team_name, away_team_name, league_name, status_short, home_goals, away_goals, home_goals_ht, away_goals_ht")
     .in("fixture_id", fixtureIds)
-    .in("status_short", ["FT", "AET", "PEN", "finished", "completed"])
+    .in("status_short", ["FT", "AET", "PEN", "finished", "completed", "settled"])
     .not("home_goals", "is", null)
     .not("away_goals", "is", null) as { data: CompletedFixture[] | null };
 

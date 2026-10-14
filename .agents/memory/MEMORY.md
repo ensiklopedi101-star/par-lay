@@ -33,4 +33,4 @@
 - [AI learning transparency](ai-learning-transparency.md) — Hit rate alone is insufficient; show sample quality, outcomes, market ranking, and ROI limitations.
 - [Team stats extension ingestion](team-stats-extension.md) — Extension input is normalized at the API boundary; ingestion requires a matching EXTENSION_API_KEY.
 - [Prediction board readiness](prediction-board-readiness.md) — Structured market, verified odds, and explicit probability are required; prose recommendations never unlock a bet.
-- [Settlement provider fail-closed](settlement-provider-fail-closed.md) — Past kickoff plus provider pending means pending_result, never a fabricated score or WIN/LOSS.
+- [Settlement provider fail-closed](settlement-provider-fail-closed.md) — Odds-API historical results use `settled` and period `p1`; missing coverage or HTTP 429 must remain fail-closed.

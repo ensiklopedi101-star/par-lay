@@ -303,6 +303,10 @@ interface ApiEvent {
     away?: number | string | null;
     home_ht?: number | string | null;
     away_ht?: number | string | null;
+    periods?: Record<string, {
+      home?: number | string | null;
+      away?: number | string | null;
+    }>;
   };
   result?: {
     home?: number | string | null;
@@ -405,13 +409,14 @@ async function fetchEventOdds(eventId: number, apiKey: string, bookmakers: strin
 }
 
 function parseScore(value: unknown): number | null {
+  if (value == null || value === "") return null;
   const score = Number(value);
   return Number.isInteger(score) && score >= 0 ? score : null;
 }
 
 function isFinalEventStatus(status: unknown): boolean {
   const normalized = String(status ?? "").trim().toLowerCase();
-  return ["ft", "aet", "pen", "finished", "completed", "final"].includes(normalized);
+  return ["ft", "aet", "pen", "finished", "completed", "final", "settled"].includes(normalized);
 }
 
 function eventScores(event: ApiEvent): {
@@ -423,8 +428,12 @@ function eventScores(event: ApiEvent): {
   return {
     homeGoals: parseScore(event.home_goals ?? event.scores?.home ?? event.result?.home),
     awayGoals: parseScore(event.away_goals ?? event.scores?.away ?? event.result?.away),
-    homeGoalsHT: parseScore(event.home_goals_ht ?? event.scores?.home_ht),
-    awayGoalsHT: parseScore(event.away_goals_ht ?? event.scores?.away_ht),
+    homeGoalsHT: parseScore(
+      event.home_goals_ht ?? event.scores?.home_ht ?? event.scores?.periods?.p1?.home,
+    ),
+    awayGoalsHT: parseScore(
+      event.away_goals_ht ?? event.scores?.away_ht ?? event.scores?.periods?.p1?.away,
+    ),
   };
 }
 
@@ -504,7 +513,9 @@ export async function refreshFixtureResultsForSettlement(
   }
 
   const now = Date.now();
-  for (const [leagueSlug, leagueFixtures] of byLeague) {
+  const leagueEntries = [...byLeague.entries()];
+  for (let leagueIndex = 0; leagueIndex < leagueEntries.length; leagueIndex++) {
+    const [leagueSlug, leagueFixtures] = leagueEntries[leagueIndex]!;
     /*
      * Odds-API limits historical queries to a 31-day span. Active
      * predictions normally fall inside this window; older rows are left
@@ -528,6 +539,20 @@ export async function refreshFixtureResultsForSettlement(
     } catch (err) {
       if (err instanceof RateLimitError) {
         result.rateLimitedSeconds = Math.max(result.rateLimitedSeconds ?? 0, err.retryAfterSeconds);
+        result.errors += leagueFixtures.length;
+        const remainingFixtures = leagueEntries
+          .slice(leagueIndex + 1)
+          .reduce((count, [, fixturesForLeague]) => count + fixturesForLeague.length, 0);
+        result.skipped += remainingFixtures;
+        logger.warn(
+          {
+            leagueSlug,
+            retryAfterSeconds: err.retryAfterSeconds,
+            skippedRemainingFixtures: remainingFixtures,
+          },
+          "[SETTLEMENT] Rate limit tercapai — menghentikan refresh untuk run ini",
+        );
+        break;
       }
       result.errors += leagueFixtures.length;
       logger.error({ err, leagueSlug }, "[SETTLEMENT] Gagal mengambil hasil historis dari Odds-API");
