@@ -2,6 +2,7 @@ import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 
 const BASE_URL = "https://api.odds-api.io/v3";
+const SUPABASE_PAGE_SIZE = 1000;
 
 let syncRunning = false;
 export function isSyncRunning(): boolean { return syncRunning; }
@@ -872,13 +873,29 @@ async function getAlreadySyncedEventIds(
   requestedMarkets: SupportedOddsMarket[] = DEFAULT_MARKETS,
 ): Promise<Set<number>> {
   if (eventIds.length === 0) return new Set();
-  const { data, error } = await supabase
-    .from("odds_history")
-    .select("match_id, bookmaker, market_type, captured_at")
-    .in("match_id", eventIds.map((id) => String(id)));
-  if (error) {
-    logger.error({ error }, "Failed to fetch already synced odds");
-    return new Set();
+  const data: Array<{
+    match_id: string;
+    bookmaker: string | null;
+    market_type: string | null;
+    captured_at: string | null;
+  }> = [];
+  for (let from = 0; ; from += SUPABASE_PAGE_SIZE) {
+    const { data: page, error } = await supabase
+      .from("odds_history")
+      .select("match_id, bookmaker, market_type, captured_at")
+      .in("match_id", eventIds.map((id) => String(id)))
+      .order("match_id", { ascending: true })
+      .order("bookmaker", { ascending: true })
+      .order("market_type", { ascending: true })
+      .order("captured_at", { ascending: true })
+      .range(from, from + SUPABASE_PAGE_SIZE - 1);
+    if (error) {
+      logger.error({ error }, "Failed to fetch already synced odds");
+      return new Set();
+    }
+    const rows = (page ?? []) as typeof data;
+    data.push(...rows);
+    if (rows.length < SUPABASE_PAGE_SIZE) break;
   }
   const configured = new Set(requestedBookmakers.map(normalizeBookmakerName).filter(Boolean));
   const freshCutoff = Date.now() - ODDS_REFRESH_HOURS * 60 * 60 * 1000;

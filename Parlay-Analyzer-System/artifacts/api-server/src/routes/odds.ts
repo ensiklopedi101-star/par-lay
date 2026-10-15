@@ -6,6 +6,22 @@ import { requireAdmin } from "../middlewares/admin";
 import { latestOddsByMarket } from "../services/odds-history";
 
 const router: IRouter = Router();
+const POSTGREST_PAGE_SIZE = 1000;
+
+type PageQueryResult<T> = { data: T[] | null; error: unknown | null };
+
+async function fetchAllPages<T>(
+  queryPage: (from: number, to: number) => Promise<PageQueryResult<T>>,
+): Promise<PageQueryResult<T>> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += POSTGREST_PAGE_SIZE) {
+    const { data, error } = await queryPage(from, from + POSTGREST_PAGE_SIZE - 1);
+    if (error) return { data: rows, error };
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < POSTGREST_PAGE_SIZE) return { data: rows, error: null };
+  }
+}
 
 /** Admin-only: trigger manual sync odds dari semua liga aktif. */
 router.post("/sync/trigger", requireAdmin, (req, res) => {
@@ -37,22 +53,40 @@ router.get("/odds/events", async (req, res) => {
     }
 
     const fixtureIds = (data ?? []).map((event) => String(event.fixture_id));
-    const [{ data: oddsRows, error: oddsError }, { data: movementRows, error: movementError }] =
-      fixtureIds.length > 0
-        ? await Promise.all([
-            supabase
-              .from("odds_history")
-              .select("match_id, bookmaker, market_type, captured_at")
-              .in("match_id", fixtureIds),
-            supabase
-              .from("odds_movement_history")
-              .select("fixture_id, bookmaker, market_type, captured_at")
-              .in("fixture_id", fixtureIds),
-          ])
-        : [
-            { data: [], error: null },
-            { data: [], error: null },
-          ];
+    let oddsRows: Array<Record<string, unknown>> = [];
+    let movementRows: Array<Record<string, unknown>> = [];
+    let oddsError: unknown | null = null;
+    let movementError: unknown | null = null;
+    if (fixtureIds.length > 0) {
+      const [oddsResult, movementResult] = await Promise.all([
+        fetchAllPages<Record<string, unknown>>(async (from, to) =>
+          await supabase
+            .from("odds_history")
+            .select("match_id, bookmaker, market_type, captured_at")
+            .in("match_id", fixtureIds)
+            .order("match_id", { ascending: true })
+            .order("bookmaker", { ascending: true })
+            .order("market_type", { ascending: true })
+            .order("captured_at", { ascending: true })
+            .range(from, to),
+        ),
+        fetchAllPages<Record<string, unknown>>(async (from, to) =>
+          await supabase
+            .from("odds_movement_history")
+            .select("fixture_id, bookmaker, market_type, captured_at")
+            .in("fixture_id", fixtureIds)
+            .order("fixture_id", { ascending: true })
+            .order("bookmaker", { ascending: true })
+            .order("market_type", { ascending: true })
+            .order("captured_at", { ascending: true })
+            .range(from, to),
+        ),
+      ]);
+      oddsRows = oddsResult.data ?? [];
+      oddsError = oddsResult.error;
+      movementRows = movementResult.data ?? [];
+      movementError = movementResult.error;
+    }
 
     if (oddsError) logger.warn({ error: oddsError }, "Failed to load odds status for events");
     if (movementError) logger.warn({ error: movementError }, "Failed to load odds movement status for events");

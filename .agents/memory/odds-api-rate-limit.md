@@ -15,3 +15,9 @@ Odds-API free plan allows **100 requests per hour**. The odds sync is capped at 
 The provider may return the reset duration in the response body when `Retry-After` is absent. Treat both sources as valid, cap waits to a bounded maximum, and retry a league only a limited number of times before continuing with the remaining leagues.
 
 **Why:** A missing header must not collapse the parsed wait to zero, while an uncapped reset window can block the whole scheduler. Bounded per-league recovery preserves progress without increasing request volume beyond the configured limits.
+
+Settlement historical-result lookups use the same `ODDS_API_KEY` quota as upcoming-odds sync. Startup catch-up settlement can therefore consume the remaining hourly requests before the first regular odds refresh.
+
+**Why:** A successful previous sync does not guarantee quota remains for the next scheduler run; a later 429 can be caused by settlement, odds refreshes, or both.
+
+**How to apply:** When diagnosing missing odds, inspect the exact provider status and request log. A 429 means refresh was blocked by quota; a fixture absent from the provider event response or a successful response with no selected markets is a different failure state.
