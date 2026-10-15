@@ -3,7 +3,7 @@ import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 import { predictionProbabilityFromContext } from "../lib/prediction-probability";
 import { requireAdmin } from "../middlewares/admin";
-import { refreshOddsForFixtures } from "../services/odds-fetcher";
+import { classifyOddsMarket, refreshOddsForFixtures } from "../services/odds-fetcher";
 import { runRevalidation, type RevalidationCandidate } from "../services/revalidation";
 import { runTriggeredReanalysis } from "../services/reanalysis";
 import {
@@ -166,6 +166,99 @@ function predictionSelectabilityReason(
     return "Probabilitas nyata eksplisit belum tersimpan. Confidence tidak digunakan sebagai pengganti probabilitas.";
   }
   return null;
+}
+
+type ManualOutcomeKey = "home" | "draw" | "away" | "over" | "under" | "yes" | "no";
+
+type ManualLegRequest = {
+  fixtureId: number;
+  bookmaker: string;
+  marketType: string;
+  marketLine: string | null;
+  outcomeKey: ManualOutcomeKey;
+  odds: number;
+  probability: number;
+};
+
+function parseManualLegRequests(value: unknown): ManualLegRequest[] | null {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 7) return null;
+  const allowedOutcomes = new Set<ManualOutcomeKey>(["home", "draw", "away", "over", "under", "yes", "no"]);
+  const parsed: ManualLegRequest[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const row = item as Record<string, unknown>;
+    const fixtureId = Number(row.fixtureId);
+    const bookmaker = String(row.bookmaker ?? "").trim();
+    const marketType = String(row.marketType ?? "").trim();
+    const outcomeKey = String(row.outcomeKey ?? "") as ManualOutcomeKey;
+    const odds = Number(row.odds);
+    const probability = Number(row.probability);
+    const marketLine = row.marketLine == null || String(row.marketLine).trim() === ""
+      ? null
+      : String(row.marketLine).trim();
+    if (
+      !Number.isSafeInteger(fixtureId)
+      || fixtureId <= 0
+      || !bookmaker
+      || bookmaker.length > 100
+      || !marketType
+      || marketType.length > 100
+      || !allowedOutcomes.has(outcomeKey)
+      || !Number.isFinite(odds)
+      || odds <= 1
+      || !Number.isFinite(probability)
+      || probability <= 0
+      || probability >= 1
+      || (marketLine != null && marketLine.length > 32)
+    ) return null;
+    parsed.push({ fixtureId, bookmaker, marketType, marketLine, outcomeKey, odds, probability });
+  }
+  return parsed;
+}
+
+function manualOutcomeFor(
+  outcomeKey: ManualOutcomeKey,
+  marketClass: string,
+  fixture: FixtureRow,
+): { field: "odds_1" | "odds_2" | "odds_draw"; label: string } | null {
+  if ((marketClass === "ML" || marketClass === "HT") && outcomeKey === "home") {
+    return { field: "odds_1", label: fixture.home_team_name };
+  }
+  if ((marketClass === "ML" || marketClass === "HT") && outcomeKey === "draw") {
+    return { field: "odds_draw", label: "Draw" };
+  }
+  if ((marketClass === "ML" || marketClass === "HT") && outcomeKey === "away") {
+    return { field: "odds_2", label: fixture.away_team_name };
+  }
+  if (marketClass === "Totals" && outcomeKey === "over") {
+    return { field: "odds_1", label: "Over" };
+  }
+  if (marketClass === "Totals" && outcomeKey === "under") {
+    return { field: "odds_2", label: "Under" };
+  }
+  if (marketClass === "BTTS" && outcomeKey === "yes") {
+    return { field: "odds_1", label: "Yes" };
+  }
+  if (marketClass === "BTTS" && outcomeKey === "no") {
+    return { field: "odds_2", label: "No" };
+  }
+  if (marketClass === "AH" && outcomeKey === "home") {
+    return { field: "odds_1", label: fixture.home_team_name };
+  }
+  if (marketClass === "AH" && outcomeKey === "away") {
+    return { field: "odds_2", label: fixture.away_team_name };
+  }
+  return null;
+}
+
+function sameMarketLine(actual: unknown, requested: string): boolean {
+  const actualNumber = Number(actual);
+  const requestedNumber = Number(requested);
+  if (Number.isFinite(actualNumber) && Number.isFinite(requestedNumber)) {
+    return Math.abs(actualNumber - requestedNumber) < 0.001;
+  }
+  return String(actual ?? "").trim().toLowerCase() === requested.trim().toLowerCase();
 }
 
 /* Individual AI signals for manual parlay construction. This intentionally
@@ -709,25 +802,45 @@ router.post("/parlays/merge", requireAdmin, async (req, res) => {
 router.post("/parlays/from-predictions", requireAdmin, async (req, res) => {
   try {
     const predictionIds = asIds(req.body?.predictionIds);
-    if (predictionIds.length < 2) {
-      res.status(422).json({ error: "Pilih minimal dua prediksi aktif." });
+    const manualLegs = parseManualLegRequests(req.body?.manualLegs);
+    if (!manualLegs) {
+      res.status(400).json({ error: "Pilihan manual tidak valid. Muat ulang odds dan pilih kembali." });
       return;
     }
-    const { data: predictions, error } = await supabase
-      .from("ai_predictions")
-      .select("id, fixture_id, status, market_bet, best_market, best_odds, confidence_score, ev_at_analysis, expected_value, home_team, away_team, league, manual_context")
-      .in("id", predictionIds)
-      .eq("status", "active");
+    if (predictionIds.length + manualLegs.length < 2) {
+      res.status(422).json({ error: "Pilih minimal dua leg AI atau manual." });
+      return;
+    }
+    if (predictionIds.length + manualLegs.length > 7) {
+      res.status(422).json({ error: "Maksimal 7 leg per parlay." });
+      return;
+    }
+    const { data: predictions, error } = predictionIds.length > 0
+      ? await supabase
+        .from("ai_predictions")
+        .select("id, fixture_id, status, market_bet, best_market, best_odds, confidence_score, ev_at_analysis, expected_value, home_team, away_team, league, manual_context")
+        .in("id", predictionIds)
+        .eq("status", "active")
+      : { data: [], error: null };
     if (error) throw error;
     const rows = (predictions ?? []) as Array<Record<string, unknown>>;
-    const fixtureIds = rows.map((row) => Number(row.fixture_id)).filter(Number.isFinite);
-    const { data: fixtures, error: fixturesError } = await supabase
-      .from("fixtures")
-      .select("fixture_id, fixture_date, home_team_name, away_team_name, league_name")
-      .in("fixture_id", fixtureIds);
+    if (rows.length !== predictionIds.length) {
+      res.status(422).json({ error: "Salah satu prediksi AI sudah tidak aktif atau tidak ditemukan. Perbarui daftar pilihan." });
+      return;
+    }
+    const fixtureIds = Array.from(new Set([
+      ...rows.map((row) => Number(row.fixture_id)).filter(Number.isFinite),
+      ...manualLegs.map((leg) => leg.fixtureId),
+    ]));
+    const { data: fixtures, error: fixturesError } = fixtureIds.length > 0
+      ? await supabase
+        .from("fixtures")
+        .select("fixture_id, fixture_date, home_team_name, away_team_name, league_name")
+        .in("fixture_id", fixtureIds)
+      : { data: [], error: null };
     if (fixturesError) throw fixturesError;
     const fixtureById = new Map((fixtures ?? []).map((fixture) => [Number(fixture.fixture_id), fixture]));
-    const candidates: ParlayCandidate[] = rows.flatMap((row) => {
+    const aiCandidates: ParlayCandidate[] = rows.flatMap((row) => {
       const fixture = fixtureById.get(Number(row.fixture_id));
       const probability = predictionProbabilityFromContext(row.manual_context);
       const odds = Number(row.best_odds);
@@ -748,11 +861,99 @@ router.post("/parlays/from-predictions", requireAdmin, async (req, res) => {
         evPercent: Number(row.ev_at_analysis ?? row.expected_value ?? 0) * 100,
       }];
     });
-    if (candidates.length < 2) {
-      res.status(422).json({ error: "Minimal dua prediksi harus memiliki odds, probabilitas, fixture mendatang, dan market yang valid." });
+    if (aiCandidates.length !== rows.length) {
+      res.status(422).json({ error: "Prediksi AI harus memiliki fixture mendatang, market, odds, dan probabilitas eksplisit yang valid." });
       return;
     }
-    const result = await createMergedParlay(candidates, []);
+
+    const candidates: ParlayCandidate[] = [...aiCandidates];
+    const usedFixtureIds = new Set(aiCandidates.map((candidate) => Number(candidate.fixtureId)));
+    for (const manual of manualLegs) {
+      if (usedFixtureIds.has(manual.fixtureId)) {
+        res.status(422).json({ error: "Satu parlay hanya dapat memiliki satu leg untuk setiap fixture." });
+        return;
+      }
+      const fixture = fixtureById.get(manual.fixtureId);
+      if (!fixture || new Date(fixture.fixture_date).getTime() <= Date.now()) {
+        res.status(422).json({ error: "Pilihan manual hanya dapat dibuat untuk fixture yang belum kickoff." });
+        return;
+      }
+
+      const marketClass = classifyOddsMarket(manual.marketType);
+      if (!marketClass) {
+        res.status(422).json({ error: `Market ${manual.marketType} tidak didukung untuk pilihan manual.` });
+        return;
+      }
+      const outcome = manualOutcomeFor(manual.outcomeKey, marketClass, fixture);
+      if (!outcome) {
+        res.status(422).json({ error: `Pilihan ${manual.outcomeKey} tidak cocok dengan market ${manual.marketType}.` });
+        return;
+      }
+
+      const { data: oddsRows, error: oddsError } = await supabase
+        .from("odds_history")
+        .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+        .eq("match_id", String(manual.fixtureId))
+        .eq("bookmaker", manual.bookmaker)
+        .eq("market_type", manual.marketType)
+        .order("captured_at", { ascending: false })
+        .limit(100);
+      if (oddsError) throw oddsError;
+      const lineMarket = marketClass === "Totals" || marketClass === "AH";
+      const matchingRow = (oddsRows ?? []).find((row) => {
+        if (lineMarket && manual.marketLine != null && !sameMarketLine(row.odds_draw, manual.marketLine)) {
+          return false;
+        }
+        const currentOdds = Number(row[outcome.field]);
+        return Number.isFinite(currentOdds)
+          && currentOdds > 1
+          && Math.abs(currentOdds - manual.odds) < 0.001;
+      });
+      if (!matchingRow) {
+        res.status(409).json({
+          error: `Odds untuk ${fixture.home_team_name} vs ${fixture.away_team_name} berubah atau tidak lagi tersedia. Buka ulang fixture dan pilih kembali.`,
+        });
+        return;
+      }
+
+      const lineSuffix = manual.marketLine ? ` ${manual.marketLine}` : "";
+      const selection = marketClass === "Totals"
+        ? `${outcome.label}${lineSuffix}`
+        : outcome.label;
+      candidates.push({
+        fixtureId: manual.fixtureId,
+        homeTeam: fixture.home_team_name,
+        awayTeam: fixture.away_team_name,
+        league: fixture.league_name ?? "",
+        date: fixture.fixture_date,
+        market: `${manual.marketType}${lineSuffix}`,
+        selection,
+        odds: Number(matchingRow[outcome.field]),
+        confidence: null,
+        probability: manual.probability,
+        evPercent: (manual.probability * Number(matchingRow[outcome.field]) - 1) * 100,
+        source: "USER_SELECTION",
+      });
+      usedFixtureIds.add(manual.fixtureId);
+    }
+
+    if (candidates.length < 2) {
+      res.status(422).json({ error: "Pilih minimal dua leg valid." });
+      return;
+    }
+    const hasManualLegs = manualLegs.length > 0;
+    const generatedBy = hasManualLegs
+      ? aiCandidates.length > 0 ? "USER_MIXED" : "USER_MANUAL"
+      : "AI_SELECTED";
+    const result = await createMergedParlay(candidates, [], {
+      generatedBy,
+      namePrefix: hasManualLegs
+        ? aiCandidates.length > 0 ? "Parlay Campuran" : "Parlay Pilihan Pengguna"
+        : "AI Selected Parlay",
+      reasoning: hasManualLegs
+        ? "Menggabungkan prediksi AI yang valid dan leg yang dipilih pengguna. Probabilitas leg manual berasal dari estimasi pengguna; leg manual tidak dimasukkan ke AI Learning."
+        : "Dibuat dari prediksi AI yang dipilih pengguna.",
+    });
     if (!result.parlayId) {
       res.status(422).json({ error: "Parlay tidak dapat dibuat.", result });
       return;

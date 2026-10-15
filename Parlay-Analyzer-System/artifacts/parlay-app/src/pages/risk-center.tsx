@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Filter,
   Loader2,
+  Plus,
   RefreshCw,
   Save,
   Sparkles,
@@ -37,11 +38,17 @@ import {
 import { formatLeagueName } from "@/utils/format-league";
 import { useAdminPassword } from "@/hooks/use-admin-password";
 import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
+import { ManualLegPicker } from "@/components/manual-leg-picker";
 import { useToast } from "@/hooks/use-toast";
 import {
   readSelectedPredictionIds,
   writeSelectedPredictionIds,
 } from "@/utils/prediction-selection";
+import {
+  readManualParlayLegs,
+  writeManualParlayLegs,
+  type ManualParlayLeg,
+} from "@/utils/manual-parlay-selection";
 
 function predictionStatusClass(prediction: AIPredictionBoardItem) {
   if (prediction.isSelectable) return "border-emerald-500/30 bg-emerald-500/5 text-emerald-400";
@@ -81,7 +88,9 @@ function PredictionCard({
       ? prediction.isInParlay
         ? "IN PARLAY"
         : "READY"
-      : prediction.status.toUpperCase());
+      : prediction.status.toLowerCase() === "active"
+        ? "PREDIKSI AKTIF"
+        : prediction.status.toUpperCase());
 
   return (
     <article
@@ -94,6 +103,8 @@ function PredictionCard({
       <div className="flex items-start gap-3">
         <Checkbox
           aria-label={`Pilih ${prediction.homeTeam} vs ${prediction.awayTeam}`}
+          aria-describedby={!prediction.isSelectable ? `prediction-reason-${prediction.id}` : undefined}
+          title={!prediction.isSelectable ? prediction.selectabilityReason ?? "Belum memenuhi syarat parlay AI." : "Pilih prediksi AI ini"}
           checked={selected}
           onCheckedChange={onToggle}
           disabled={!prediction.isSelectable}
@@ -128,7 +139,7 @@ function PredictionCard({
                       : "border-red-500/30 bg-red-500/5 text-red-400"
                   }
                 >
-                  {prediction.decision}
+                  Rekomendasi AI: {prediction.decision}
                 </Badge>
               )}
               {selected && (
@@ -211,8 +222,8 @@ function PredictionCard({
           )}
 
           {!prediction.isSelectable && (
-            <div className="mt-3 text-xs text-amber-400">
-                {prediction.selectabilityReason ?? "Prediksi belum memenuhi syarat pemilihan."}
+            <div id={`prediction-reason-${prediction.id}`} className="mt-3 text-xs text-amber-400">
+                Tidak bisa dipilih sebagai leg AI: {prediction.selectabilityReason ?? "prediksi belum memenuhi syarat."}
             </div>
           )}
           {prediction.status.toLowerCase() === "pending_result"
@@ -241,6 +252,8 @@ export default function RiskCenter() {
   const { open: adminDialogOpen, withPassword, onSubmit, onCancel } = useAdminPassword();
   const { toast } = useToast();
   const [selectedIds, setSelectedIds] = useState<string[]>(readSelectedPredictionIds);
+  const [manualLegs, setManualLegs] = useState<ManualParlayLeg[]>(readManualParlayLegs);
+  const [manualPickerOpen, setManualPickerOpen] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [pendingOnly, setPendingOnly] = useState(false);
   const [manualScorePrediction, setManualScorePrediction] = useState<AIPredictionBoardItem | null>(null);
@@ -252,6 +265,10 @@ export default function RiskCenter() {
   useEffect(() => {
     writeSelectedPredictionIds(selectedIds);
   }, [selectedIds]);
+
+  useEffect(() => {
+    writeManualParlayLegs(manualLegs);
+  }, [manualLegs]);
 
   const visiblePredictions = useMemo(
     () => predictions.filter((prediction) => pendingOnly
@@ -322,7 +339,32 @@ export default function RiskCenter() {
   const togglePrediction = (id: string) => {
     setSelectedIds((current) => {
       if (current.includes(id)) return current.filter((value) => value !== id);
-      return current.length < 7 ? [...current, id] : current;
+      return current.length + manualLegs.length < 7 ? [...current, id] : current;
+    });
+  };
+
+  const addManualLeg = (leg: ManualParlayLeg) => {
+    const selectedFixtureIds = new Set(
+      selectedIds
+        .map((id) => predictions.find((prediction) => prediction.id === id)?.fixtureId)
+        .filter((fixtureId): fixtureId is number => fixtureId != null),
+    );
+    if (selectedFixtureIds.has(leg.fixtureId) || manualLegs.some((existing) => existing.fixtureId === leg.fixtureId)) {
+      toast({
+        title: "Fixture sudah dipilih",
+        description: "Satu parlay hanya dapat memakai satu leg untuk setiap fixture.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (selectedIds.length + manualLegs.length >= 7) {
+      toast({ title: "Batas leg tercapai", description: "Maksimal 7 leg per parlay.", variant: "destructive" });
+      return;
+    }
+    setManualLegs((current) => [...current, leg]);
+    toast({
+      title: "Leg manual ditambahkan",
+      description: `${leg.homeTeam} vs ${leg.awayTeam} · ${leg.selection} disimpan sebagai pilihan Anda.`,
     });
   };
 
@@ -341,12 +383,20 @@ export default function RiskCenter() {
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Prediction Board</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            Semua hasil scanning dan analisis AI ada di sini. Prediksi upcoming dapat dipilih untuk AI Parlays;
+            Semua hasil scanning dan analisis AI ada di sini. Prediksi upcoming yang memenuhi syarat dapat dipilih untuk AI Parlays;
             prediksi yang sudah kickoff tetap tersedia sebagai histori dengan skor dan hasil settlement. Jika provider tidak mengirim skor,
             masukkan skor final secara manual dari kartu pending result.
           </p>
+          <p className="mt-2 max-w-3xl text-xs text-muted-foreground">
+            “Prediksi aktif” berarti catatan AI masih aktif; “Rekomendasi AI: AMBIL” adalah sinyal model, bukan tombol taruhan.
+            Pilihan AI memerlukan market, odds, dan probabilitas yang valid. Gunakan Pilih leg manual untuk fixture lain.
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => setManualPickerOpen(true)} disabled={selectedIds.length + manualLegs.length >= 7}>
+            <Plus className="h-4 w-4" />
+            Pilih leg manual
+          </Button>
           <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
             <RefreshCw className={isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
             Refresh board
@@ -374,9 +424,9 @@ export default function RiskCenter() {
               {pendingOnly ? "Show all history" : `Pending results (${pendingResultCount})`}
             </Button>
           )}
-          <Button asChild size="sm" disabled={selectedIds.length === 0}>
+          <Button asChild size="sm" disabled={selectedIds.length + manualLegs.length === 0}>
             <Link href="/parlays">
-              Buka AI Parlays ({selectedIds.length})
+              Buka AI Parlays ({selectedIds.length + manualLegs.length})
               <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
@@ -406,8 +456,8 @@ export default function RiskCenter() {
           <CardContent className="flex items-center gap-3 p-4">
             <ClipboardCheck className="h-5 w-5 text-amber-400" />
             <div>
-              <div className="text-2xl font-semibold tabular-nums text-amber-400">{selectedIds.length}/7</div>
-              <div className="text-xs text-muted-foreground">Queued for AI Parlays</div>
+              <div className="text-2xl font-semibold tabular-nums text-amber-400">{selectedIds.length + manualLegs.length}/7</div>
+              <div className="text-xs text-muted-foreground">Leg AI + manual dalam shortlist</div>
             </div>
           </CardContent>
         </Card>
@@ -421,8 +471,8 @@ export default function RiskCenter() {
               Scanning & analysis results
             </CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
-              Checkbox tetap tersimpan saat berpindah halaman atau reload. Maksimal 7 prediksi per parlay.
-              Hasil WIN/LOSS/partial/PUSH yang tampil sebagai histori juga dipakai untuk AI learning.
+              Pilihan tersimpan di browser sampai parlay dibuat. Maksimal 7 leg dan satu leg per fixture.
+              Leg manual tersimpan sebagai pilihan pengguna, bukan data prediksi AI atau AI learning.
             </p>
           </div>
           {selectedIds.length > 0 && (
@@ -574,6 +624,11 @@ export default function RiskCenter() {
           </form>
         </DialogContent>
       </Dialog>
+      <ManualLegPicker
+        open={manualPickerOpen}
+        onOpenChange={setManualPickerOpen}
+        onAdd={addManualLeg}
+      />
       <AdminPasswordDialog
         open={adminDialogOpen}
         onOpenChange={(isOpen) => {

@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type { ManualParlayLeg } from "@/utils/manual-parlay-selection";
 
 const API_BASE = "/api";
 
@@ -154,6 +155,7 @@ export interface ParlayLeg {
   odds: number;
   probability: number;
   confidence?: number | null;
+  source?: "ai" | "manual";
   result?: string | null;
 }
 
@@ -165,6 +167,7 @@ export interface Parlay {
   expected_value: number;
   win_probability: number;
   status: string;
+  generated_by?: string | null;
   decision: "AMBIL" | "NO BET" | null;
   actual_result?: string | null;
   created_at: string;
@@ -209,6 +212,11 @@ export interface CreateParlayFromPredictionsResult {
   expectedValue: number;
   avgConfidence: number;
 }
+
+export type ManualParlayLegInput = Pick<
+  ManualParlayLeg,
+  "fixtureId" | "bookmaker" | "marketType" | "marketLine" | "outcomeKey" | "odds" | "probability"
+>;
 
 export type ParlayReadinessStatus =
   | "ready"
@@ -397,7 +405,10 @@ export function useMergeParlays() {
 
 export function useCreateParlayFromPredictions() {
   const queryClient = useQueryClient();
-  return useMutation<CreateParlayFromPredictionsResult, Error, { predictionIds: string[] }>({
+  return useMutation<CreateParlayFromPredictionsResult, Error, {
+    predictionIds: string[];
+    manualLegs: ManualParlayLegInput[];
+  }>({
     mutationFn: (input) => apiPost<CreateParlayFromPredictionsResult>(`${API_BASE}/parlays/from-predictions`, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["supabase/parlays"] });

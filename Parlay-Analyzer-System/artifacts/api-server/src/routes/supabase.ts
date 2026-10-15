@@ -128,6 +128,7 @@ router.get("/supabase/parlays", async (req, res) => {
       win_probability: toNumber(parlay.win_probability),
       avg_confidence: toNumber(parlay.avg_confidence),
       status: String(parlay.status ?? "pending"),
+      generated_by: parlay.generated_by == null ? null : String(parlay.generated_by),
       actual_result: parlay.actual_result ?? null,
       created_at: parlay.created_at,
       updated_at: parlay.updated_at ?? null,
@@ -144,6 +145,9 @@ router.get("/supabase/parlays", async (req, res) => {
           odds: toNumber(leg.odds),
           probability: toNumber(leg.probability),
           confidence: leg.confidence == null ? null : toNumber(leg.confidence),
+          source: String(parlay.generated_by ?? "").startsWith("USER_") && leg.prediction_id == null
+            ? "manual"
+            : "ai",
           result: leg.result ?? null,
         };
       }),

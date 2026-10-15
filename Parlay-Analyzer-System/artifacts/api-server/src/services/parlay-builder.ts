@@ -11,9 +11,10 @@ export interface ParlayCandidate {
   market: string;
   selection: string;
   odds: number;
-  confidence: number;
+  confidence: number | null;
   probability: number;
   evPercent: number;
+  source?: "USER_SELECTION";
 }
 
 export interface MergeParlayResult {
@@ -29,6 +30,12 @@ export interface MergeParlayResult {
 
 export type ParlayRiskLevel = "low" | "medium" | "high" | "very_high";
 
+export interface CreateMergedParlayOptions {
+  generatedBy?: string;
+  namePrefix?: string;
+  reasoning?: string;
+}
+
 function probabilityFor(candidate: ParlayCandidate): number {
   return Math.max(0.01, Math.min(0.99, candidate.probability));
 }
@@ -43,15 +50,21 @@ export function calculateParlayMetrics(candidates: ParlayCandidate[]) {
     1,
   );
   const expectedValue = winProbability * combinedOdds - 1;
-  const avgConfidence = candidates.length > 0
-    ? candidates.reduce((sum, candidate) => sum + candidate.confidence, 0) / candidates.length
+  const confidenceValues = candidates
+    .map((candidate) => candidate.confidence)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  const avgConfidence = confidenceValues.length > 0
+    ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+    : 0;
+  const confidenceRiskPenalty = confidenceValues.length > 0
+    ? Math.max(0, 8 - avgConfidence) * 4
     : 0;
   const riskScore = Math.min(
     100,
     Math.round(
       (1 - winProbability) * 65 +
       Math.max(0, candidates.length - 2) * 6 +
-      Math.max(0, 8 - avgConfidence) * 4 +
+      confidenceRiskPenalty +
       Math.max(0, combinedOdds - 8) * 1.5,
     ),
   );
@@ -68,6 +81,7 @@ export function calculateParlayMetrics(candidates: ParlayCandidate[]) {
 export async function createMergedParlay(
   candidates: ParlayCandidate[],
   sourceParlayIds: string[],
+  options: CreateMergedParlayOptions = {},
 ): Promise<MergeParlayResult> {
   const rejected: Array<{ fixtureId: number; reason: string }> = [];
   const unique = new Map<string, ParlayCandidate>();
@@ -78,7 +92,14 @@ export async function createMergedParlay(
       rejected.push({ fixtureId, reason: "Fixture duplikat; hanya satu leg per fixture yang diperbolehkan." });
       continue;
     }
-    if (candidate.odds <= 1 || candidate.confidence < 6.5 || !Number.isFinite(candidate.probability) || candidate.probability <= 0 || candidate.probability >= 1) {
+    const isUserSelection = candidate.source === "USER_SELECTION";
+    if (
+      candidate.odds <= 1
+      || (!isUserSelection && (candidate.confidence == null || candidate.confidence < 6.5))
+      || !Number.isFinite(candidate.probability)
+      || candidate.probability <= 0
+      || candidate.probability >= 1
+    ) {
       rejected.push({ fixtureId, reason: "Odds, confidence, atau probabilitas tidak memenuhi batas minimum." });
       continue;
     }
@@ -104,7 +125,7 @@ export async function createMergedParlay(
   const { data: parlay, error: parlayError } = await supabase
     .from("parlays")
     .insert({
-      parlay_name: `Merged AI Parlay — ${new Date().toLocaleDateString("id-ID")}`,
+      parlay_name: `${options.namePrefix ?? "Merged AI Parlay"} — ${new Date().toLocaleDateString("id-ID")}`,
       legs_count: legs.length,
       combined_odds: metrics.combinedOdds,
       win_probability: metrics.winProbability,
@@ -112,10 +133,11 @@ export async function createMergedParlay(
       risk_score: metrics.riskScore,
       avg_confidence: metrics.avgConfidence,
       status: "active",
-      generated_by: "AI_MERGE",
+      generated_by: options.generatedBy ?? "AI_MERGE",
       leagues_count: leagues.size,
       countries_count: leagues.size,
-      reasoning: `Gabungan parlay ${sourceLabel}. Maksimum 7 leg; dibuat setelah verifikasi readiness.`,
+      reasoning: options.reasoning
+        ?? `Gabungan parlay ${sourceLabel}. Maksimum 7 leg; dibuat setelah verifikasi readiness.`,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })

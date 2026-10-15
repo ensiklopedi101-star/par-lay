@@ -34,6 +34,11 @@ import {
   readSelectedPredictionIds,
   writeSelectedPredictionIds,
 } from "@/utils/prediction-selection";
+import {
+  readManualParlayLegs,
+  writeManualParlayLegs,
+  type ManualParlayLeg,
+} from "@/utils/manual-parlay-selection";
 
 function ParlayStatusBadge({ status }: { status: string }) {
   const statusStyles: Record<string, string> = {
@@ -55,6 +60,13 @@ function ParlayStatusBadge({ status }: { status: string }) {
       {status}
     </Badge>
   );
+}
+
+function parlaySourceLabel(generatedBy?: string | null) {
+  if (generatedBy === "USER_MANUAL") return "Pilihan manual";
+  if (generatedBy === "USER_MIXED") return "AI + manual";
+  if (generatedBy === "AI_SELECTED") return "Prediksi AI";
+  return "AI";
 }
 
 function EVOIndicator({ value }: { value: number }) {
@@ -227,7 +239,7 @@ function ParlayDetailModal({ parlay, onClose }: { parlay: Parlay; onClose: () =>
         <DialogHeader>
           <DialogTitle className="text-xl">{parlay.parlay_name}</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Created {format(new Date(parlay.created_at), "MMM dd, yyyy HH:mm")}
+            {parlaySourceLabel(parlay.generated_by)} · dibuat {format(new Date(parlay.created_at), "dd MMM yyyy HH:mm")}
           </DialogDescription>
         </DialogHeader>
 
@@ -284,8 +296,11 @@ function ParlayDetailModal({ parlay, onClose }: { parlay: Parlay; onClose: () =>
                         {leg.market}: <span className="text-primary font-medium">{leg.selection}</span>
                       </span>
                       <span className="flex items-center gap-1">
-                        {(leg.probability * 100).toFixed(0)}% implied
+                        Peluang estimasi {leg.source === "manual" ? "Anda" : "AI"}: {(leg.probability * 100).toFixed(0)}%
                       </span>
+                      {leg.source === "manual" && (
+                        <Badge variant="outline" className="border-amber-500/30 text-amber-400">Pilihan Anda</Badge>
+                      )}
                       {leg.result && (
                         <ParlayStatusBadge status={leg.result.toLowerCase()} />
                       )}
@@ -303,17 +318,22 @@ function ParlayDetailModal({ parlay, onClose }: { parlay: Parlay; onClose: () =>
 
 function PredictionQueue({
   predictions,
+  manualLegs,
   selectedIds,
   onRemove,
+  onRemoveManual,
   onCreate,
   isCreating,
 }: {
   predictions: AIPredictionBoardItem[];
+  manualLegs: ManualParlayLeg[];
   selectedIds: string[];
   onRemove: (id: string) => void;
+  onRemoveManual: (id: string) => void;
   onCreate: () => void;
   isCreating: boolean;
 }) {
+  const totalLegs = selectedIds.length + manualLegs.length;
   return (
     <Card className="border-primary/20 bg-primary/[0.03]">
       <CardHeader className="pb-3">
@@ -324,7 +344,7 @@ function PredictionQueue({
               Prediction shortlist
             </CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              Pilihan dari AI Prediction Board yang siap ditinjau dan dibuat menjadi parlay.
+              Tinjau pilihan AI dan leg manual sebelum membuat parlay.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -334,15 +354,15 @@ function PredictionQueue({
                 <ArrowRight className="h-4 w-4" />
               </Link>
             </Button>
-            <Button onClick={onCreate} disabled={selectedIds.length < 2 || isCreating}>
+            <Button onClick={onCreate} disabled={totalLegs < 2 || isCreating}>
             <GitMerge className="h-4 w-4" />
-              {isCreating ? "Creating..." : `Create parlay (${selectedIds.length})`}
+              {isCreating ? "Membuat..." : `Buat parlay (${totalLegs})`}
             </Button>
           </div>
         </div>
       </CardHeader>
       <CardContent>
-        {selectedIds.length === 0 ? (
+        {totalLegs === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-6 text-center">
             <p className="text-sm text-muted-foreground">
               Belum ada pertandingan di shortlist. Pilih checkbox pada AI Prediction Board untuk memulai.
@@ -384,6 +404,36 @@ function PredictionQueue({
                   </div>
                 </div>
             ))}
+            {manualLegs.map((leg) => (
+              <div key={leg.id} className="rounded-lg border border-amber-500/30 bg-amber-500/[0.04] p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-semibold">
+                        {leg.homeTeam} <span className="text-muted-foreground">vs</span> {leg.awayTeam}
+                      </div>
+                      <Badge variant="outline" className="border-amber-500/30 text-amber-400">Pilihan manual</Badge>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {leg.marketType}{leg.marketLine ? ` ${leg.marketLine}` : ""} · {leg.selection} · {leg.bookmaker} @ {leg.odds.toFixed(2)}
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Perkiraan peluang Anda {(leg.probability * 100).toFixed(1)}%
+                      {leg.capturedAt ? ` · odds dicatat ${format(new Date(leg.capturedAt), "dd MMM HH:mm")}` : ""}
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-red-400"
+                    onClick={() => onRemoveManual(leg.id)}
+                    aria-label={`Hapus pilihan manual ${leg.homeTeam} vs ${leg.awayTeam}`}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </CardContent>
@@ -397,6 +447,7 @@ export default function Parlays() {
   const [selectedParlay, setSelectedParlay] = useState<Parlay | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedPredictionIds, setSelectedPredictionIds] = useState<string[]>(readSelectedPredictionIds);
+  const [manualLegs, setManualLegs] = useState<ManualParlayLeg[]>(readManualParlayLegs);
   const [readiness, setReadiness] = useState<ParlayReadiness | null>(null);
   const [stake, setStake] = useState("");
   const verify = useVerifyParlays();
@@ -408,6 +459,10 @@ export default function Parlays() {
   useEffect(() => {
     writeSelectedPredictionIds(selectedPredictionIds);
   }, [selectedPredictionIds]);
+
+  useEffect(() => {
+    writeManualParlayLegs(manualLegs);
+  }, [manualLegs]);
 
   const toggleParlay = (id: string) => {
     setSelectedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : current.length < 7 ? [...current, id] : current);
@@ -446,13 +501,25 @@ export default function Parlays() {
   const runCreateFromPredictions = () => {
     withPassword((pwd) => {
       void pwd;
-      createFromPredictions.mutate({ predictionIds: selectedPredictionIds }, {
+      createFromPredictions.mutate({
+        predictionIds: selectedPredictionIds,
+        manualLegs: manualLegs.map((leg) => ({
+          fixtureId: leg.fixtureId,
+          bookmaker: leg.bookmaker,
+          marketType: leg.marketType,
+          marketLine: leg.marketLine,
+          outcomeKey: leg.outcomeKey,
+          odds: leg.odds,
+          probability: leg.probability,
+        })),
+      }, {
         onSuccess: (result) => {
           setSelectedPredictionIds([]);
+          setManualLegs([]);
           toast({
-            title: "Manual AI parlay created",
+            title: "Parlay berhasil dibuat",
             description: result.parlayId
-              ? `Parlay ${result.parlayId} dibuat dari ${result.legs.length} prediksi.`
+              ? `Parlay ${result.parlayId} tersimpan dengan ${result.legs.length} leg pilihan.`
               : "Parlay berhasil dibuat.",
           });
         },
@@ -479,8 +546,10 @@ export default function Parlays() {
 
       <PredictionQueue
         predictions={queuedPredictions}
+        manualLegs={manualLegs}
         selectedIds={selectedPredictionIds}
         onRemove={(id) => setSelectedPredictionIds((current) => current.filter((value) => value !== id))}
+        onRemoveManual={(id) => setManualLegs((current) => current.filter((leg) => leg.id !== id))}
         onCreate={runCreateFromPredictions}
         isCreating={createFromPredictions.isPending}
       />
@@ -507,7 +576,7 @@ export default function Parlays() {
 
       <Card className="bg-card border-border">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold">AI Parlays & History</CardTitle>
+          <CardTitle className="text-lg font-semibold">Parlay & History</CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -548,7 +617,16 @@ export default function Parlays() {
                             className="h-4 w-4 accent-primary"
                           />
                         </TableCell>
-                        <TableCell className="font-medium">{parlay.parlay_name}</TableCell>
+                        <TableCell className="font-medium">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span>{parlay.parlay_name}</span>
+                            <Badge variant="outline" className={parlay.generated_by?.startsWith("USER_")
+                              ? "border-amber-500/30 text-amber-400"
+                              : "border-primary/30 text-primary"}>
+                              {parlaySourceLabel(parlay.generated_by)}
+                            </Badge>
+                          </div>
+                        </TableCell>
                         <TableCell className="tabular-nums">{parlay.legs_count}</TableCell>
                         <TableCell className="tabular-nums">{parlay.combined_odds.toFixed(2)}</TableCell>
                         <TableCell>
