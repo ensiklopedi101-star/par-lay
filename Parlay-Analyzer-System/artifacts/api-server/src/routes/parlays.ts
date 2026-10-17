@@ -1,11 +1,17 @@
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
+import {
+  resolveMarketOdds,
+  type MarketOddsSnapshot,
+  type MarketOddsStatus,
+} from "../lib/market-odds-readiness";
 import { predictionProbabilityFromContext } from "../lib/prediction-probability";
 import { requireAdmin } from "../middlewares/admin";
 import { classifyOddsMarket, refreshOddsForFixtures } from "../services/odds-fetcher";
 import { runRevalidation, type RevalidationCandidate } from "../services/revalidation";
 import { runTriggeredReanalysis } from "../services/reanalysis";
+import { latestOddsByMarket } from "../services/odds-history";
 import {
   calculateResult,
   isNoBet,
@@ -58,6 +64,9 @@ type PredictionRow = {
   home_score: number | null;
   away_score: number | null;
   settled_at: string | null;
+  revalidation_status?: "keep" | "review" | "invalidated" | null;
+  revalidation_note?: string | null;
+  last_revalidated_at?: string | null;
 };
 
 type PredictionBoardRow = PredictionRow & {
@@ -91,6 +100,7 @@ type RevisionRow = {
   ev_at_analysis: number | null;
   confidence_score: number | null;
   trigger_context: Record<string, unknown> | null;
+  prediction_text?: string | null;
 };
 
 type ReadinessStatus =
@@ -137,6 +147,24 @@ function predictionProbability(prediction: PredictionBoardRow): number {
   return predictionProbabilityFromContext(prediction.manual_context);
 }
 
+function revisionProbability(context: Record<string, unknown> | null): number {
+  const value = Number(context?.probability);
+  return Number.isFinite(value) && value > 0 && value < 1 ? value : 0;
+}
+
+function oddsReadinessReason(status: MarketOddsStatus): string {
+  switch (status) {
+    case "verified": return "Odds cocok dan terverifikasi.";
+    case "missing_market": return "Provider belum memiliki odds untuk jenis market ini.";
+    case "missing_line": return "Line market tidak tersedia dari provider.";
+    case "line_mismatch": return "Odds provider tersedia, tetapi line berbeda dari prediksi.";
+    case "missing_selection": return "Sisi pilihan market tidak dapat dipastikan.";
+    case "missing_price": return "Harga untuk sisi pilihan tidak tersedia.";
+    case "stale": return "Snapshot odds untuk market ini sudah kedaluwarsa.";
+    case "unsupported": return "Market prediksi belum dapat dipetakan ke market provider.";
+  }
+}
+
 function finalDecision(text: string | null): "AMBIL" | "NO BET" | null {
   const decision = text?.match(
     /keputusan\s*:\s*(?:\*\*)?\s*(ambil|no[\s_-]*bet)\b/i,
@@ -148,9 +176,10 @@ function finalDecision(text: string | null): "AMBIL" | "NO BET" | null {
 function predictionSelectabilityReason(
   prediction: PredictionBoardRow,
   market: string,
-  odds: number,
+  oddsStatus: MarketOddsStatus,
   probability: number,
   isUpcoming: boolean,
+  decision: "AMBIL" | "NO BET" | null,
 ): string | null {
   if (String(prediction.status).toLowerCase() !== "active") {
     return "Prediksi berstatus histori atau settlement.";
@@ -159,8 +188,17 @@ function predictionSelectabilityReason(
   if (!market || /^no[\s_/-]*bet/i.test(market)) {
     return "AI belum menyimpan market terverifikasi. Teks analisis saja belum cukup untuk memilih bet.";
   }
-  if (!Number.isFinite(odds) || odds <= 1) {
-    return "Odds provider untuk market terpilih belum tersedia atau belum terverifikasi.";
+  if (decision !== "AMBIL") {
+    return "Prediksi tidak memiliki keputusan AI AMBIL yang terstruktur.";
+  }
+  if (oddsStatus !== "verified") {
+    return oddsReadinessReason(oddsStatus);
+  }
+  if (prediction.revalidation_status === "review") {
+    return prediction.revalidation_note || "Revalidasi terakhir meminta pemeriksaan sebelum prediksi digunakan.";
+  }
+  if (prediction.revalidation_status === "invalidated") {
+    return prediction.revalidation_note || "Sinyal value terakhir invalid; tunggu analisis ulang.";
   }
   if (!(probability > 0 && probability < 1)) {
     return "Probabilitas nyata eksplisit belum tersimpan. Confidence tidak digunakan sebagai pengganti probabilitas.";
@@ -268,7 +306,7 @@ router.get("/parlays/predictions", async (_req, res) => {
     const now = new Date().toISOString();
     const { data: predictions, error } = await supabase
       .from("ai_predictions")
-      .select("id, fixture_id, status, prediction_text, market_bet, best_market, best_odds, confidence_score, ev_at_analysis, expected_value, home_team, away_team, league, manual_context, created_at, home_score, away_score, settled_at")
+      .select("id, fixture_id, status, prediction_text, market_bet, best_market, best_odds, confidence_score, ev_at_analysis, expected_value, home_team, away_team, league, manual_context, created_at, home_score, away_score, settled_at, revalidation_status, revalidation_note, last_revalidated_at")
       .in("status", ["active", "pending_result", "WIN", "LOSS", "HALF_WIN", "HALF_LOSS", "PUSH", "win", "loss", "half_win", "half_loss", "push", "no_bet", "settled_manual"])
       .gte("fixture_id", 0)
       .order("created_at", { ascending: false })
@@ -276,7 +314,7 @@ router.get("/parlays/predictions", async (_req, res) => {
     if (error) throw error;
 
     const rows = (predictions ?? []) as unknown as Array<PredictionBoardRow>;
-    const fixtureIds = rows.map((row) => Number(row.fixture_id)).filter(Number.isFinite);
+    const fixtureIds = Array.from(new Set(rows.map((row) => Number(row.fixture_id)).filter(Number.isFinite)));
     const [{ data: fixtures, error: fixturesError }, { data: parlayLegs, error: legsError }] = await Promise.all([
       fixtureIds.length
         ? supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name, league_name, status_short, home_goals, away_goals").in("fixture_id", fixtureIds)
@@ -287,12 +325,65 @@ router.get("/parlays/predictions", async (_req, res) => {
     ]);
     if (fixturesError) throw fixturesError;
     if (legsError) throw legsError;
+
+    const oddsRows: MarketOddsSnapshot[] = [];
+    const predictionIds = rows.map((row) => row.id);
+    if (fixtureIds.length > 0) {
+      for (let offset = 0; ; offset += 1000) {
+        const { data, error: oddsError } = await supabase
+          .from("odds_history")
+          .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+          .in("match_id", fixtureIds.map(String))
+          .order("captured_at", { ascending: false })
+          .range(offset, offset + 999);
+        if (oddsError) throw oddsError;
+        oddsRows.push(...((data ?? []) as MarketOddsSnapshot[]));
+        if ((data?.length ?? 0) < 1000) break;
+      }
+    }
+
+    const revisionRows: RevisionRow[] = [];
+    if (predictionIds.length > 0) {
+      for (let offset = 0; ; offset += 1000) {
+        const { data, error: revisionsError } = await supabase
+          .from("ai_prediction_revisions")
+          .select("prediction_id, status, created_at, market_bet, best_odds, ev_at_analysis, confidence_score, trigger_context, prediction_text")
+          .in("prediction_id", predictionIds)
+          .order("created_at", { ascending: false })
+          .range(offset, offset + 999);
+        if (revisionsError) throw revisionsError;
+        revisionRows.push(...((data ?? []) as RevisionRow[]));
+        if ((data?.length ?? 0) < 1000) break;
+      }
+    }
+
     const fixtureById = new Map((fixtures ?? []).map((fixture) => [Number(fixture.fixture_id), fixture]));
     const inParlay = new Set((parlayLegs ?? []).map((leg) => Number(leg.fixture_id)));
+    const oddsByFixture = new Map<string, MarketOddsSnapshot[]>();
+    for (const row of latestOddsByMarket(oddsRows)) {
+      const key = String(row.match_id ?? "");
+      const rowsForFixture = oddsByFixture.get(key) ?? [];
+      rowsForFixture.push(row);
+      oddsByFixture.set(key, rowsForFixture);
+    }
+    const latestRevisionByPrediction = new Map<string, RevisionRow>();
+    for (const revision of revisionRows) {
+      if (!latestRevisionByPrediction.has(String(revision.prediction_id))) {
+        latestRevisionByPrediction.set(String(revision.prediction_id), revision);
+      }
+    }
 
     res.json(rows.flatMap((prediction) => {
       const fixture = fixtureById.get(Number(prediction.fixture_id));
       const isUpcoming = Boolean(fixture?.fixture_date && new Date(fixture.fixture_date).getTime() > Date.now());
+      const fixtureHome = fixture?.home_team_name ?? prediction.home_team ?? "Unknown";
+      const fixtureAway = fixture?.away_team_name ?? prediction.away_team ?? "Unknown";
+      const latestRevision = latestRevisionByPrediction.get(prediction.id);
+      const useRevision = String(prediction.status).toLowerCase() === "active"
+        && latestRevision?.status === "completed";
+      const predictionText = useRevision
+        ? latestRevision?.prediction_text ?? prediction.prediction_text ?? ""
+        : prediction.prediction_text ?? "";
       const fixtureFinished = Boolean(
         fixture?.status_short &&
         ["FT", "AET", "PEN", "finished", "completed"].includes(String(fixture.status_short)),
@@ -301,41 +392,77 @@ router.get("/parlays/predictions", async (_req, res) => {
       const status = rawStatus.toLowerCase() === "active" && !isUpcoming
         ? "pending_result"
         : rawStatus;
-      const storedMarket = String(prediction.market_bet ?? prediction.best_market ?? "").trim();
+      const storedMarket = String(
+        useRevision
+          ? latestRevision?.market_bet ?? ""
+          : prediction.market_bet ?? prediction.best_market ?? "",
+      ).trim();
       const market = /^no[\s_-]*bet$/i.test(storedMarket)
         ? ""
-        : storedMarket || marketFromPredictionText(prediction.prediction_text, prediction.home_team, prediction.away_team) || "";
-      const probability = predictionProbability(prediction);
-      const odds = Number(prediction.best_odds);
-      const selectabilityReason = predictionSelectabilityReason(
+        : storedMarket || marketFromPredictionText(predictionText, fixtureHome, fixtureAway) || "";
+      const probability = useRevision
+        ? revisionProbability(latestRevision?.trigger_context ?? null)
+        : predictionProbability(prediction);
+      const analysisOddsValue = Number(useRevision ? latestRevision?.best_odds : prediction.best_odds);
+      const analysisOdds = Number.isFinite(analysisOddsValue) && analysisOddsValue > 1
+        ? analysisOddsValue
+        : null;
+      const analysisEv = Number(
+        useRevision
+          ? latestRevision?.ev_at_analysis ?? 0
+          : prediction.ev_at_analysis ?? prediction.expected_value ?? 0,
+      );
+      const oddsResolution = resolveMarketOdds(
+        market,
+        oddsByFixture.get(String(prediction.fixture_id)) ?? [],
+        { homeTeam: fixtureHome, awayTeam: fixtureAway },
+      );
+      const currentOdds = oddsResolution.status === "verified" ? oddsResolution.odds : null;
+      const hasCurrentEv = currentOdds != null && probability > 0 && probability < 1;
+      const ev = hasCurrentEv ? probability * Number(currentOdds) - 1 : analysisEv;
+      const decision = finalDecision(predictionText);
+      const confidence = useRevision && latestRevision?.confidence_score != null
+        ? Number(latestRevision.confidence_score)
+        : Number(prediction.confidence_score ?? 0);
+      const readinessReason = predictionSelectabilityReason(
         status === rawStatus ? prediction : { ...prediction, status },
         market,
-        odds,
+        oddsResolution.status,
         probability,
         isUpcoming,
+        decision,
       );
+      const selectabilityReason = String(prediction.status).toLowerCase() === "active"
+        && latestRevision?.status === "failed"
+        ? "Analisis ulang terbaru gagal; prediksi perlu diperiksa sebelum dipilih."
+        : readinessReason;
       return [{
         id: String(prediction.id),
         fixtureId: Number(prediction.fixture_id),
-        homeTeam: fixture?.home_team_name ?? prediction.home_team ?? "Unknown",
-        awayTeam: fixture?.away_team_name ?? prediction.away_team ?? "Unknown",
+        homeTeam: fixtureHome,
+        awayTeam: fixtureAway,
         league: fixture?.league_name ?? prediction.league ?? "",
         fixtureDate: fixture?.fixture_date ?? null,
         market: market || "NO_BET / belum dipilih",
         selection: market,
-        odds: Number.isFinite(odds) && odds > 1 ? odds : null,
+        odds: currentOdds,
+        analysisOdds,
+        oddsStatus: oddsResolution.status,
+        oddsCapturedAt: oddsResolution.capturedAt,
         probability: probability > 0 ? probability : null,
-        confidence: Number(prediction.confidence_score ?? 0),
-        ev: Number(prediction.ev_at_analysis ?? prediction.expected_value ?? 0),
-        predictionText: prediction.prediction_text ?? "",
-        createdAt: prediction.created_at,
+        confidence,
+        ev,
+        evBasis: hasCurrentEv ? "current" : "analysis",
+        latestRevisionAt: useRevision ? latestRevision?.created_at ?? null : null,
+        predictionText,
+        createdAt: useRevision ? latestRevision?.created_at ?? prediction.created_at : prediction.created_at,
         isInParlay: inParlay.has(Number(prediction.fixture_id)),
         isUpcoming,
          status,
          result: ["WIN", "LOSS", "HALF_WIN", "HALF_LOSS", "PUSH"].includes(status.toUpperCase())
            ? status.toUpperCase()
            : null,
-         decision: finalDecision(prediction.prediction_text),
+          decision,
          homeScore: prediction.home_score ?? fixture?.home_goals ?? null,
          awayScore: prediction.away_score ?? fixture?.away_goals ?? null,
          settledAt: prediction.settled_at ?? null,

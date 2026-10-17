@@ -186,7 +186,12 @@ export async function createParlayFromCandidates(candidates: ParlayCandidate[]):
     1,
   );
   const expectedValue = winProbability * combinedOdds - 1;
-  const avgConfidence = uniqueCandidates.reduce((sum, candidate) => sum + candidate.confidence, 0) / uniqueCandidates.length;
+  const confidenceValues = uniqueCandidates
+    .map((candidate) => candidate.confidence)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  const avgConfidence = confidenceValues.length > 0
+    ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+    : 0;
   const leagues = new Set(uniqueCandidates.map((candidate) => candidate.league).filter(Boolean));
 
   const { data: parlay, error: parlayError } = await supabase

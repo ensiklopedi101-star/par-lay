@@ -22,6 +22,10 @@
 
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import {
+  MAX_VERIFIED_ODDS_AGE_MS,
+  resolveMarketOdds,
+} from "../lib/market-odds-readiness";
 import { latestOddsByMarket } from "./odds-history";
 
 export type RevalidationStatus = "keep" | "review" | "invalidated";
@@ -101,41 +105,8 @@ export function marketKey(marketBet: string | null): { type: "home" | "away" | "
 
 /** Extract the current best price for the tracked selection from live odds rows. */
 export function currentPriceFor(marketBet: string | null, rows: OddsRow[]): number | null {
-  const { type } = marketKey(marketBet);
-  if (type === "unknown" || rows.length === 0) return null;
-
-  const usable = rows.filter((row) => [row.odds_1, row.odds_2, row.odds_draw].some((v) => Number(v) > 1));
-  if (usable.length === 0) return null;
-
-  // Use the most recently captured row per bookmaker/market, then take the
-  // best (highest) current price available for the tracked selection. Odds
-  // history can contain several snapshots, so never compare against an old
-  // price just because it was better.
-  const latestByBookmakerMarket = new Map<string, OddsRow>();
-  for (const row of usable) {
-    const key = `${row.market_type.toLowerCase()}::${String((row as OddsRow & { bookmaker?: string }).bookmaker ?? "")}`;
-    const previous = latestByBookmakerMarket.get(key);
-    if (!previous || new Date(row.captured_at).getTime() > new Date(previous.captured_at).getTime()) {
-      latestByBookmakerMarket.set(key, row);
-    }
-  }
-  const prices: number[] = [];
-  for (const row of latestByBookmakerMarket.values()) {
-    const mt = row.market_type.toLowerCase();
-    if ((type === "home" || type === "away" || type === "draw") && !["h2h", "1x2", "ml", "match_winner"].some((k) => mt.includes(k))) continue;
-    if ((type === "over" || type === "under") && !mt.includes("over") && !mt.includes("total")) continue;
-    if ((type === "btts_yes" || type === "btts_no") && !mt.includes("btts") && !mt.includes("both teams")) continue;
-
-    if (type === "home" && row.odds_1) prices.push(row.odds_1);
-    if (type === "away" && row.odds_2) prices.push(row.odds_2);
-    if (type === "draw" && row.odds_draw) prices.push(row.odds_draw);
-    if (type === "over" && row.odds_1) prices.push(row.odds_1);
-    if (type === "under" && row.odds_2) prices.push(row.odds_2);
-    if (type === "btts_yes" && row.odds_1) prices.push(row.odds_1);
-    if (type === "btts_no" && row.odds_2) prices.push(row.odds_2);
-  }
-  if (prices.length === 0) return null;
-  return Math.max(...prices);
+  const resolved = resolveMarketOdds(marketBet ?? "", rows);
+  return resolved.status === "verified" ? resolved.odds : null;
 }
 
 export interface RevalidationSummary {
@@ -185,31 +156,27 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
     return summary;
   }
 
-  const fixtureByTeamAndDate = new Map(
-    (fixtures ?? []).map((f) => [
-      fixtureMatchKey(
-        String((f as FixtureRow & { home_team_name?: string }).home_team_name),
-        String((f as FixtureRow & { away_team_name?: string }).away_team_name),
-        String((f as FixtureRow & { fixture_date?: string }).fixture_date),
-      ),
-      f,
-    ]),
-  );
-  const { data: oddsRowsRaw } = await supabase
-    .from("odds_history")
-    .select("match_id, home_team, away_team, commence_time, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
-    .limit(5000);
+  const oddsRowsRaw: OddsRow[] = [];
+  const upcomingFixtureIds = Array.from(new Set(upcoming.map((prediction) => String(prediction.fixture_id))));
+  const freshAfter = new Date(now - MAX_VERIFIED_ODDS_AGE_MS).toISOString();
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await supabase
+      .from("odds_history")
+      .select("match_id, home_team, away_team, commence_time, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+      .in("match_id", upcomingFixtureIds)
+      .gte("captured_at", freshAfter)
+      .order("captured_at", { ascending: false })
+      .range(offset, offset + 999);
+    if (error) {
+      logger.warn({ error, fixtureCount: upcomingFixtureIds.length }, "[REVALIDATION] Failed to load fresh odds snapshots");
+      break;
+    }
+    oddsRowsRaw.push(...((data ?? []) as OddsRow[]));
+    if ((data?.length ?? 0) < 1000) break;
+  }
   const oddsByFixture = new Map<string, OddsRow[]>();
-  for (const row of (oddsRowsRaw ?? []) as OddsRow[]) {
-    const directFixture = fixtureById.get(Number(row.match_id));
-    const matchingFixture = directFixture ?? fixtureByTeamAndDate.get(
-      fixtureMatchKey(
-        String((row as OddsRow & { home_team?: string }).home_team),
-        String((row as OddsRow & { away_team?: string }).away_team),
-        String((row as OddsRow & { commence_time?: string }).commence_time),
-      ),
-    ) as FixtureRow | undefined;
-    const key = matchingFixture ? String(matchingFixture.fixture_id) : String(row.match_id);
+  for (const row of oddsRowsRaw) {
+    const key = String(row.match_id);
     const list = oddsByFixture.get(key) ?? [];
     list.push(row);
     oddsByFixture.set(key, list);
@@ -227,7 +194,13 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
     const hoursToKickoff = (new Date(fx.fixture_date).getTime() - now) / (1000 * 60 * 60);
     const marketBet = prediction.market_bet ?? prediction.best_market;
     const rows = oddsByFixture.get(String(prediction.fixture_id)) ?? [];
-    const currentOdds = currentPriceFor(marketBet, rows);
+    const currentOddsResolution = resolveMarketOdds(marketBet ?? "", rows, {
+      homeTeam: prediction.home_team ?? undefined,
+      awayTeam: prediction.away_team ?? undefined,
+    });
+    const currentOdds = currentOddsResolution.status === "verified"
+      ? currentOddsResolution.odds
+      : null;
     const analysisOdds = prediction.best_odds;
     const evAtAnalysis = prediction.ev_at_analysis ?? prediction.expected_value ?? null;
 
@@ -237,7 +210,7 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
       updates.push({
         id: prediction.id,
         revalidation_status: "review",
-        revalidation_note: "Odds terkini untuk pasaran ini tidak ditemukan — perlu pengecekan manual sebelum kickoff.",
+        revalidation_note: `${currentOddsResolution.reason} Perlu refresh atau pengecekan manual sebelum kickoff.`,
       });
       candidates.push({
         predictionId: prediction.id,
@@ -249,7 +222,7 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
         marketBet,
         analysisOdds,
         currentOdds,
-        oddsCapturedAt: null,
+        oddsCapturedAt: currentOddsResolution.capturedAt,
         oddsDelta: null,
         evAtAnalysis,
         currentEV: null,

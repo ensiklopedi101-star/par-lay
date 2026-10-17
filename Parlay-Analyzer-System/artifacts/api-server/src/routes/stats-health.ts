@@ -3,10 +3,13 @@ import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
 import { groupEquivalentTeamStatsRows, mergeTeamStatsRows } from "../lib/team-stats-merge";
-import { assessTeamStatsQuality, REQUIRED_STAT_KEYS } from "../services/ai-analysis";
+import {
+  assessTeamStatsQuality,
+  REQUIRED_STAT_KEYS,
+} from "../services/ai-analysis";
+import { TEAM_STATS_STALE_DAYS } from "../lib/team-stats-freshness";
 
 const router: IRouter = Router();
-const STATS_STALE_DAYS = 14;
 
 type StatsRow = {
   league_slug: string | null;
@@ -69,7 +72,7 @@ router.get("/stats/health", async (_req, res) => {
       : [];
     const scanDays = Number.isInteger(Number(config?.scan_days)) ? Number(config?.scan_days) : 11;
     const now = Date.now();
-    const staleCutoff = now - STATS_STALE_DAYS * 24 * 60 * 60 * 1000;
+    const staleCutoff = now - TEAM_STATS_STALE_DAYS * 24 * 60 * 60 * 1000;
     const mergedByTeam = new Map<string, StatsRow>();
 
     const groupedStatsRows = groupEquivalentTeamStatsRows(
@@ -200,7 +203,7 @@ router.get("/stats/health", async (_req, res) => {
 
     res.json({
       scanDays,
-      staleAfterDays: STATS_STALE_DAYS,
+      staleAfterDays: TEAM_STATS_STALE_DAYS,
       totalLeagues: leagues.length,
       coveredLeagues: leagues.filter((league) => league.status !== "missing").length,
       missingLeagues: leagues.filter((league) => league.status === "missing"),

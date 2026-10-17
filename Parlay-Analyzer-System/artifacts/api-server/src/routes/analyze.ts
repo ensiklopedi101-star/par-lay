@@ -163,7 +163,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
     oddsByFixture.set(key, rows);
   }
   const waitingFixtures = pendingFixtures.filter((fixture) =>
-    assessOddsAvailability(oddsByFixture.get(String(fixture.fixture_id)) ?? []).status === "missing",
+    assessOddsAvailability(oddsByFixture.get(String(fixture.fixture_id)) ?? []).status !== "valid",
   );
   const toScan = pendingFixtures
     .filter((fixture) => !waitingFixtures.some((waiting) => waiting.fixture_id === fixture.fixture_id))
@@ -179,6 +179,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
   job.completed = waitingFixtures.length;
   job.waitingOdds = waitingFixtures.length;
   for (const fx of waitingFixtures) {
+    const oddsAvailability = assessOddsAvailability(oddsByFixture.get(String(fx.fixture_id)) ?? []);
     job.tickets.push({
       fixture_id: String(fx.fixture_id),
       home_team: fx.home_team_name,
@@ -191,7 +192,9 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
       ev_percent: 0,
       kelly_stake: "N/A",
       kelly_edge: 0,
-      prediction_text: "Menunggu data odds dari provider. AI belum dipanggil.",
+      prediction_text: oddsAvailability.status === "stale"
+        ? "Snapshot odds sudah kedaluwarsa. Menunggu refresh provider sebelum AI dipanggil."
+        : "Odds provider belum tersedia. AI belum dipanggil.",
       status: "waiting_odds",
        readiness_status: "technical_review",
       is_parlay_leg: false,

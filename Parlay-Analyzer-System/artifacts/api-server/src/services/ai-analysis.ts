@@ -3,6 +3,12 @@ import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { teamIdentityKey } from "../lib/team-name-cleaner";
 import { findEquivalentTeamStatsRows, mergeTeamStatsRows } from "../lib/team-stats-merge";
+import {
+  MAX_VERIFIED_ODDS_AGE_MS,
+  resolveMarketOdds,
+  type MarketOddsStatus,
+} from "../lib/market-odds-readiness";
+import { assessTeamStatsFreshness, type TeamStatsFreshness } from "../lib/team-stats-freshness";
 import { latestOddsByMarket } from "./odds-history";
 import { getGeminiModel } from "./model-discovery";
 import { classifyOddsMarket } from "./odds-fetcher";
@@ -78,9 +84,8 @@ OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
 
 VALIDATION GATE:
 - Bandingkan semua market yang tersedia (ML, HT, Totals, AH, BTTS) sebelum memilih.
-- Market harus berasal dari market family yang tersedia pada snapshot provider. Cocokkan line
-  bila provider menyimpannya; jika provider gratis tidak menyimpan line, gunakan market family
-  yang sama dan jangan mengarang line atau odds baru.
+- Market harus berasal dari snapshot provider. Totals dan Asian Handicap wajib memakai line yang
+  cocok persis; jika line tidak tersedia atau berbeda, gunakan NO_BET.
 - Probability wajib eksplisit, 0 < probability < 1, dan bukan confidence atau probabilitas implisit.
 - Hitung ulang EV = (probability × odds provider) - 1. Jika EV tidak positif atau confidence < 6.5, gunakan "NO_BET".
 
@@ -276,8 +281,8 @@ interface StructuredOdds {
 }
 
 export type OddsAvailabilityStatus = "valid" | "stale" | "missing";
-const ODDS_MAX_AGE_HOURS = 3;
-type OddsMatchMode = "exact_line" | "market_family_no_line" | "unmatched";
+const ODDS_MAX_AGE_HOURS = MAX_VERIFIED_ODDS_AGE_MS / (60 * 60 * 1000);
+type OddsMatchMode = MarketOddsStatus | "unmatched";
 
 export interface OddsAvailability {
   status: OddsAvailabilityStatus;
@@ -285,82 +290,14 @@ export interface OddsAvailability {
   rowCount: number;
 }
 
-function parseMarketLine(value: string): number | null {
-  const match = value.match(/(?:^|[\s:_])(-?\d+(?:\.\d+)?)(?:\s|$)/);
-  if (!match) return null;
-  const line = Number(match[1]);
-  return Number.isFinite(line) ? line : null;
-}
-
-type RecommendationMarketType = "ML" | "HT" | "Totals" | "AH" | "BTTS" | null;
-
-function recommendationMarketType(market: string): RecommendationMarketType {
-  const value = market.toLowerCase();
-  if (value.includes("btts") || value.includes("both teams")) return "BTTS";
-  if (value.includes("over") || value.includes("under")) return "Totals";
-  if (value.includes("handicap") || value.includes("spread") || value.includes("asian")) return "AH";
-  if (value.includes("half time") || value.includes("half-time") || /\bht\b/.test(value)) return "HT";
-  if (value.includes("home") || value.includes("away") || value.includes("draw") || value === "1" || value === "2" || value === "x") return "ML";
-  return null;
-}
-
-function lineFromOddsRow(row: OddsRow): number | null {
-  const storedLine = Number(row.odds_draw);
-  if (Number.isFinite(storedLine) && Math.abs(storedLine) <= 20) return storedLine;
-  return parseMarketLine(String(row.market_type ?? "").toLowerCase());
-}
-
-function validatedOddsForRecommendation(
-  market: string,
-  rows: OddsRow[],
-): { odds: number | null; matchMode: OddsMatchMode } {
-  const marketType = recommendationMarketType(market);
-  if (!marketType) return { odds: null, matchMode: "unmatched" };
-  const value = market.toLowerCase();
-  const line = marketType === "Totals" || marketType === "AH" ? parseMarketLine(value) : null;
-  const candidates = rows
-    .filter((row) => classifyOddsMarket(row.market_type) === marketType)
-    .sort((a, b) => new Date(String(b.captured_at ?? "")).getTime() - new Date(String(a.captured_at ?? "")).getTime());
-  if (candidates.length === 0) return { odds: null, matchMode: "unmatched" };
-
-  const exactCandidates = line == null
-    ? candidates
-    : candidates.filter((row) => {
-        const storedLine = lineFromOddsRow(row);
-        // A small tolerance handles provider serialization such as 2.5 vs 2.50.
-        return storedLine != null && Math.abs(storedLine - line) <= 0.05;
-      });
-  const familyOnlyCandidates = line == null
-    ? []
-    : candidates.filter((row) => lineFromOddsRow(row) == null);
-  const row = exactCandidates[0] ?? familyOnlyCandidates[0];
-  if (!row) return { odds: null, matchMode: "unmatched" };
-  const matchMode: OddsMatchMode = exactCandidates.length > 0
-    ? "exact_line"
-    : "market_family_no_line";
-  let odds: number | null;
-  if (marketType === "BTTS") {
-    odds = value.includes("no") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
-    return { odds, matchMode };
-  }
-  if (marketType === "Totals") {
-    odds = value.includes("under") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
-    return { odds, matchMode };
-  }
-  if (marketType === "AH") {
-    odds = value.includes("away") || value.includes("visitor") ? Number(row.odds_2) > 1 ? Number(row.odds_2) : null : Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
-    return { odds, matchMode };
-  }
-  if (value.includes("away") || value === "2") odds = Number(row.odds_2) > 1 ? Number(row.odds_2) : null;
-  else if (value.includes("draw") || value === "x") odds = Number(row.odds_draw) > 1 ? Number(row.odds_draw) : null;
-  else odds = Number(row.odds_1) > 1 ? Number(row.odds_1) : null;
-  return { odds, matchMode };
-}
-
 export function assessOddsAvailability(rows: OddsRow[]): OddsAvailability {
-  const usableRows = rows.filter((row) =>
-    [row.odds_1, row.odds_2, row.odds_draw].some((value) => Number(value) > 1),
-  );
+  const usableRows = rows.filter((row) => {
+    const marketType = classifyOddsMarket(row.market_type);
+    const selectionPrices = marketType === "ML" || marketType === "HT"
+      ? [row.odds_1, row.odds_2, row.odds_draw]
+      : [row.odds_1, row.odds_2];
+    return selectionPrices.some((value) => Number(value) > 1);
+  });
   if (usableRows.length === 0) {
     return { status: "missing", latestCapturedAt: null, rowCount: 0 };
   }
@@ -368,9 +305,11 @@ export function assessOddsAvailability(rows: OddsRow[]): OddsAvailability {
     .map((row) => row.captured_at)
     .filter((value): value is string => Boolean(value))
     .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
-  const isStale = latestCapturedAt
-     ? Date.now() - new Date(latestCapturedAt).getTime() > ODDS_MAX_AGE_HOURS * 60 * 60 * 1000
-    : false;
+  const latestCapturedTime = latestCapturedAt ? new Date(latestCapturedAt).getTime() : Number.NaN;
+  const latestAge = Date.now() - latestCapturedTime;
+  const isStale = !Number.isFinite(latestCapturedTime)
+    || latestAge < 0
+    || latestAge > ODDS_MAX_AGE_HOURS * 60 * 60 * 1000;
   return {
     status: isStale ? "stale" : "valid",
     latestCapturedAt,
@@ -1037,9 +976,8 @@ ${relationalBlock}
 
 --- KONTRAK VALIDASI SEBELUM OUTPUT ---
 1. Bandingkan semua market yang memiliki odds; jangan memilih hanya karena market itu muncul lebih dulu.
-2. Pilih tepat satu market dari market family yang tersedia pada snapshot. Jika provider gratis
-   tidak menyimpan line, gunakan snapshot terbaru dari family yang sama tanpa mengarang line.
-   Jika line eksplisit tersedia tetapi berbeda, jangan menganggapnya sama.
+2. Pilih tepat satu market dari snapshot provider. Totals dan Asian Handicap wajib cocok dengan
+   line yang persis; jika line tidak tersedia atau berbeda, gunakan NO_BET.
 3. Tulis probability nyata eksplisit dalam rentang 0 sampai 1. Confidence 0-10 tidak boleh dipakai sebagai probability.
 4. Hitung ulang EV dengan odds snapshot selection: (probability × odds) - 1. Jika hasilnya <= 0, gunakan NO_BET.
 5. JSON selections hanya boleh merekomendasikan pertandingan ${homeTeam} vs ${awayTeam}; jangan menggabungkan fixture lain.`;
@@ -1085,11 +1023,14 @@ export interface AnalysisResult {
   model?: string;
   data_quality?: {
     stats: { home: TeamStatsQuality; away: TeamStatsQuality };
+    statsFreshness?: { home: TeamStatsFreshness; away: TeamStatsFreshness };
     odds: {
       status: OddsAvailabilityStatus;
       capturedAt: string | null;
       verifiedMarket: boolean;
       matchMode?: OddsMatchMode;
+      selectedMarketStatus?: MarketOddsStatus;
+      selectedMarketCapturedAt?: string | null;
     };
     rejectionReason?: string;
     readinessStatus?: "bet_ready" | "analytical_no_bet" | "technical_review";
@@ -1125,6 +1066,8 @@ interface EvaluationSnapshot {
       capturedAt: string | null;
       selectedMarketVerified: boolean;
       matchMode?: OddsMatchMode;
+      selectedMarketStatus?: MarketOddsStatus;
+      selectedMarketCapturedAt?: string | null;
       snapshot: OddsRow[];
     };
     teamStats: {
@@ -1422,9 +1365,12 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
 
   const structuredOdds = extractStructuredOdds(oddsRows);
   const oddsAvailability = assessOddsAvailability(oddsRows);
-  if (oddsAvailability.status === "missing") {
-    logger.info({ fixtureId }, "[AI-ANALYSIS] Menunggu data odds; AI tidak dipanggil");
-    throw new OddsUnavailableError();
+  if (oddsAvailability.status !== "valid") {
+    const reason = oddsAvailability.status === "stale"
+      ? `Snapshot odds terakhir lebih lama dari ${ODDS_MAX_AGE_HOURS} jam; AI menunggu odds terbaru.`
+      : "Odds provider belum tersedia untuk fixture ini.";
+    logger.info({ fixtureId, oddsStatus: oddsAvailability.status }, "[AI-ANALYSIS] Menunggu data odds; AI tidak dipanggil");
+    throw new OddsUnavailableError(reason);
   }
   if (!apiKey && !(provider === "groq" && groqKey) && !(provider === "auto" && groqKey)) {
     throw new Error("GEMINI_API_KEY is not set and Groq fallback is unavailable");
@@ -1473,12 +1419,23 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
   /* ── Guard: tolak jika statistik kosong ── */
   const homeStatsQuality = assessTeamStatsQuality(homeStats);
   const awayStatsQuality = assessTeamStatsQuality(awayStats);
+  const homeStatsFreshness = assessTeamStatsFreshness(homeStats);
+  const awayStatsFreshness = assessTeamStatsFreshness(awayStats);
   if (!homeStatsQuality.valid || !awayStatsQuality.valid) {
     const missingHome = homeStatsQuality.missingKeys.join(", ") || "none";
     const missingAway = awayStatsQuality.missingKeys.join(", ") || "none";
     console.log(`[AI-ANALYSIS] DITOLAK — stats belum lengkap. Home missing: ${missingHome}; Away missing: ${missingAway}\n`);
     throw new StatsEmptyError(
       `Data statistik belum lengkap. ${homeTeam}: ${missingHome}. ${awayTeam}: ${missingAway}.`,
+    );
+  }
+  if (!homeStatsFreshness.valid || !awayStatsFreshness.valid) {
+    const describeFreshness = (team: string, freshness: TeamStatsFreshness) =>
+      `${team}: ${freshness.updatedAt
+        ? `diperbarui ${freshness.ageDays ?? "?"} hari lalu`
+        : "timestamp pembaruan tidak tersedia"}`;
+    throw new StatsEmptyError(
+      `Statistik tim kedaluwarsa (maksimum ${TEAM_STATS_STALE_DAYS} hari). ${describeFreshness(homeTeam, homeStatsFreshness)}; ${describeFreshness(awayTeam, awayStatsFreshness)}.`,
     );
   }
 
@@ -1528,10 +1485,10 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
       }
     }
 
-     const oddsMatch = parsedRecommendation.marketBet
-       ? validatedOddsForRecommendation(parsedRecommendation.marketBet, oddsRows)
-       : { odds: null, matchMode: "unmatched" as OddsMatchMode };
-     const verifiedOdds = oddsMatch.odds;
+      const oddsMatch = parsedRecommendation.marketBet
+        ? resolveMarketOdds(parsedRecommendation.marketBet, oddsRows, { homeTeam, awayTeam })
+        : null;
+      const verifiedOdds = oddsMatch?.status === "verified" ? oddsMatch.odds : null;
      const computedEvPercent = verifiedOdds != null && parsedRecommendation.probability != null
        ? (parsedRecommendation.probability * verifiedOdds - 1) * 100
       : 0;
@@ -1558,7 +1515,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     const rejectionReason = parsedRecommendation.marketBet == null
       ? "AI tidak memilih market taruhan."
       : verifiedOdds == null
-        ? "Market family atau line rekomendasi AI tidak dapat dipetakan ke odds snapshot provider."
+        ? oddsMatch?.reason ?? "Market rekomendasi AI tidak dapat dipetakan ke odds snapshot provider."
         : parsedRecommendation.probability == null ||
             parsedRecommendation.probability <= 0 ||
             parsedRecommendation.probability >= 1
@@ -1580,7 +1537,8 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
       : hasTechnicalGap
         ? "technical_review"
         : "analytical_no_bet";
-    const selectedOddsMatchMode = verifiedOdds != null ? oddsMatch.matchMode : "unmatched";
+    const selectedOddsMatchMode: OddsMatchMode = oddsMatch?.status ?? "unmatched";
+    const selectedOddsCapturedAt = oddsMatch?.capturedAt ?? oddsAvailability.latestCapturedAt;
     const evAtAnalysis = recommendation.evPercent / 100;
 
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
@@ -1612,9 +1570,11 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
      input: {
        odds: {
          status: oddsAvailability.status,
-         capturedAt: oddsAvailability.latestCapturedAt,
+          capturedAt: selectedOddsCapturedAt,
          selectedMarketVerified: verifiedOdds != null,
           matchMode: selectedOddsMatchMode,
+          selectedMarketStatus: oddsMatch?.status,
+          selectedMarketCapturedAt: oddsMatch?.capturedAt ?? null,
          snapshot: oddsRows.slice(0, 60),
        },
        teamStats: { home: homeStats, away: awayStats },
@@ -1626,11 +1586,14 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
      },
      dataQuality: {
        stats: { home: homeStatsQuality, away: awayStatsQuality },
+        statsFreshness: { home: homeStatsFreshness, away: awayStatsFreshness },
        odds: {
          status: oddsAvailability.status,
-         capturedAt: oddsAvailability.latestCapturedAt,
+          capturedAt: selectedOddsCapturedAt,
          verifiedMarket: verifiedOdds != null,
           matchMode: selectedOddsMatchMode,
+          selectedMarketStatus: oddsMatch?.status,
+          selectedMarketCapturedAt: oddsMatch?.capturedAt ?? null,
        },
        rejectionReason,
         readinessStatus,
@@ -1665,6 +1628,8 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
        probability: recommendation.probability,
        probabilitySource: recommendation.probability != null ? "ai_explicit" : null,
        oddsSource: recommendation.odds > 1 ? "provider_snapshot" : null,
+        oddsCapturedAt: selectedOddsCapturedAt,
+        selectedMarketOddsStatus: oddsMatch?.status ?? null,
        provider: aiResult.provider,
        model: aiResult.model,
      },
@@ -1695,13 +1660,14 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     ev_percent: recommendation.evPercent,
     ev_at_analysis: evAtAnalysis,
     odds_status: oddsAvailability.status,
-    odds_captured_at: oddsAvailability.latestCapturedAt,
+     odds_captured_at: selectedOddsCapturedAt,
      readiness_status: readinessStatus,
     rateLimited: aiResult.rateLimited,
     provider: aiResult.provider,
     model: aiResult.model,
     data_quality: {
       stats: { home: homeStatsQuality, away: awayStatsQuality },
+      statsFreshness: { home: homeStatsFreshness, away: awayStatsFreshness },
       odds: {
         status: oddsAvailability.status,
         capturedAt: oddsAvailability.latestCapturedAt,

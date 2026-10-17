@@ -165,8 +165,13 @@ function PredictionCard({
               </div>
             </div>
             <div className="rounded-lg border border-border/70 bg-background/50 p-2">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Odds</div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Odds terbaru</div>
               <div className="mt-1 text-sm font-semibold tabular-nums">{prediction.odds?.toFixed(2) ?? "—"}</div>
+              {prediction.odds == null && prediction.analysisOdds != null && (
+                <div className="mt-1 text-[10px] text-muted-foreground">
+                  Saat analisis: {prediction.analysisOdds.toFixed(2)}
+                </div>
+              )}
             </div>
             <div className="rounded-lg border border-border/70 bg-background/50 p-2">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Probability</div>
@@ -196,11 +201,16 @@ function PredictionCard({
               </span>
             )}
             <span className={`font-semibold ${prediction.ev >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-              EV {formatEv(prediction.ev)}
+              {prediction.evBasis === "current" ? "EV odds terbaru" : "EV saat analisis"} {formatEv(prediction.ev)}
             </span>
             <span className="text-muted-foreground">
               Analysed {format(new Date(prediction.createdAt), "MMM dd · HH:mm")}
             </span>
+            {prediction.oddsCapturedAt && (
+              <span className="text-muted-foreground">
+                Odds diperbarui {format(new Date(prediction.oddsCapturedAt), "MMM dd · HH:mm")}
+              </span>
+            )}
             <Link
               href={`/fixtures?fixture=${prediction.fixtureId}`}
               className="inline-flex items-center gap-1 text-primary hover:underline"

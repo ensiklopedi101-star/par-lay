@@ -492,21 +492,32 @@ export async function runSettlement(options: {
 
   /* 1. Ambil prediksi aktif dan prediksi yang sebelumnya salah ditandai no_bet.
      The latter must be recoverable after the recommendation parser is fixed. */
-  let pendingQuery = supabase
-    .from("ai_predictions")
-    .select("id, fixture_id, status, prediction_text, best_market, market_bet, home_team, away_team, expected_value, ev_at_analysis, best_odds, confidence_score, uncertainty_score, league, created_at, manual_context")
-    .in("status", ["active", "pending_result", "no_bet", "settled_manual"])
-    .not("prediction_text", "is", null);
-  if (options.fixtureIds?.length) {
-    pendingQuery = pendingQuery.in("fixture_id", options.fixtureIds);
+  const pendingPredictions: PendingPrediction[] = [];
+  let predErr: { message: string } | null = null;
+  for (let offset = 0; ; offset += 1000) {
+    let pendingQuery = supabase
+      .from("ai_predictions")
+      .select("id, fixture_id, status, prediction_text, best_market, market_bet, home_team, away_team, expected_value, ev_at_analysis, best_odds, confidence_score, uncertainty_score, league, created_at, manual_context")
+      .in("status", ["active", "pending_result", "no_bet", "settled_manual"])
+      .not("prediction_text", "is", null);
+    if (options.fixtureIds?.length) {
+      pendingQuery = pendingQuery.in("fixture_id", options.fixtureIds);
+    }
+    if (options.predictionId) {
+      pendingQuery = pendingQuery.eq("id", options.predictionId);
+    }
+    const { data, error } = await pendingQuery.range(offset, offset + 999);
+    if (error) {
+      predErr = error;
+      break;
+    }
+    pendingPredictions.push(...((data ?? []) as PendingPrediction[]));
+    if ((data?.length ?? 0) < 1000) break;
   }
-  if (options.predictionId) {
-    pendingQuery = pendingQuery.eq("id", options.predictionId);
-  }
-  const { data: pendingPredictions, error: predErr } = await pendingQuery.limit(100);
 
   if (predErr || !pendingPredictions?.length) {
-    logger.info("[SETTLEMENT] Tidak ada prediksi aktif untuk di-settle");
+    if (predErr) logger.error({ error: predErr }, "[SETTLEMENT] Gagal memuat seluruh prediksi pending");
+    else logger.info("[SETTLEMENT] Tidak ada prediksi aktif untuk di-settle");
     await rebuildPerformanceLog();
     return { settled: 0, lessons: 0, skipped: 0 };
   }

@@ -1,5 +1,12 @@
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
+import {
+  classifyOddsMarket,
+  normalizeMarketToken,
+  type SupportedOddsMarket,
+} from "../lib/odds-market";
+export { classifyOddsMarket };
+export type { SupportedOddsMarket };
 
 const BASE_URL = "https://api.odds-api.io/v3";
 const SUPABASE_PAGE_SIZE = 1000;
@@ -12,7 +19,6 @@ const UPCOMING_WINDOW_DAYS = 10;
 // The current free Odds-API plan accepts Bet365 as a recreational bookmaker.
 // Sbobet may be selectable on the account but requires a paid plan.
 export const DEFAULT_BOOKMAKERS = "Bet365";
-export type SupportedOddsMarket = "ML" | "Totals" | "AH" | "HT" | "BTTS";
 export const DEFAULT_MARKETS: SupportedOddsMarket[] = ["ML", "Totals", "AH", "HT", "BTTS"];
 const ODDS_REFRESH_HOURS = 6;
 const ACTIVE_LEAGUE_CACHE_MS = 6 * 60 * 60 * 1000;
@@ -71,63 +77,6 @@ export async function getConfiguredScanDays(): Promise<number> {
     logger.warn({ err }, "RADAR: Failed to load scan_days — using default odds window");
     return UPCOMING_WINDOW_DAYS;
   }
-}
-
-function normalizeMarketToken(value: unknown): string {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_")
-    .replace(/[()\/]/g, "_")
-    .replace(/_+/g, "_");
-}
-
-export function classifyOddsMarket(value: unknown): SupportedOddsMarket | null {
-  const token = normalizeMarketToken(value);
-  if (!token) return null;
-  // Stored snapshots may append the provider line to market_type
-  // (for example "ou 2.5" or "ah -1.5").
-  const baseToken = token.replace(/[_:]+[-+]?\d+(?:\.\d+)?$/, "");
-  // Check HT before generic match-result aliases.
-  if (
-    baseToken === "ht"
-    || baseToken.includes("half_time")
-    || baseToken.includes("halftime")
-    || baseToken.includes("ht_result")
-    || baseToken.includes("first_half")
-  ) return "HT";
-  if (
-    baseToken === "btts"
-    || baseToken.includes("both_teams")
-    || baseToken.includes("both_team")
-    || baseToken.includes("both_teams_to_score")
-  ) return "BTTS";
-  if (
-    baseToken === "ah"
-    || baseToken.startsWith("ah_")
-    || baseToken.includes("asian_handicap")
-    || baseToken.includes("handicap")
-    || baseToken.includes("alternate_spread")
-    || baseToken.includes("spread")
-  ) return "AH";
-  if (
-    baseToken === "ou"
-    || baseToken.startsWith("ou_")
-    || baseToken === "totals"
-    || baseToken === "over_under"
-    || baseToken.includes("alternate_total")
-    || baseToken.includes("total")
-    || baseToken.includes("over")
-    || baseToken.includes("under")
-  ) return "Totals";
-  if (
-    baseToken === "ml"
-    || baseToken === "h2h"
-    || baseToken === "1x2"
-    || baseToken.includes("match_winner")
-    || baseToken.includes("match_result")
-  ) return "ML";
-  return null;
 }
 
 export function normalizeConfiguredMarkets(values: unknown): SupportedOddsMarket[] {

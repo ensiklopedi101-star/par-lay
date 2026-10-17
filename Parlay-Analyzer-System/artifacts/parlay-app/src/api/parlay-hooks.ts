@@ -185,9 +185,14 @@ export interface AIPredictionBoardItem {
   market: string;
   selection: string;
   odds: number | null;
+  analysisOdds: number | null;
+  oddsStatus: "verified" | "missing_market" | "missing_line" | "line_mismatch" | "missing_selection" | "missing_price" | "stale" | "unsupported";
+  oddsCapturedAt: string | null;
   probability: number | null;
   confidence: number;
   ev: number;
+  evBasis: "current" | "analysis";
+  latestRevisionAt: string | null;
   predictionText: string;
   createdAt: string;
   isInParlay: boolean;
