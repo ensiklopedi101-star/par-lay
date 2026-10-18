@@ -5,6 +5,7 @@ import { teamIdentityKey } from "../lib/team-name-cleaner";
 import { findEquivalentTeamStatsRows, mergeTeamStatsRows } from "../lib/team-stats-merge";
 import {
   MAX_VERIFIED_ODDS_AGE_MS,
+  normalizeStructuredMarketSelection,
   resolveMarketOdds,
   type MarketOddsStatus,
 } from "../lib/market-odds-readiness";
@@ -76,8 +77,10 @@ OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
   "selections": [
     {
       "fixture_id": "10293",
-      "market": "Over 2.5",
-     "probability": 0.58,
+      "market_type": "Totals",
+      "outcome": "over",
+      "line": 2.5,
+      "probability": 0.58,
       "confidence": 8.5,
       "odds": 1.85,
       "ev_percent": 8.2,
@@ -90,6 +93,9 @@ VALIDATION GATE:
 - Bandingkan semua market yang tersedia (ML, HT, Totals, AH, BTTS) sebelum memilih.
 - Market harus berasal dari snapshot provider. Totals dan Asian Handicap wajib memakai line yang
   cocok persis; jika line tidak tersedia atau berbeda, gunakan NO_BET.
+- Keluarkan market sebagai field terstruktur: market_type harus ML, HT, Totals, AH, atau BTTS;
+  outcome harus home/draw/away, over/under, atau yes/no sesuai market; line harus angka persis dari provider
+  untuk Totals/AH dan null untuk market lain. Jangan mengarang nama market atau line.
 - Probability wajib eksplisit, 0 < probability < 1, dan bukan confidence atau probabilitas implisit.
 - Hitung ulang EV = (probability × odds provider) - 1. Jika EV tidak positif atau confidence < 6.5, gunakan "NO_BET".
 
@@ -984,7 +990,9 @@ ${relationalBlock}
    line yang persis; jika line tidak tersedia atau berbeda, gunakan NO_BET.
 3. Tulis probability nyata eksplisit dalam rentang 0 sampai 1. Confidence 0-10 tidak boleh dipakai sebagai probability.
 4. Hitung ulang EV dengan odds snapshot selection: (probability × odds) - 1. Jika hasilnya <= 0, gunakan NO_BET.
-5. JSON selections hanya boleh merekomendasikan pertandingan ${homeTeam} vs ${awayTeam}; jangan menggabungkan fixture lain.`;
+5. Keluarkan market terstruktur: market_type salah satu ML/HT/Totals/AH/BTTS; outcome sesuai market;
+   line harus line angka provider yang persis untuk Totals/AH dan null untuk market lain.
+6. JSON selections hanya boleh merekomendasikan pertandingan ${homeTeam} vs ${awayTeam}; jangan menggabungkan fixture lain.`;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1167,7 +1175,11 @@ function extractJsonObjects(text: string): Record<string, unknown>[] {
   return objects;
 }
 
-export function extractPredictionRecommendation(text: string, fixtureId?: string): PredictionRecommendation {
+export function extractPredictionRecommendation(
+  text: string,
+  fixtureId?: string,
+  teams: { homeTeam?: string; awayTeam?: string } = {},
+): PredictionRecommendation {
   const objects = extractJsonObjects(text);
    const root = objects.find((candidate) => Array.isArray(candidate.selections)) ?? objects[objects.length - 1] ?? {};
    const selections = Array.isArray(root.selections) ? root.selections : [];
@@ -1192,7 +1204,15 @@ export function extractPredictionRecommendation(text: string, fixtureId?: string
    const explicitSelection = String(selected.selection ?? "").trim();
    const market = String(selected.market ?? selected.market_bet ?? root.market_bet ?? "").trim();
    const isNoBetToken = (value: string) => /^(no[\s_-]*bet|skip)$/i.test(value.trim());
-   const marketBet = [market, explicitSelection].find((value) => value && !isNoBetToken(value)) ?? null;
+   const structuredMarket = normalizeStructuredMarketSelection({
+     marketType: selected.market_type ?? selected.marketType ?? selected.market_family,
+     outcome: selected.outcome ?? selected.outcome_key ?? selected.side ?? explicitSelection,
+     line: selected.line ?? selected.market_line,
+     selection: explicitSelection,
+   }, teams);
+   const marketBet = structuredMarket
+     ?? [market, explicitSelection].find((value) => value && !isNoBetToken(value))
+     ?? null;
   const confidence = Math.max(0, Math.min(10, toFiniteNumber(selected.confidence ?? root.confidence)));
   const odds = Math.max(0, toFiniteNumber(selected.odds ?? root.odds));
   const rawEv = toFiniteNumber(selected.ev_percent ?? selected.ev ?? root.ev_percent ?? root.expected_value);
@@ -1458,7 +1478,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
    const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
     let aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
     let predictionText = aiResult.text;
-    let parsedRecommendation = extractPredictionRecommendation(predictionText, fixtureId);
+    let parsedRecommendation = extractPredictionRecommendation(predictionText, fixtureId, { homeTeam, awayTeam });
 
     /*
      * Some providers follow the prose instructions but omit probability from
@@ -1471,13 +1491,15 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
         `Perbaiki output terstruktur untuk fixture ${fixtureId}: ${homeTeam} vs ${awayTeam}.`,
         "Respons sebelumnya memilih market tetapi tidak menyimpan probability eksplisit.",
         "Kirim hanya satu objek JSON valid dengan format:",
-        '{"selections":[{"fixture_id":"' + fixtureId + '","market":"Over 2.5","probability":0.58,"confidence":7.5,"odds":1.85,"ev_percent":7.3,"rationale":"..."}]}',
+        '{"selections":[{"fixture_id":"' + fixtureId + '","market_type":"Totals","outcome":"over","line":2.5,"probability":0.58,"confidence":7.5,"odds":1.85,"ev_percent":7.3,"rationale":"..."}]}',
         "Pertahankan market yang dipilih bila masih kompatibel dengan odds snapshot.",
+        "market_type hanya ML, HT, Totals, AH, atau BTTS; outcome gunakan home/draw/away, over/under, atau yes/no sesuai market.",
+        "Untuk Totals/AH, line harus berupa angka persis dari odds provider; gunakan null untuk market lain.",
         "Probability harus angka 0 sampai 1 untuk market tersebut, bukan confidence dan bukan implied probability.",
-        "Jika tidak dapat memberi probability yang bertanggung jawab, gunakan market NO_BET dan probability null.",
+        "Jika tidak dapat memberi probability yang bertanggung jawab, gunakan market_type NO_BET dan probability null.",
       ].join("\n");
       const repaired = await generateAIResponse(apiKey, finalPersona, repairPrompt);
-      const repairedRecommendation = extractPredictionRecommendation(repaired.text, fixtureId);
+      const repairedRecommendation = extractPredictionRecommendation(repaired.text, fixtureId, { homeTeam, awayTeam });
       if (repairedRecommendation.marketBet && repairedRecommendation.probability != null) {
         aiResult = {
           ...repaired,

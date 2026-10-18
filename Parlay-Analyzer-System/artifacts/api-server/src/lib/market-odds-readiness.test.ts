@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveMarketOdds, type MarketOddsSnapshot } from "./market-odds-readiness";
+import {
+  normalizeStructuredMarketSelection,
+  resolveMarketOdds,
+  type MarketOddsSnapshot,
+} from "./market-odds-readiness";
 
 const now = Date.parse("2026-10-17T12:00:00.000Z");
 
@@ -24,6 +28,48 @@ test("totals selection resolves only an exact provider line", () => {
   assert.equal(result.status, "verified");
   assert.equal(result.odds, 1.95);
   assert.equal(result.matchedLine, 2.5);
+});
+
+test("structured provider market fields normalize into a resolvable selection", () => {
+  const selection = normalizeStructuredMarketSelection({
+    marketType: "Totals",
+    outcome: "under",
+    line: 2.5,
+  });
+  assert.equal(selection, "Under 2.5 Goals");
+
+  const result = resolveMarketOdds(
+    selection ?? "",
+    [row("Alternate Totals 2.5", 1.91, 1.95, 2.5)],
+    { now },
+  );
+  assert.equal(result.status, "verified");
+  assert.equal(result.odds, 1.95);
+});
+
+test("structured selections normalize team outcomes and preserve signed handicap lines", () => {
+  assert.equal(
+    normalizeStructuredMarketSelection(
+      { marketType: "ML", outcome: "home" },
+      { homeTeam: "Harbor City" },
+    ),
+    "Home Win",
+  );
+  assert.equal(
+    normalizeStructuredMarketSelection({ marketType: "AH", outcome: "away", line: -0.5 }),
+    "Asian Handicap Away -0.5",
+  );
+  assert.equal(
+    normalizeStructuredMarketSelection({ marketType: "HT", outcome: "draw" }),
+    "HT Draw",
+  );
+});
+
+test("structured market normalization does not guess unsupported double-chance bets", () => {
+  assert.equal(
+    normalizeStructuredMarketSelection({ marketType: "ML", outcome: "1X" }),
+    null,
+  );
 });
 
 test("a different totals line is not used as a fallback", () => {

@@ -219,6 +219,16 @@ function PredictionCard({
             </Link>
           </div>
 
+          {prediction.evBasis === "analysis" && prediction.oddsStatus !== "verified" && (
+            <div
+              className="mt-3 rounded-md border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-300"
+              data-testid={`status-ev-provenance-${prediction.id}`}
+            >
+              EV yang tampil berasal dari saat analisis, belum dihitung ulang dengan odds provider terbaru.
+              {prediction.oddsStatusReason ? ` ${prediction.oddsStatusReason}` : ""}
+            </div>
+          )}
+
           {prediction.predictionText && (
             <div className="mt-4 rounded-lg border border-primary/15 bg-primary/[0.04] p-3">
               <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-primary">
@@ -292,6 +302,28 @@ export default function RiskCenter() {
       && prediction.decision !== "NO BET"
       && !/^no[\s_-]*bet\b/i.test(prediction.market),
   ).length;
+  const automaticShortlist = useMemo(() => {
+    const occupiedFixtures = new Set(manualLegs.map((leg) => leg.fixtureId));
+    const candidates = predictions
+      .filter((prediction) =>
+        prediction.isSelectable
+        && !prediction.isInParlay
+        && prediction.oddsStatus === "verified"
+        && prediction.evBasis === "current"
+        && prediction.ev > 0
+        && prediction.probability != null
+        && prediction.probability > 0
+        && prediction.probability < 1
+        && !occupiedFixtures.has(prediction.fixtureId),
+      )
+      .sort((a, b) => b.ev - a.ev || b.confidence - a.confidence);
+
+    return candidates.filter((prediction) => {
+      if (occupiedFixtures.has(prediction.fixtureId)) return false;
+      occupiedFixtures.add(prediction.fixtureId);
+      return true;
+    }).slice(0, Math.min(4, Math.max(0, 7 - manualLegs.length)));
+  }, [predictions, manualLegs]);
 
   const openManualScore = (prediction: AIPredictionBoardItem) => {
     setManualScorePrediction(prediction);
@@ -399,10 +431,32 @@ export default function RiskCenter() {
           </p>
           <p className="mt-2 max-w-3xl text-xs text-muted-foreground">
             “Prediksi aktif” berarti catatan AI masih aktif; “Rekomendasi AI: AMBIL” adalah sinyal model, bukan tombol taruhan.
-            Pilihan AI memerlukan market, odds, dan probabilitas yang valid. Gunakan Pilih leg manual untuk fixture lain.
+            Pilihan AI memerlukan market, odds, dan probabilitas yang valid. Pilih otomatis menyusun maksimal 4 leg yang memenuhi syarat
+            untuk Anda tinjau; parlay tidak dibuat atau dipasang otomatis.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="button-auto-build-ai-shortlist"
+            disabled={automaticShortlist.length === 0}
+            title="Memilih hingga 4 prediksi dengan odds terverifikasi dan EV terkini positif. Pilihan tetap perlu ditinjau."
+            onClick={() => {
+              setSelectedIds(automaticShortlist.map((prediction) => prediction.id));
+              setPendingOnly(false);
+              setShowHistory(false);
+              toast({
+                title: "Shortlist AI siap ditinjau",
+                description: automaticShortlist.length >= 2
+                  ? `${automaticShortlist.length} leg dipilih berdasarkan odds terbaru terverifikasi dan EV positif. Tinjau sebelum membuat parlay.`
+                  : "Baru 1 prediksi yang lolos; tambahkan leg manual atau tunggu prediksi valid lainnya sebelum membuat parlay.",
+              });
+            }}
+          >
+            <Sparkles className="h-4 w-4" />
+            Pilih otomatis ({automaticShortlist.length})
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setManualPickerOpen(true)} disabled={selectedIds.length + manualLegs.length >= 7}>
             <Plus className="h-4 w-4" />
             Pilih leg manual

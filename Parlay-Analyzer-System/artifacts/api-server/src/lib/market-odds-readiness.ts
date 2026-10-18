@@ -57,6 +57,75 @@ function selectionLine(value: string): number | null {
   return Number.isFinite(line) ? line : null;
 }
 
+export interface StructuredMarketSelectionInput {
+  marketType?: unknown;
+  outcome?: unknown;
+  line?: unknown;
+  selection?: unknown;
+}
+
+function structuredLine(value: unknown, selection: unknown, outcome: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value.trim());
+    if (Number.isFinite(numeric)) return numeric;
+    const extracted = selectionLine(value);
+    if (extracted != null) return extracted;
+  }
+  return selectionLine(String(selection ?? outcome ?? ""));
+}
+
+/**
+ * Convert an AI's canonical market/outcome/line fields into the stable label
+ * understood by the odds resolver and the existing prediction schema.
+ * Unsupported combinations return null instead of guessing at a different bet.
+ */
+export function normalizeStructuredMarketSelection(
+  input: StructuredMarketSelectionInput,
+  teams: { homeTeam?: string; awayTeam?: string } = {},
+): string | null {
+  const marketType = classifyOddsMarket(input.marketType);
+  if (!marketType) return null;
+
+  const outcome = String(input.outcome ?? input.selection ?? "").trim();
+  const normalizedOutcome = normalizedText(outcome);
+  const isHome = ["home", "home win", "home team", "1", "team 1"].includes(normalizedOutcome)
+    || containsTeam(outcome, teams.homeTeam);
+  const isAway = ["away", "away win", "away team", "visitor", "2", "team 2"].includes(normalizedOutcome)
+    || containsTeam(outcome, teams.awayTeam);
+  const isDraw = ["draw", "tie", "x"].includes(normalizedOutcome);
+  const line = structuredLine(input.line, input.selection, input.outcome);
+
+  if (marketType === "Totals") {
+    const side = normalizedOutcome.startsWith("over") ? "Over"
+      : normalizedOutcome.startsWith("under") ? "Under"
+        : null;
+    return side && line != null ? `${side} ${line} Goals` : null;
+  }
+
+  if (marketType === "AH") {
+    if (isHome === isAway || line == null) return null;
+    const side = isHome ? "Home" : "Away";
+    const formattedLine = line > 0 ? `+${line}` : String(line);
+    return `Asian Handicap ${side} ${formattedLine}`;
+  }
+
+  if (marketType === "BTTS") {
+    if (["yes", "btts", "both teams", "both teams to score"].includes(normalizedOutcome)) return "BTTS Yes";
+    if (["no", "not", "no btts"].includes(normalizedOutcome)) return "BTTS No";
+    return null;
+  }
+
+  if (isDraw && !isHome && !isAway) {
+    return marketType === "HT" ? "HT Draw" : "Draw";
+  }
+  if (isHome !== isAway && !isDraw) {
+    const side = isHome ? "Home" : "Away";
+    return marketType === "HT" ? `HT ${side}` : `${side} Win`;
+  }
+  return null;
+}
+
 function snapshotLine(row: MarketOddsSnapshot): number | null {
   const oddsDraw = Number(row.odds_draw);
   if (row.odds_draw != null && Number.isFinite(oddsDraw) && Math.abs(oddsDraw) <= 20) {

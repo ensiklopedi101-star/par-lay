@@ -187,6 +187,7 @@ export interface AIPredictionBoardItem {
   odds: number | null;
   analysisOdds: number | null;
   oddsStatus: "verified" | "missing_market" | "missing_line" | "line_mismatch" | "missing_selection" | "missing_price" | "stale" | "unsupported";
+  oddsStatusReason: string;
   oddsCapturedAt: string | null;
   probability: number | null;
   confidence: number;

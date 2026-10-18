@@ -152,7 +152,8 @@ function revisionProbability(context: Record<string, unknown> | null): number {
   return Number.isFinite(value) && value > 0 && value < 1 ? value : 0;
 }
 
-function oddsReadinessReason(status: MarketOddsStatus): string {
+function oddsReadinessReason(status: MarketOddsStatus, detail?: string): string {
+  if (detail) return detail;
   switch (status) {
     case "verified": return "Odds cocok dan terverifikasi.";
     case "missing_market": return "Provider belum memiliki odds untuk jenis market ini.";
@@ -177,6 +178,7 @@ function predictionSelectabilityReason(
   prediction: PredictionBoardRow,
   market: string,
   oddsStatus: MarketOddsStatus,
+  oddsStatusReason: string,
   probability: number,
   isUpcoming: boolean,
   decision: "AMBIL" | "NO BET" | null,
@@ -192,7 +194,7 @@ function predictionSelectabilityReason(
     return "Prediksi tidak memiliki keputusan AI AMBIL yang terstruktur.";
   }
   if (oddsStatus !== "verified") {
-    return oddsReadinessReason(oddsStatus);
+    return oddsReadinessReason(oddsStatus, oddsStatusReason);
   }
   if (prediction.revalidation_status === "review") {
     return prediction.revalidation_note || "Revalidasi terakhir meminta pemeriksaan sebelum prediksi digunakan.";
@@ -428,6 +430,7 @@ router.get("/parlays/predictions", async (_req, res) => {
         status === rawStatus ? prediction : { ...prediction, status },
         market,
         oddsResolution.status,
+        oddsResolution.reason,
         probability,
         isUpcoming,
         decision,
@@ -448,6 +451,7 @@ router.get("/parlays/predictions", async (_req, res) => {
         odds: currentOdds,
         analysisOdds,
         oddsStatus: oddsResolution.status,
+        oddsStatusReason: oddsResolution.reason,
         oddsCapturedAt: oddsResolution.capturedAt,
         probability: probability > 0 ? probability : null,
         confidence,
