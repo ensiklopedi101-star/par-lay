@@ -8,7 +8,11 @@ import {
   resolveMarketOdds,
   type MarketOddsStatus,
 } from "../lib/market-odds-readiness";
-import { assessTeamStatsFreshness, type TeamStatsFreshness } from "../lib/team-stats-freshness";
+import {
+  assessTeamStatsFreshness,
+  TEAM_STATS_STALE_DAYS,
+  type TeamStatsFreshness,
+} from "../lib/team-stats-freshness";
 import { latestOddsByMarket } from "./odds-history";
 import { getGeminiModel } from "./model-discovery";
 import { classifyOddsMarket } from "./odds-fetcher";
