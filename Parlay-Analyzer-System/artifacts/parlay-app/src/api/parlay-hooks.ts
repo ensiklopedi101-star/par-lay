@@ -9,6 +9,18 @@ async function apiGet<T>(url: string): Promise<T> {
   return res.json();
 }
 
+async function apiAdminGet<T>(url: string): Promise<T> {
+  const adminPassword = getAdminPassword();
+  const res = await fetch(url, {
+    headers: adminPassword ? { "x-admin-password": adminPassword } : undefined,
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(json && typeof json.error === "string" ? json.error : `API ${res.status}`);
+  }
+  return json as T;
+}
+
 /* ─── Shared Types ─── */
 export interface SyncStatus {
   isRunning: boolean;
@@ -746,6 +758,88 @@ export function useGetLearningSummary() {
     queryKey: getLearningSummaryQueryKey(),
     queryFn: () => apiGet<LearningSummary>(`${API_BASE}/learning/summary`),
     refetchInterval: 60_000,
+  });
+}
+
+export interface LearningPolicyView {
+  minConfidence: number;
+  minEvPercent: number;
+  excludedMarketFamilies: string[];
+}
+
+export interface LearningLoopProposalView {
+  id: string;
+  title: string;
+  rationale: string;
+  status: "draft" | "backtested" | "approved" | "rejected" | "insufficient_data";
+  evidence_summary: Record<string, unknown>;
+  training_sample_size: number;
+  validation_sample_size: number;
+  candidate_policy: LearningPolicyView;
+  training_metrics: Record<string, unknown>;
+  backtest: {
+    eligible?: boolean;
+    baseline?: Record<string, unknown>;
+    candidate?: Record<string, unknown>;
+    validationSamples?: number;
+    [key: string]: unknown;
+  } | null;
+  provider: string | null;
+  model: string | null;
+  created_at: string;
+  candidate_version_id: string | null;
+}
+
+export interface LearningLoopVersionView {
+  id: string;
+  version_number: number;
+  policy: LearningPolicyView;
+  is_active: boolean;
+  rollback_eligible: boolean;
+  created_at: string;
+  activated_at: string | null;
+}
+
+export interface LearningLoopState {
+  activeVersion: {
+    id: string | null;
+    versionNumber: number | null;
+    policy: LearningPolicyView;
+  };
+  evaluations: {
+    total: number;
+    pendingClassification: number;
+    classified: number;
+    settledPredictionsAvailable: number;
+    notImported: number;
+  };
+  proposals: LearningLoopProposalView[];
+  versions: LearningLoopVersionView[];
+  events: Array<{
+    id: string;
+    action: "promote" | "rollback";
+    from_version_id: string | null;
+    to_version_id: string;
+    created_at: string;
+  }>;
+}
+
+export const getLearningLoopStateQueryKey = () => ["learning/optimizer"];
+export function useGetLearningLoopState(enabled = true) {
+  return useQuery<LearningLoopState>({
+    queryKey: getLearningLoopStateQueryKey(),
+    queryFn: () => apiAdminGet<LearningLoopState>(`${API_BASE}/learning/optimizer`),
+    refetchInterval: 30_000,
+    enabled,
+    retry: false,
+  });
+}
+
+export function useLearningLoopAction() {
+  const queryClient = useQueryClient();
+  return useMutation<unknown, Error, { path: string; body?: unknown }>({
+    mutationFn: ({ path, body }) => apiPost<unknown>(`${API_BASE}${path}`, body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: getLearningLoopStateQueryKey() }),
   });
 }
 

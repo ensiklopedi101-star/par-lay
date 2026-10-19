@@ -17,6 +17,11 @@ import {
 import { latestOddsByMarket } from "./odds-history";
 import { getGeminiModel } from "./model-discovery";
 import { classifyOddsMarket } from "./odds-fetcher";
+import { getActiveLearningPromptVersion } from "./prompt-learning";
+import {
+  BASELINE_LEARNING_POLICY,
+  type LearningPolicy,
+} from "./learning-policy";
 
 /* ═══════════════════════════════════════════════════════════════
    DEFAULT SYSTEM INSTRUCTION — Quant Sniper v4
@@ -105,22 +110,51 @@ Field "probability" adalah probabilitas nyata untuk selection dalam angka 0-1, b
    LOAD AI CONFIG dari Supabase
    Mengembalikan persona aktif + instruksi tambahan.
    ═══════════════════════════════════════════════════════════════ */
-export async function loadAIConfig(): Promise<{ persona: string; agentInstructions: string | null }> {
+export async function loadAIConfig(): Promise<{
+  persona: string;
+  agentInstructions: string | null;
+  learningPolicy: LearningPolicy;
+  learningPromptVersion: number | null;
+  learningPromptAddendum: string;
+}> {
+  let persona = DEFAULT_SYSTEM_INSTRUCTION;
+  let agentInstructions: string | null = null;
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("scheduler_config")
       .select("ai_persona, agent_instructions")
       .limit(1)
       .single();
-
-    return {
-      persona: (data?.ai_persona && data.ai_persona.trim().length > 20)
+    if (!error && data) {
+      persona = data.ai_persona && data.ai_persona.trim().length > 20
         ? data.ai_persona
-        : DEFAULT_SYSTEM_INSTRUCTION,
-      agentInstructions: data?.agent_instructions ?? null,
+        : DEFAULT_SYSTEM_INSTRUCTION;
+      agentInstructions = data.agent_instructions ?? null;
+    }
+  } catch (error) {
+    logger.warn({ error }, "[AI-CONFIG] Failed to load scheduler persona; using default");
+  }
+
+  try {
+    const learningPrompt = await getActiveLearningPromptVersion();
+    return {
+      persona,
+      agentInstructions,
+      learningPolicy: learningPrompt.policy,
+      learningPromptVersion: learningPrompt.versionNumber,
+      learningPromptAddendum: learningPrompt.promptAddendum,
     };
-  } catch {
-    return { persona: DEFAULT_SYSTEM_INSTRUCTION, agentInstructions: null };
+  } catch (error) {
+    // Keep prediction analysis available until the additive learning migration
+    // has been applied; all original hard quality gates remain in force.
+    logger.warn({ error }, "[AI-CONFIG] Learning policy unavailable; applying baseline guardrails");
+    return {
+      persona,
+      agentInstructions,
+      learningPolicy: BASELINE_LEARNING_POLICY,
+      learningPromptVersion: null,
+      learningPromptAddendum: "",
+    };
   }
 }
 
@@ -1050,12 +1084,14 @@ export interface AnalysisResult {
 }
 
 interface EvaluationSnapshot {
-  schemaVersion: 1;
+  schemaVersion: 2;
   analysis: {
     analyzedAt: string;
     provider: string;
     model: string;
     rateLimited: boolean;
+    learningPromptVersion: number | null;
+    learningPolicy: LearningPolicy;
   };
   fixture: {
     fixtureId: number | string;
@@ -1467,12 +1503,16 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
   logger.info({ fixtureId, homeTeam, awayTeam, trendSnapshots: movementRows.length, ragLessons: lessons.length }, "Calling Gemini for analysis");
 
   /* ── 5. Load persona dari Supabase (atau reuse persona batch) → Call Gemini ── */
-  const { persona, agentInstructions } = context?.persona
-    ? { persona: context.persona, agentInstructions: context.agentInstructions ?? null }
-    : await loadAIConfig();
-  const finalPersona = agentInstructions
-    ? `${persona}\n\nINSTRUKSI TAMBAHAN:\n${agentInstructions}`
-    : persona;
+  const aiConfig = await loadAIConfig();
+  const persona = context?.persona ?? aiConfig.persona;
+  const agentInstructions = context?.persona
+    ? context.agentInstructions ?? null
+    : aiConfig.agentInstructions;
+  const finalPersona = [
+    persona,
+    agentInstructions ? `INSTRUKSI TAMBAHAN:\n${agentInstructions}` : null,
+    aiConfig.learningPromptAddendum || null,
+  ].filter((section): section is string => Boolean(section)).join("\n\n");
   console.log(`[AI-ANALYSIS] Persona sumber: ${persona === DEFAULT_SYSTEM_INSTRUCTION ? "DEFAULT (fallback)" : "SUPABASE (kustom)"}`);
 
    const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
@@ -1515,16 +1555,30 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
         ? resolveMarketOdds(parsedRecommendation.marketBet, oddsRows, { homeTeam, awayTeam })
         : null;
       const verifiedOdds = oddsMatch?.status === "verified" ? oddsMatch.odds : null;
-     const computedEvPercent = verifiedOdds != null && parsedRecommendation.probability != null
-       ? (parsedRecommendation.probability * verifiedOdds - 1) * 100
+    const computedEvPercent = verifiedOdds != null && parsedRecommendation.probability != null
+      ? (parsedRecommendation.probability * verifiedOdds - 1) * 100
       : 0;
+    const learningMarketFamily = parsedRecommendation.marketBet
+      ? classifyOddsMarket(parsedRecommendation.marketBet)
+      : null;
+    const policyRejectedMarket = Boolean(
+      learningMarketFamily
+      && aiConfig.learningPolicy.excludedMarketFamilies.includes(
+        learningMarketFamily as LearningPolicy["excludedMarketFamilies"][number],
+      ),
+    );
+    const policyRejectedConfidence = parsedRecommendation.confidence < aiConfig.learningPolicy.minConfidence;
+    const policyRejectedEv = computedEvPercent < aiConfig.learningPolicy.minEvPercent;
     const recommendationIsEligible = Boolean(
       verifiedOdds != null &&
       parsedRecommendation.probability != null &&
       parsedRecommendation.probability > 0 &&
       parsedRecommendation.probability < 1 &&
       parsedRecommendation.confidence >= 6.5 &&
-      computedEvPercent > 0,
+      computedEvPercent > 0 &&
+      !policyRejectedConfidence &&
+      !policyRejectedEv &&
+      !policyRejectedMarket,
     );
     const recommendation = recommendationIsEligible
       ? {
@@ -1550,6 +1604,12 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
             ? "Confidence di bawah ambang minimum 6.5."
             : computedEvPercent <= 0
               ? "EV hasil perhitungan ulang tidak positif."
+              : policyRejectedConfidence
+                ? `Confidence di bawah kebijakan aktif ${aiConfig.learningPolicy.minConfidence.toFixed(1)}.`
+                : policyRejectedEv
+                  ? `EV di bawah kebijakan aktif ${aiConfig.learningPolicy.minEvPercent.toFixed(1)}%.`
+                  : policyRejectedMarket
+                    ? `Keluarga market ${learningMarketFamily} diblokir oleh kebijakan aktif.`
               : undefined;
     const hasValidProbability = parsedRecommendation.probability != null &&
       parsedRecommendation.probability > 0 &&
@@ -1571,12 +1631,14 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
 
    const analyzedAt = new Date().toISOString();
    const evaluationSnapshot: EvaluationSnapshot = {
-     schemaVersion: 1,
+     schemaVersion: 2,
      analysis: {
        analyzedAt,
        provider: aiResult.provider,
        model: aiResult.model,
        rateLimited: aiResult.rateLimited,
+       learningPromptVersion: aiConfig.learningPromptVersion,
+       learningPolicy: aiConfig.learningPolicy,
      },
      fixture: {
        fixtureId: parseInt(fixtureId) || fixtureId,

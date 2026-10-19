@@ -1,5 +1,6 @@
 import { BrainCircuit } from "lucide-react";
 import AILearningTransparency from "@/components/ai-learning-transparency";
+import LearningLoopControls from "@/components/learning-loop-controls";
 
 export default function AILearning() {
   return (
@@ -14,6 +15,7 @@ export default function AILearning() {
           Audit hasil settlement, lihat market yang paling konsisten, dan pahami lesson yang akan menjadi konteks analisis berikutnya.
         </p>
       </div>
+      <LearningLoopControls />
       <AILearningTransparency />
     </div>
   );

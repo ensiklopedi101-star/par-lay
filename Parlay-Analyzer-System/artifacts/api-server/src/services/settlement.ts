@@ -16,6 +16,7 @@ import { generateAIResponse } from "./ai-analysis";
 import { settleParlaysForFixtures } from "./parlay-builder";
 import { refreshFixtureResultsForSettlement } from "./odds-fetcher";
 import { appendSettlementContext } from "../lib/settlement-context";
+import { recordSettledPredictionEvaluation } from "./prompt-learning";
 
 /* ─────────────────────────────────────────
    Tipe
@@ -289,6 +290,27 @@ function withSettlementContext(
   evaluationSource = "fixture_final_score",
 ): Record<string, unknown> {
   return appendSettlementContext(prediction.manual_context, settlement, evaluationSource);
+}
+
+function snapshotProbability(value: unknown): number | null {
+  let context: Record<string, unknown> = {};
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    context = value as Record<string, unknown>;
+  } else if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        context = parsed as Record<string, unknown>;
+      }
+    } catch {
+      return null;
+    }
+  }
+  const recommendation = context.recommendation && typeof context.recommendation === "object"
+    ? context.recommendation as Record<string, unknown>
+    : {};
+  const probability = Number(context.probability ?? recommendation.probability);
+  return Number.isFinite(probability) && probability > 0 && probability < 1 ? probability : null;
 }
 
 /* ─────────────────────────────────────────
@@ -706,6 +728,31 @@ export async function runSettlement(options: {
       continue;
     }
 
+    const settledAt = new Date().toISOString();
+    const evaluationSaved = await recordSettledPredictionEvaluation({
+      predictionId: prediction.id,
+      fixtureId: fixture.fixture_id,
+      analysisAt: prediction.created_at,
+      settledAt,
+      league: fixture.league_name ?? prediction.league,
+      marketBet,
+      outcome: betResult,
+      homeScore: homeGoals,
+      awayScore: awayGoals,
+      odds: prediction.best_odds,
+      probability: snapshotProbability(prediction.manual_context),
+      confidence: prediction.confidence_score,
+      evPercent: evAtBet * 100,
+      predictionText: prediction.prediction_text,
+      inputSnapshot: prediction.manual_context,
+    });
+    if (!evaluationSaved) {
+      logger.warn(
+        { predictionId: prediction.id },
+        "[SETTLEMENT] Prediction remains settleable; the learning evaluation can be imported later",
+      );
+    }
+
     /*
      * Update the parlay leg first. If this fails, the prediction remains
      * retryable and the parent parlay cannot be left with a null result.
@@ -732,7 +779,7 @@ export async function runSettlement(options: {
       best_market: marketBet,
       home_score: homeGoals,
       away_score: awayGoals,
-      settled_at: new Date().toISOString(),
+      settled_at: settledAt,
       updated_at: new Date().toISOString(),
       manual_context: withSettlementContext(prediction, {
         status: betResult,
