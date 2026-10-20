@@ -1,3 +1,2 @@
 - [parlay-migration](parlay-migration.md) — lessons from migrating an external parlay system into this workspace
 - [AI Batch Parlay Pipeline](ai-batch-parlay-pipeline.md) — Batch scan is asynchronous; qualifying predictions link to parlay legs and settlement aggregates leg results.
-- [Controlled Gemini learning](controlled-gemini-learning.md) — Evolve only versioned selection policies; train on saved snapshots, hold out later results, require admin approval and rollback.
