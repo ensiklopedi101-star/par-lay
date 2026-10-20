@@ -1110,6 +1110,7 @@ interface EvaluationSnapshot {
   };
   input: {
     odds: {
+      provider: "Odds-API";
       status: OddsAvailabilityStatus;
       capturedAt: string | null;
       selectedMarketVerified: boolean;
@@ -1119,6 +1120,7 @@ interface EvaluationSnapshot {
       snapshot: OddsRow[];
     };
     teamStats: {
+      storageProvider: "Supabase";
       home: Record<string, unknown>;
       away: Record<string, unknown>;
     };
@@ -1657,6 +1659,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
      },
      input: {
        odds: {
+         provider: "Odds-API",
          status: oddsAvailability.status,
           capturedAt: selectedOddsCapturedAt,
          selectedMarketVerified: verifiedOdds != null,
@@ -1665,7 +1668,11 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
           selectedMarketCapturedAt: oddsMatch?.capturedAt ?? null,
          snapshot: oddsRows.slice(0, 60),
        },
-       teamStats: { home: homeStats, away: awayStats },
+       teamStats: {
+         storageProvider: "Supabase",
+         home: homeStats,
+         away: awayStats,
+       },
        standings: { home: homeStandings, away: awayStandings },
        headToHead: h2h,
        oddsMovement: movementRows,

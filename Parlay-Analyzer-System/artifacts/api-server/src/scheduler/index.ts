@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { logger } from "../lib/logger";
 import { fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, type LeagueConfig } from "../services/odds-fetcher";
 import { runSettlement } from "../services/settlement";
+import { runAutonomousLearningCycle } from "../services/prompt-learning";
 import { runBaselineBackfill } from "../services/baseline-backfill";
 import { runRevalidationAndTriggeredReanalysis } from "../services/reanalysis";
 import { supabase } from "../lib/supabase-client";
@@ -64,6 +65,8 @@ async function runDailySettlement() {
   try {
     const result = await runSettlement();
     logger.info(result, "[SETTLEMENT] Cron selesai");
+    const learning = await runAutonomousLearningCycle();
+    logger.info(learning, "[LEARNING-AUTO] Siklus harian sesudah settlement");
   } catch (err) {
     logger.error({ err }, "[SETTLEMENT] Cron gagal");
   }

@@ -773,6 +773,8 @@ export interface LearningLoopProposalView {
   rationale: string;
   status: "draft" | "backtested" | "approved" | "rejected" | "insufficient_data";
   evidence_summary: Record<string, unknown>;
+  gemini_confidence: number;
+  confidence_rationale: string;
   training_sample_size: number;
   validation_sample_size: number;
   candidate_policy: LearningPolicyView;
@@ -810,14 +812,28 @@ export interface LearningLoopState {
     total: number;
     pendingClassification: number;
     classified: number;
+    auditEligible: number;
+    auditExcluded: number;
     settledPredictionsAvailable: number;
     notImported: number;
+  };
+  automation: {
+    enabled: boolean;
+    confidenceThreshold: number;
+    lastRun: {
+      status: string;
+      started_at: string;
+      finished_at: string | null;
+      summary: Record<string, unknown>;
+      error: string | null;
+      attempt_count: number;
+    } | null;
   };
   proposals: LearningLoopProposalView[];
   versions: LearningLoopVersionView[];
   events: Array<{
     id: string;
-    action: "promote" | "rollback";
+    action: "promote" | "auto_promote" | "rollback";
     from_version_id: string | null;
     to_version_id: string;
     created_at: string;

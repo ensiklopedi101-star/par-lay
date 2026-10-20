@@ -274,6 +274,7 @@ interface SettlementFixture {
 export interface SettlementResultsRefresh {
   requested: number;
   refreshed: number;
+  refreshedFixtureIds: number[];
   notFound: number;
   skipped: number;
   errors: number;
@@ -424,6 +425,7 @@ export async function refreshFixtureResultsForSettlement(
   const result: SettlementResultsRefresh = {
     requested: uniqueIds.length,
     refreshed: 0,
+    refreshedFixtureIds: [],
     notFound: 0,
     skipped: 0,
     errors: 0,
@@ -551,6 +553,7 @@ export async function refreshFixtureResultsForSettlement(
       }
 
       result.refreshed++;
+      result.refreshedFixtureIds.push(fixture.fixture_id);
       logger.info(
         {
           fixtureId: fixture.fixture_id,

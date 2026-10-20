@@ -580,9 +580,12 @@ export async function runSettlement(options: {
    * sudah tersedia dan tidak pernah mengarang hasil.
    */
   const refreshedResults = options.refreshResults === false
-    ? { skipped: fixtureIds.length, reason: "manual_score_entry" }
+    ? { skipped: fixtureIds.length, reason: "manual_score_entry", refreshedFixtureIds: [] as number[] }
     : await refreshFixtureResultsForSettlement(fixtureIds);
   logger.info(refreshedResults, "[SETTLEMENT] Refresh hasil dari Odds-API selesai");
+  const providerVerifiedFixtureIds = new Set(
+    "refreshedFixtureIds" in refreshedResults ? refreshedResults.refreshedFixtureIds : [],
+  );
 
   /* 3. Ambil fixtures yang sudah selesai BESERTA SKOR dari DB kita sendiri */
   const { data: completedFixtures } = await supabase
@@ -613,6 +616,18 @@ export async function runSettlement(options: {
     ) as PendingPrediction | undefined;
     if (!prediction) continue;
 
+    const resultProviderVerified = providerVerifiedFixtureIds.has(fixture.fixture_id);
+    const settlementSource = resultProviderVerified
+      ? "odds_api_historical"
+      : options.refreshResults === false
+        ? "manual_score_entry"
+        : "fixture_cache";
+    const resultVerifiedAt = resultProviderVerified ? new Date().toISOString() : null;
+    const settlementAuditFields = {
+      resultProvider: resultProviderVerified ? "Odds-API" : null,
+      resultVerified: resultProviderVerified,
+      resultVerifiedAt,
+    };
     const homeGoals = fixture.home_goals!;
     const awayGoals = fixture.away_goals!;
 
@@ -630,7 +645,8 @@ export async function runSettlement(options: {
           homeScore: homeGoals,
           awayScore: awayGoals,
           marketResolution: "no_selected_market",
-        }, options.evaluationSource),
+          ...settlementAuditFields,
+        }, settlementSource),
       }).eq("id", prediction.id);
       if (noBetUpdateError) {
         logger.error({ err: noBetUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal menyimpan status NO BET");
@@ -680,7 +696,8 @@ export async function runSettlement(options: {
           homeScore: homeGoals,
           awayScore: awayGoals,
           marketResolution: "unsupported_market",
-        }, options.evaluationSource),
+          ...settlementAuditFields,
+        }, settlementSource),
       }).eq("id", prediction.id);
       if (manualUpdateError) {
         logger.error({ err: manualUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal menyimpan status manual");
@@ -745,6 +762,9 @@ export async function runSettlement(options: {
       evPercent: evAtBet * 100,
       predictionText: prediction.prediction_text,
       inputSnapshot: prediction.manual_context,
+      settlementSource,
+      settlementVerified: resultProviderVerified,
+      settlementVerifiedAt: resultVerifiedAt,
     });
     if (!evaluationSaved) {
       logger.warn(
@@ -791,7 +811,8 @@ export async function runSettlement(options: {
         homeScore: homeGoals,
         awayScore: awayGoals,
         lessonText,
-      }, options.evaluationSource),
+        ...settlementAuditFields,
+      }, settlementSource),
     }).eq("id", prediction.id);
     if (predictionUpdateError) {
       logger.error({ err: predictionUpdateError, predictionId: prediction.id }, "[SETTLEMENT] Gagal update hasil prediksi");

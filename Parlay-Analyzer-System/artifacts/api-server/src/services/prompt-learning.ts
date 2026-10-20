@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 import { classifyOddsMarket } from "./odds-fetcher";
+import { assessLearningAudit } from "./learning-audit.js";
 import {
   BASELINE_LEARNING_POLICY,
   MARKET_FAMILIES,
@@ -21,6 +22,8 @@ const MIN_TRAINING_SAMPLES = 20;
 const MIN_VALIDATION_SAMPLES = 10;
 const MAX_EVALUATIONS_PER_CLASSIFY = 10;
 const MAX_BACKTEST_SAMPLES = 500;
+const AUTO_PROMOTION_CONFIDENCE_THRESHOLD = 0.9;
+const MAX_AUTO_CLASSIFICATION_BATCHES = 3;
 const ACTIVE_PROMPT_CACHE_MS = 60_000;
 const OUTCOMES = ["WIN", "LOSS", "HALF_WIN", "HALF_LOSS", "PUSH"] as const;
 const EVALUATION_CATEGORIES = [
@@ -45,6 +48,11 @@ interface LearningEvaluationRow extends LearningEvaluationSample {
   away_score: number | null;
   prediction_text: string | null;
   input_snapshot: unknown;
+  audit_status: "eligible" | "excluded";
+  audit_reasons: string[];
+  settlement_source: string | null;
+  settlement_verified: boolean;
+  settlement_verified_at: string | null;
   classification_status: "pending" | "classified" | "failed";
   error_category: string | null;
   classification: Record<string, unknown> | null;
@@ -136,6 +144,11 @@ function sampleRowToEvaluation(row: Record<string, unknown>): LearningEvaluation
     ev_percent: finiteNumber(row.ev_percent),
     prediction_text: typeof row.prediction_text === "string" ? row.prediction_text : null,
     input_snapshot: row.input_snapshot,
+    audit_status: row.audit_status === "eligible" ? "eligible" : "excluded",
+    audit_reasons: Array.isArray(row.audit_reasons) ? row.audit_reasons.map(String) : [],
+    settlement_source: typeof row.settlement_source === "string" ? row.settlement_source : null,
+    settlement_verified: row.settlement_verified === true,
+    settlement_verified_at: typeof row.settlement_verified_at === "string" ? row.settlement_verified_at : null,
     classification_status: row.classification_status === "classified" || row.classification_status === "failed"
       ? row.classification_status
       : "pending",
@@ -303,7 +316,19 @@ export async function recordSettledPredictionEvaluation(input: {
   evPercent: number | null;
   predictionText: string | null;
   inputSnapshot: unknown;
+  settlementSource: string;
+  settlementVerified: boolean;
+  settlementVerifiedAt: string | null;
 }): Promise<boolean> {
+  const inputSnapshot = extractEvaluationSnapshot(input.inputSnapshot);
+  const audit = assessLearningAudit({
+    inputSnapshot,
+    analysisAt: input.analysisAt,
+    settledAt: input.settledAt,
+    settlementSource: input.settlementSource,
+    settlementVerified: input.settlementVerified,
+    settlementVerifiedAt: input.settlementVerifiedAt,
+  });
   const { error } = await supabase
     .from("prediction_learning_evaluations")
     .upsert({
@@ -321,7 +346,12 @@ export async function recordSettledPredictionEvaluation(input: {
       confidence: input.confidence,
       ev_percent: input.evPercent,
       prediction_text: input.predictionText?.slice(0, 4000) ?? null,
-      input_snapshot: extractEvaluationSnapshot(input.inputSnapshot),
+      input_snapshot: inputSnapshot,
+      audit_status: audit.eligible ? "eligible" : "excluded",
+      audit_reasons: audit.reasons,
+      settlement_source: input.settlementSource,
+      settlement_verified: input.settlementVerified,
+      settlement_verified_at: input.settlementVerifiedAt,
       updated_at: new Date().toISOString(),
     }, { onConflict: "prediction_id", ignoreDuplicates: true });
 
@@ -335,9 +365,13 @@ export async function recordSettledPredictionEvaluation(input: {
 export async function backfillSettledPredictionEvaluations(): Promise<{
   scanned: number;
   eligible: number;
+  auditable: number;
+  excluded: number;
 }> {
   let scanned = 0;
   let eligible = 0;
+  let auditable = 0;
+  let excluded = 0;
   for (let offset = 0; ; offset += 500) {
     const { data, error } = await supabase
       .from("ai_predictions")
@@ -353,6 +387,14 @@ export async function backfillSettledPredictionEvaluations(): Promise<{
       if (!outcome || !Number.isFinite(fixtureId) || row.id == null) return [];
       const context = asRecord(row.manual_context);
       const snapshot = getAnalysisSnapshot(context);
+      const settlement = asRecord(context.settlement);
+      const settlementSource = typeof settlement.evaluationSource === "string"
+        ? settlement.evaluationSource
+        : "legacy_unknown";
+      const settlementVerified = settlement.resultVerified === true;
+      const settlementVerifiedAt = typeof settlement.resultVerifiedAt === "string"
+        ? settlement.resultVerifiedAt
+        : null;
       const recommendation = getRecommendation(context);
       const probability = finiteNumber(context.probability) ?? finiteNumber(recommendation.probability);
       const evPercent = finiteNumber(recommendation.evPercent)
@@ -361,12 +403,25 @@ export async function backfillSettledPredictionEvaluations(): Promise<{
           : null);
       const scoreHome = finiteNumber(row.home_score);
       const scoreAway = finiteNumber(row.away_score);
+      const inputSnapshot = extractEvaluationSnapshot(snapshot);
+      const analysisAt = typeof row.created_at === "string" ? row.created_at : null;
+      const settledAt = typeof row.settled_at === "string" ? row.settled_at : null;
+      const audit = assessLearningAudit({
+        inputSnapshot,
+        analysisAt,
+        settledAt,
+        settlementSource,
+        settlementVerified,
+        settlementVerifiedAt,
+      });
+      if (audit.eligible) auditable++;
+      else excluded++;
       eligible++;
       return [{
         prediction_id: String(row.id),
         fixture_id: fixtureId,
-        analysis_at: typeof row.created_at === "string" ? row.created_at : null,
-        settled_at: typeof row.settled_at === "string" ? row.settled_at : null,
+        analysis_at: analysisAt,
+        settled_at: settledAt,
         league: typeof row.league === "string" ? row.league : null,
         market_bet: typeof row.market_bet === "string"
           ? row.market_bet
@@ -379,7 +434,12 @@ export async function backfillSettledPredictionEvaluations(): Promise<{
         confidence: finiteNumber(row.confidence_score) ?? finiteNumber(recommendation.confidence),
         ev_percent: evPercent,
         prediction_text: typeof row.prediction_text === "string" ? row.prediction_text.slice(0, 4000) : null,
-        input_snapshot: extractEvaluationSnapshot(snapshot),
+        input_snapshot: inputSnapshot,
+        audit_status: audit.eligible ? "eligible" : "excluded",
+        audit_reasons: audit.reasons,
+        settlement_source: settlementSource,
+        settlement_verified: settlementVerified,
+        settlement_verified_at: settlementVerifiedAt,
         updated_at: new Date().toISOString(),
       }];
     });
@@ -391,7 +451,7 @@ export async function backfillSettledPredictionEvaluations(): Promise<{
     }
     if (rows.length < 500) break;
   }
-  return { scanned, eligible };
+  return { scanned, eligible, auditable, excluded };
 }
 
 function classificationPayload(row: LearningEvaluationRow): Record<string, unknown> {
@@ -458,6 +518,7 @@ export async function classifyPendingLearningEvaluations(limit = MAX_EVALUATIONS
     .from("prediction_learning_evaluations")
     .select("*")
     .eq("classification_status", "pending")
+    .eq("audit_status", "eligible")
     .order("analysis_at", { ascending: true })
     .limit(batchLimit);
   if (error) throw new Error(`Failed to load pending evaluations: ${error.message}`);
@@ -530,6 +591,7 @@ async function getClassifiedEvaluations(limit = 1000): Promise<LearningEvaluatio
       .from("prediction_learning_evaluations")
       .select("*")
       .eq("classification_status", "classified")
+      .eq("audit_status", "eligible")
       .order("analysis_at", { ascending: true })
       .range(offset, Math.min(limit - 1, offset + 499));
     if (error) throw new Error(`Failed to read classified evaluations: ${error.message}`);
@@ -575,7 +637,9 @@ Kebijakan hanya boleh lebih ketat: confidenceFloor 6.5..9.5, evFloorPercent 0..2
 Usulan harus berubah dari kebijakan aktif. Jika bukti belum mendukung perubahan, kembalikan policy sama dan title "Belum ada perubahan yang layak".
 
 Kembalikan JSON saja:
-{"title":"...","rationale":"...","policy":{"minConfidence":6.5,"minEvPercent":0,"excludedMarketFamilies":[]}}
+{"title":"...","rationale":"...","confidence":0.0,"confidenceRationale":"...","policy":{"minConfidence":6.5,"minEvPercent":0,"excludedMarketFamilies":[]}}
+
+confidence adalah keyakinan 0..1 bahwa perubahan kecil ini layak diuji berdasarkan bukti training yang terlihat; jangan memberi nilai tinggi hanya karena hasil terlihat baik. Jelaskan keterbatasan bukti di confidenceRationale.
 
 DATA TRAINING (data validasi setelah cutoff sengaja tidak diberikan):
 ${JSON.stringify({
@@ -592,6 +656,15 @@ ${JSON.stringify({
     prompt,
   );
   const modelProposal = parseModelJson(response.text);
+  const rawConfidence = finiteNumber(modelProposal.confidence);
+  const geminiConfidence = rawConfidence != null && rawConfidence >= 0 && rawConfidence <= 1
+    ? rawConfidence
+    : 0;
+  const confidenceRationale = limitNarrative(
+    modelProposal.confidenceRationale,
+    "Gemini tidak memberikan alasan keyakinan yang dapat diaudit.",
+    1000,
+  );
   const candidate = parseLearningPolicy(modelProposal.policy);
   if (!isPolicyNoWeaker(candidate, baselinePolicy)) {
     throw new Error("Usulan Gemini mencoba melonggarkan kebijakan aktif; usulan ditolak.");
@@ -646,6 +719,11 @@ ${JSON.stringify({
     categoryCounts,
     marketMetrics,
     holdoutNotSharedWithModel: true,
+    sourceAudit: {
+      trainingSamplesAudited: training.length,
+      validationSamplesAudited: split.validation.length,
+      allSamplesPassedSourceQualityGates: true,
+    },
   };
   const { data: proposal, error: proposalError } = await supabase
     .from("ai_learning_prompt_proposals")
@@ -655,6 +733,8 @@ ${JSON.stringify({
       candidate_version_id: candidateVersion.id,
       title: limitNarrative(modelProposal.title, "Usulan kebijakan belajar", 160),
       rationale: limitNarrative(modelProposal.rationale, "Usulan dibentuk dari data training terurut waktu.", 1600),
+      gemini_confidence: geminiConfidence,
+      confidence_rationale: confidenceRationale,
       evidence_summary: evidenceSummary,
       training_cutoff: split.validationStart,
       training_sample_size: training.length,
@@ -666,7 +746,7 @@ ${JSON.stringify({
       provider: response.provider,
       model: response.model,
     })
-    .select("id, title, rationale, status, training_sample_size, validation_sample_size, training_metrics, candidate_policy, created_at")
+    .select("id, title, rationale, status, gemini_confidence, confidence_rationale, training_sample_size, validation_sample_size, training_metrics, candidate_policy, created_at")
     .single();
   if (proposalError || !proposal) {
     await supabase.from("ai_learning_prompt_versions").delete().eq("id", candidateVersion.id);
@@ -689,6 +769,7 @@ export async function backtestLearningPromptProposal(proposalId: string): Promis
     .from("prediction_learning_evaluations")
     .select("*")
     .eq("classification_status", "classified")
+    .eq("audit_status", "eligible")
     .gte("analysis_at", String(proposal.training_cutoff))
     .order("analysis_at", { ascending: true })
     .limit(MAX_BACKTEST_SAMPLES);
@@ -710,12 +791,23 @@ export async function backtestLearningPromptProposal(proposalId: string): Promis
     && baseline.brierScore != null
     && candidate.brierScore != null
     && candidate.brierScore <= baseline.brierScore + 0.01;
+  const geminiConfidence = finiteNumber(proposal.gemini_confidence) ?? 0;
+  const confidenceRationalePresent = String(proposal.confidence_rationale ?? "").trim().length >= 40;
+  const confidenceEligible = geminiConfidence >= AUTO_PROMOTION_CONFIDENCE_THRESHOLD
+    && confidenceRationalePresent;
+  const evidenceSummary = asRecord(proposal.evidence_summary);
+  const sourceAudit = asRecord(evidenceSummary.sourceAudit);
+  const dataQualityEligible = validation.length >= MIN_VALIDATION_SAMPLES
+    && validation.every((row) => row.audit_status === "eligible")
+    && sourceAudit.allSamplesPassedSourceQualityGates === true;
   const eligible = validation.length >= MIN_VALIDATION_SAMPLES
     && candidate.selected >= minimumSelected
     && isPolicyNoWeaker(candidatePolicy, baselinePolicy)
     && isPolicyStrictlyTighter(candidatePolicy, baselinePolicy)
     && roiImproved
-    && calibrationAcceptable;
+    && calibrationAcceptable
+    && confidenceEligible
+    && dataQualityEligible;
   const status = validation.length < MIN_VALIDATION_SAMPLES ? "insufficient_data" : "backtested";
   const backtest = {
     evaluatedAt: new Date().toISOString(),
@@ -732,6 +824,11 @@ export async function backtestLearningPromptProposal(proposalId: string): Promis
       roiImproved,
       calibrationSampled,
       calibrationAcceptable,
+      geminiConfidence,
+      minimumGeminiConfidence: AUTO_PROMOTION_CONFIDENCE_THRESHOLD,
+      confidenceRationalePresent,
+      confidenceEligible,
+      dataQualityEligible,
     },
     eligible,
   };
@@ -762,6 +859,126 @@ export async function promoteLearningPromptProposal(proposalId: string): Promise
   return data;
 }
 
+function makassarDailyRunKey(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Makassar",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `daily:${values.year}-${values.month}-${values.day}`;
+}
+
+export async function runAutonomousLearningCycle(): Promise<Record<string, unknown>> {
+  const runKey = makassarDailyRunKey();
+  const { data: claimData, error: claimError } = await supabase.rpc(
+    "claim_ai_learning_automation_run",
+    { p_run_key: runKey },
+  );
+  if (claimError) throw new Error(`Failed to claim daily learning run: ${claimError.message}`);
+  const claim = asRecord(claimData);
+  if (claim.claimed !== true) {
+    return { runKey, status: "skipped", reason: claim.reason ?? "already_claimed" };
+  }
+
+  const summary: Record<string, unknown> = {
+    runKey,
+    startedAt: new Date().toISOString(),
+    confidenceThreshold: AUTO_PROMOTION_CONFIDENCE_THRESHOLD,
+  };
+  let status: "completed" | "skipped" | "failed" = "skipped";
+  let errorMessage: string | null = null;
+
+  try {
+    summary.backfill = await backfillSettledPredictionEvaluations();
+
+    let batches = 0;
+    let requested = 0;
+    let classified = 0;
+    for (; batches < MAX_AUTO_CLASSIFICATION_BATCHES; batches++) {
+      const result = await classifyPendingLearningEvaluations();
+      requested += result.requested;
+      classified += result.classified;
+      if (result.requested === 0 || result.classified === 0) {
+        batches++;
+        break;
+      }
+    }
+    summary.classification = { batches, requested, classified };
+
+    if (classified === 0) {
+      summary.reason = "no_new_source_audited_evaluations";
+    } else {
+      const { count, error } = await supabase
+        .from("prediction_learning_evaluations")
+        .select("prediction_id", { count: "exact", head: true })
+        .eq("audit_status", "eligible")
+        .eq("classification_status", "classified");
+      if (error) throw new Error(`Failed to count audited training data: ${error.message}`);
+      summary.auditedClassifiedCount = count ?? 0;
+
+      if ((count ?? 0) < MIN_TRAINING_SAMPLES + MIN_VALIDATION_SAMPLES) {
+        summary.reason = "insufficient_audited_history";
+      } else {
+        let proposal: Record<string, unknown> | null = null;
+        try {
+          proposal = await generateLearningPromptProposal();
+        } catch (generationError) {
+          const message = generationError instanceof Error ? generationError.message : String(generationError);
+          if (message.includes("Belum ada perubahan kebijakan") || message.includes("Perlu minimal")) {
+            summary.reason = "no_supported_policy_change";
+          } else {
+            throw generationError;
+          }
+        }
+
+        if (proposal) {
+          const proposalId = String(proposal.id ?? "");
+          if (!proposalId) throw new Error("Generated learning proposal has no ID");
+          summary.proposal = {
+            id: proposalId,
+            confidence: finiteNumber(proposal.gemini_confidence) ?? 0,
+            confidenceRationale: proposal.confidence_rationale ?? "",
+          };
+          const backtest = await backtestLearningPromptProposal(proposalId);
+          summary.backtest = backtest;
+          if (backtest.eligible === true) {
+            summary.activation = await promoteLearningPromptProposal(proposalId);
+            status = "completed";
+          } else {
+            summary.reason = "objective_or_confidence_gates_not_passed";
+          }
+        }
+      }
+    }
+  } catch (error) {
+    status = "failed";
+    errorMessage = error instanceof Error ? error.message : String(error);
+    summary.reason = "automation_error";
+  }
+
+  const finishedAt = new Date().toISOString();
+  const { error: finishError } = await supabase
+    .from("ai_learning_automation_runs")
+    .update({
+      status,
+      finished_at: finishedAt,
+      summary,
+      error: errorMessage,
+    })
+    .eq("run_key", runKey);
+  if (finishError) {
+    logger.error({ err: finishError, runKey }, "[LEARNING-AUTO] Gagal menyimpan hasil siklus otomatis");
+  }
+  if (status === "failed") {
+    logger.error({ runKey, error: errorMessage, summary }, "[LEARNING-AUTO] Siklus otomatis gagal");
+  } else {
+    logger.info({ runKey, status, summary }, "[LEARNING-AUTO] Siklus otomatis selesai");
+  }
+  return { runKey, status, summary, error: errorMessage };
+}
+
 export async function rollbackLearningPromptVersion(versionId: string): Promise<unknown> {
   const { data, error } = await supabase.rpc("rollback_ai_learning_prompt_version", {
     p_target_version_id: versionId,
@@ -787,26 +1004,43 @@ export async function getLearningLoopState(): Promise<Record<string, unknown>> {
     evaluationCount,
     pendingCount,
     classifiedCount,
+    auditedCount,
+    excludedCount,
     settledCount,
     proposals,
     versions,
     events,
+    latestAutomationRun,
   ] = await Promise.all([
     supabase.from("prediction_learning_evaluations").select("prediction_id", { count: "exact", head: true }),
-    supabase.from("prediction_learning_evaluations").select("prediction_id", { count: "exact", head: true }).eq("classification_status", "pending"),
-    supabase.from("prediction_learning_evaluations").select("prediction_id", { count: "exact", head: true }).eq("classification_status", "classified"),
+    supabase.from("prediction_learning_evaluations").select("prediction_id", { count: "exact", head: true }).eq("classification_status", "pending").eq("audit_status", "eligible"),
+    supabase.from("prediction_learning_evaluations").select("prediction_id", { count: "exact", head: true }).eq("classification_status", "classified").eq("audit_status", "eligible"),
+    supabase.from("prediction_learning_evaluations").select("prediction_id", { count: "exact", head: true }).eq("audit_status", "eligible"),
+    supabase.from("prediction_learning_evaluations").select("prediction_id", { count: "exact", head: true }).eq("audit_status", "excluded"),
     supabase.from("ai_predictions").select("id", { count: "exact", head: true }).in("status", [...OUTCOMES]),
-    supabase.from("ai_learning_prompt_proposals").select("id, title, rationale, status, evidence_summary, training_sample_size, validation_sample_size, candidate_policy, training_metrics, backtest, provider, model, created_at, candidate_version_id").order("created_at", { ascending: false }).limit(10),
+    supabase.from("ai_learning_prompt_proposals").select("id, title, rationale, status, evidence_summary, gemini_confidence, confidence_rationale, training_sample_size, validation_sample_size, candidate_policy, training_metrics, backtest, provider, model, created_at, candidate_version_id").order("created_at", { ascending: false }).limit(10),
     supabase.from("ai_learning_prompt_versions").select("id, version_number, policy, prompt_addendum, is_active, created_at, activated_at").order("version_number", { ascending: false }).limit(10),
     supabase.from("ai_learning_prompt_events").select("id, action, from_version_id, to_version_id, proposal_id, backtest, created_at").order("created_at", { ascending: false }).limit(1000),
+    supabase.from("ai_learning_automation_runs").select("status, started_at, finished_at, summary, error, attempt_count").order("started_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
-  const queryErrors = [evaluationCount.error, pendingCount.error, classifiedCount.error, settledCount.error, proposals.error, versions.error, events.error].filter(Boolean);
+  const queryErrors = [
+    evaluationCount.error,
+    pendingCount.error,
+    classifiedCount.error,
+    auditedCount.error,
+    excludedCount.error,
+    settledCount.error,
+    proposals.error,
+    versions.error,
+    events.error,
+    latestAutomationRun.error,
+  ].filter(Boolean);
   if (queryErrors.length > 0) {
     throw new Error(`Failed to load learning loop state: ${queryErrors[0]?.message ?? "unknown query error"}`);
   }
   const rollbackEligibleVersionIds = new Set(
     (events.data ?? [])
-      .filter((event) => event.action === "promote" || event.action === "rollback")
+      .filter((event) => event.action === "promote" || event.action === "auto_promote" || event.action === "rollback")
       .map((event) => String(event.to_version_id)),
   );
   return {
@@ -815,8 +1049,15 @@ export async function getLearningLoopState(): Promise<Record<string, unknown>> {
       total: evaluationCount.count ?? 0,
       pendingClassification: pendingCount.count ?? 0,
       classified: classifiedCount.count ?? 0,
+      auditEligible: auditedCount.count ?? 0,
+      auditExcluded: excludedCount.count ?? 0,
       settledPredictionsAvailable: settledCount.count ?? 0,
       notImported: Math.max(0, (settledCount.count ?? 0) - (evaluationCount.count ?? 0)),
+    },
+    automation: {
+      enabled: true,
+      confidenceThreshold: AUTO_PROMOTION_CONFIDENCE_THRESHOLD,
+      lastRun: latestAutomationRun.data ?? null,
     },
     proposals: proposals.data ?? [],
     versions: (versions.data ?? []).map((version) => ({
