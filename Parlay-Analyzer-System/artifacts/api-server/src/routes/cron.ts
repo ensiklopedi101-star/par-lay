@@ -4,6 +4,7 @@ import { logger } from "../lib/logger";
 import { runRevalidation } from "../services/revalidation";
 import { runBaselineBackfill } from "../services/baseline-backfill";
 import { runRevalidationAndTriggeredReanalysis } from "../services/reanalysis";
+import { runClosingOddsCapture, runOutcomeSettlement } from "../services/closing-odds-capture";
 
 const router: IRouter = Router();
 
@@ -18,6 +19,13 @@ function isAuthorized(req: any): boolean {
 
 /**
  * Cron-safe endpoint for external cron services (e.g. cron-job.org).
+ *
+ * GET /api/cron?token=<CRON_SECRET>&action=closing  -> isi odds_close untuk
+ *   fixture yang kick-off dalam 10 menit. Biaya kuota nol (membaca snapshot
+ *   yang sudah tersimpan). Aman dipanggil sesering apa pun.
+ * GET /api/cron?token=<CRON_SECRET>&action=outcomes -> isi outcome pada
+ *   prediction_selections dari skor akhir. Tanpa ini, ledger tidak akan
+ *   pernah punya hasil dan Fase 3 mustahil dievaluasi.
  *
  * GET /api/cron?token=<CRON_SECRET>&action=keep-alive  -> lightweight ping, no odds API calls
  * GET /api/cron?token=<CRON_SECRET>&action=sync        -> trigger full odds sync
@@ -70,6 +78,39 @@ function handleCron(req: any, res: any) {
     runBaselineBackfill({ dryRun: false }).catch((err) =>
       logger.error({ err }, "Cron-triggered baseline backfill failed"),
     );
+    return;
+  }
+
+  if (action === "closing") {
+    /* Dijalankan menunggu (bukan background) karena selesai dalam hitungan
+       detik: tidak ada panggilan jaringan ke penyedia odds. Menunggu membuat
+       kegagalan terlihat di respons, bukan hilang di log. */
+    runClosingOddsCapture()
+      .then((summary) => {
+        res.json({
+          message: "Closing odds capture selesai",
+          ...summary,
+          timestamp: new Date().toISOString(),
+        });
+      })
+      .catch((err) => {
+        logger.error({ err }, "Cron-triggered closing odds capture gagal");
+        res.status(500).json({
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    return;
+  }
+
+  if (action === "outcomes") {
+    runOutcomeSettlement()
+      .then((result) => {
+        res.json({ message: "Settlement outcome selesai", ...result, timestamp: new Date().toISOString() });
+      })
+      .catch((err) => {
+        logger.error({ err }, "Cron-triggered outcome settlement gagal");
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      });
     return;
   }
 

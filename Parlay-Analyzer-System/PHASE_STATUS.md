@@ -12,7 +12,7 @@ Definisi fase diambil dari `football-betting-system-review (1)/src/lib/audit-dat
 | --- | --- | --- | --- |
 | 0 | Berhenti menambah kerusakan | ✅ **selesai** | 5 perubahan terpasang, 97→104 tes lulus |
 | 1 | Ganti penghasil probabilitas | ⚠️ **kode selesai, belum pernah jalan** | `prediction_selections` = **0 baris** |
-| 2 | Perbaiki data & ukuran kebenaran | 🟡 **~55%** | Lapis 1–3 selesai; closing-odds & aliases belum |
+| 2 | Perbaiki data & ukuran kebenaran | 🟡 **~80%** | closing-odds + outcome settlement dibangun; harga sharp belum |
 | 3 | Kumpulkan bukti | ⏸️ **terblokir** | Butuh data dari Fase 1 & 2 |
 | 4 | Naik kelas hanya jika terbukti | ⏸️ **belum relevan** | Menunggu Fase 3 |
 
@@ -106,19 +106,54 @@ Jadi butir ini **berfungsi**, hanya lewat mekanisme yang berbeda dari yang
 ditulis di rencana. Tidak ada yang perlu diperbaiki; dokumennya yang perlu
 diperbarui.
 
-### ❌ Butir 1 — "Job closing-odds T-10 menit"
+### ✅ Butir 1 — "Job closing-odds T-10 menit" — **DIBANGUN**
 
-**Belum ada sama sekali.** Saya grep `closing|closingOdds|odds_close` di seluruh
-`api-server/src`: **nol hasil**. Kolom `odds_close` dan `close_fair_prob` ada di
-`prediction_selections`, tapi tidak ada kode yang menulisnya.
+| Komponen | File | Isi |
+|---|---|---|
+| Pemilihan harga penutup | `lib/closing-odds.ts` | snapshot terakhir sebelum kick-off, de-vig `shin` |
+| Job pengisian | `services/closing-odds-capture.ts` | `runClosingOddsCapture()` |
+| Endpoint | `routes/cron.ts` | `?action=closing` |
+| Jadwal | `scheduler/index.ts` | tiap 5 menit |
 
-Fungsi perhitungannya sudah ada (`clvOf`, `summarizeLedger` di
-`lib/quant/evaluation.ts`), jadi yang kosong hanya **pengambilan datanya**.
+**Biaya kuota nol.** Job membaca `odds_movement_history` yang sudah tersimpan
+oleh sync odds; tidak ada panggilan ke penyedia. Itu memenuhi syarat "hemat
+kuota" di rencana.
 
-Ini butir terpenting Fase 2, karena tanpa `odds_close`:
-- CLV tidak bisa dihitung
-- Gerbang Fase 3 (`CLV > 0, t-stat ≥ 2`) tidak bisa dievaluasi
-- Vonis "supported" atau "refuted" tidak akan pernah keluar
+Tiga penjagaan yang diuji:
+- Snapshot **setelah** kick-off tidak dipakai (harga in-play bukan harga tutup)
+- Fixture yang kick-off-nya masih > 10 menit **dilewati** — harga 60 menit
+  sebelum kick-off bukan harga penutup
+- `odds_close` yang sudah terisi **tidak ditimpa**, jadi job aman dijalankan
+  berulang
+
+### 🔴 Lubang yang ditemukan: `outcome` tidak pernah diisi siapa pun
+
+Ini tidak tertulis di rencana Fase 2, tapi akan menggagalkan Fase 3 sepenuhnya.
+
+`settlement.ts` hanya menulis ke `ai_predictions`. **Tidak ada satu baris kode
+pun** yang menulis `prediction_selections.outcome`. Artinya meski
+`odds_close` terisi dan CLV bisa dihitung, baris "≥ 300 selection **ber-hasil**"
+tidak akan pernah tercapai — berapa lama pun ditunggu.
+
+Sudah dibangun:
+
+| Komponen | File | Isi |
+|---|---|---|
+| Penilai market | `lib/selection-outcome.ts` | `outcomeOfMarket()` dari skor akhir |
+| Job pengisian | `services/closing-odds-capture.ts` | `runOutcomeSettlement()` |
+| Endpoint | `routes/cron.ts` | `?action=outcomes` |
+| Jadwal | `scheduler/index.ts` | tiap jam (menit ke-20) |
+
+Menangani ML, BTTS, Totals (termasuk garis seperempat 2.25/2.75), dan AH
+dengan pencerminan garis kandang→tandang. Mengembalikan `null` — bukan
+menebak — untuk skor kosong atau `market_key` tak dikenal.
+
+**Catatan penting:** fungsi ini bisa dinilai dari skor saja. Sesuai catatan
+`QUANT_MIGRATION.md`, `fixtures` hampir tidak punya skor akhir. Jadi job
+`outcomes` akan menghasilkan nol sampai skor terisi — itu keterbatasan data,
+bukan bug.'', 1)
+
+s = s.replace(### ❌ Butir 3 — "Satu sumber harga sharp sebagai acuan fair & closing"
 
 ### ❌ Butir 3 — "Satu sumber harga sharp sebagai acuan fair & closing"
 
@@ -138,7 +173,18 @@ memang begitu desain baseline-nya, tapi berarti butir ini belum dikerjakan.
 
 ---
 
-## Fase 3 — terblokir, bukan tertunda
+## Fase 3 — masih terblokir, tapi penghalangnya berkurang
+
+Sebelum pekerjaan di atas, Fase 3 terhalang **tiga** hal. Sekarang tinggal dua:
+
+| Penghalang | Status |
+|---|---|
+| `odds_close` tidak pernah terisi → CLV mustahil | ✅ **dibangun** |
+| `outcome` tidak pernah terisi → "ber-hasil" mustahil | ✅ **dibangun** |
+| Belum ada selection sama sekali | ⏳ menunggu fixture kembali (21 Nov) |
+
+Artinya: begitu fixture mengalir dan analisis berjalan, ledger akan terisi
+otomatis tanpa pekerjaan tambahan.
 
 Fase 3 minta "≥ 300 selection ber-hasil". Kondisinya sekarang:
 
@@ -160,6 +206,15 @@ butuh waktu lama. Justru karena satu fixture menghasilkan **banyak** baris
 selection (satu per market), 300 bisa tercapai lebih cepat daripada 300 bet.
 
 ---
+
+## Angka verifikasi
+
+- Tes: **141 lulus** (dari 104) — 21 tes `closing-odds`, 8 tes `selection-outcome`,
+  8 tes orkestrasi job
+- `tsc --build` bersih, `tsc -p api-server` bersih, `node build.mjs` sukses
+- Smoke test: `/api/cron?action=closing` → 200 + ringkasan nol,
+  `/api/cron?action=outcomes` → 200 + ringkasan nol, tanpa Supabase tidak crash
+- 401 bila `token` salah — diuji ulang
 
 ## Urutan yang saya sarankan
 
