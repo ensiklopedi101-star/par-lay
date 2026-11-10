@@ -1,5 +1,8 @@
 # Migrasi Replit → Vercel
 
+> **Status: prasyarat teknis sudah dikerjakan.** Lihat `VERCEL_DEPLOY.md` untuk
+> langkah deploy. Dokumen ini tetap jadi analisis latar belakangnya.
+
 Dokumen ini berdasarkan pembacaan kode di repo ini, bukan asumsi. Setiap klaim
 di bawah bisa dicek ulang di file yang disebutkan.
 

@@ -1,10 +1,11 @@
 import { Router, type IRouter } from "express";
-import { fetchAndSaveAllLeagues } from "../services/odds-fetcher";
+import { fetchAndSaveAllLeagues, fetchAndSaveLeagueOdds, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, getConfiguredScanDays } from "../services/odds-fetcher";
 import { logger } from "../lib/logger";
 import { runRevalidation } from "../services/revalidation";
 import { runBaselineBackfill } from "../services/baseline-backfill";
 import { runRevalidationAndTriggeredReanalysis } from "../services/reanalysis";
 import { runClosingOddsCapture, runOutcomeSettlement } from "../services/closing-odds-capture";
+import { supabase } from "../lib/supabase-client";
 
 const router: IRouter = Router();
 
@@ -49,8 +50,66 @@ function handleCron(req: any, res: any) {
   const action = (req.query["action"] as string | undefined) ?? "keep-alive";
 
   if (action === "sync") {
+    /*
+     * Satu liga per panggilan bila `league` diberikan.
+     *
+     * Siklus penuh menyapu tujuh liga dengan jeda 300 ms per event dan
+     * backoff rate-limit sampai 300 detik — jauh melewati batas 60 detik
+     * fungsi Vercel Hobby, sehingga kena 504 sebelum selesai. Memecahnya per
+     * liga membuat tiap panggilan pendek dan muat dalam batas, dengan hasil
+     * yang sama bila pemicunya menggilir semua liga.
+     */
+    const requestedLeague = typeof req.query["league"] === "string" ? req.query["league"] : null;
+
+    if (requestedLeague) {
+      const league = DEFAULT_LEAGUES.find((l) => l.slug === requestedLeague);
+      if (!league) {
+        res.status(404).json({
+          error: `Liga tidak dikenal: ${requestedLeague}`,
+          known_leagues: DEFAULT_LEAGUES.map((l) => l.slug),
+        });
+        return;
+      }
+
+      (async () => {
+        const scanDays = await getConfiguredScanDays();
+        const { data } = await supabase
+          .from("leagues")
+          .select("id, name, slug")
+          .eq("is_active", true);
+        const leagueIdMap = new Map(
+          (data ?? []).map((l: { slug?: string; name?: string; id: number }) => [
+            l.slug ?? l.name,
+            l.id,
+          ]),
+        );
+        return fetchAndSaveLeagueOdds(
+          league,
+          String(process.env["ODDS_API_KEY"]),
+          DEFAULT_BOOKMAKERS,
+          leagueIdMap as Map<string, number>,
+          { scanDays } as never,
+        );
+      })()
+        .then((result) => {
+          res.json({
+            message: `Sync liga ${requestedLeague} selesai`,
+            result,
+            timestamp: new Date().toISOString(),
+          });
+        })
+        .catch((err) => {
+          logger.error({ err, league: requestedLeague }, "Cron-triggered league sync failed");
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+        });
+      return;
+    }
+
+    const leagues = DEFAULT_LEAGUES.map((l) => l.slug);
     res.json({
       message: "Cron sync started in background",
+      leagues,
+      hint: "Untuk Vercel, panggil ?action=sync&league=<slug> satu per satu agar tidak kena timeout 60 detik.",
       timestamp: new Date().toISOString(),
     });
     fetchAndSaveAllLeagues().catch((err) =>
