@@ -7,8 +7,9 @@
 import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { loadKnownLeagueSlugs, resolveLeagueSlug } from "../lib/league-slug";
 import { canonicalTeamName } from "../lib/team-name-cleaner";
-import { VALID_STAT_TYPES, validateStatPayload } from "../utils/stats-dictionary";
+import { STATS_DICTIONARY, VALID_STAT_TYPES, validateStatPayload } from "../utils/stats-dictionary";
 import {
   findEquivalentTeamStatsRows,
   mergeTeamStatsRows,
@@ -49,36 +50,6 @@ function requireApiKey(req: any, res: any, next: any) {
 }
 
 /**
- * Normalisasi raw_url_path ke league_slug.
- * Contoh: "england/premier-league" → "england-premier-league"
- */
-function normalizeLeagueSlug(raw: string): string {
-  let value = raw.trim();
-  try {
-    if (/^https?:\/\//i.test(value)) {
-      value = new URL(value).pathname;
-    }
-  } catch {
-    // Fall back to the raw value; validation below still prevents an empty slug.
-  }
-
-  const parts = value
-    .split(/[?#]/)[0]!
-    .split("/")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .filter((part) => !/^(www\.)?footystats\.org$/i.test(part))
-    .filter((part) => !/^\d{4}([-/]\d{2,4})?$/.test(part));
-
-  return parts
-    .join("-")
-    .toLowerCase()
-    .replace(/\s+/g, "-")    // space → dash
-    .replace(/-+/g, "-")      // collapse multiple dashes
-    .replace(/^-|-$/g, "");  // trim dashes
-}
-
-/**
  * Normalisasi season string.
  * "2025-26" → "2025-2026", "2026" → "2026"
  */
@@ -93,6 +64,35 @@ function normalizeSeason(raw: string): string {
     return `${expanded[1]}-${expanded[2]!.slice(2)}`;
   }
   return s;
+}
+
+/**
+ * Catch a payload whose own labels contradict the stat_type it is being filed
+ * under. The live database contains 19 rows where stats_goals_scored holds
+ * "Conceded / match" text; this is the check that would have stopped them.
+ */
+function detectStatTypeContradiction(
+  statType: string,
+  statData: Record<string, unknown>,
+): string | null {
+  const label = Object.entries(statData)
+    .filter(([key]) => /per\s*match|total|^goals/i.test(key))
+    .map(([, value]) => String(value ?? ""))
+    .join(" ")
+    .toLowerCase();
+
+  if (!label) return null;
+
+  const saysConceded = /conceded/.test(label);
+  const saysScored = /scored/.test(label);
+
+  if (statType === "stats_goals_scored" && saysConceded && !saysScored) {
+    return 'blok berlabel "Conceded" di kolom gol-dicetak';
+  }
+  if (statType === "stats_goals_conceded" && saysScored && !saysConceded) {
+    return 'blok berlabel "Scored" di kolom gol-kebobolan';
+  }
+  return null;
 }
 
 /**
@@ -209,14 +209,70 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
       return;
     }
 
-    const leagueSlug = normalizeLeagueSlug(rawUrlPath);
-    const normalizedSeason = normalizeSeason(rawSeason);
-    if (!leagueSlug || !normalizedSeason || teams.length === 0) {
+    /*
+     * Resolve the league against the live `leagues` table.
+     *
+     * Before this check the route wrote whatever slug it was given, so a
+     * mismatched URL (footystats /spain/la-liga → "la-liga") silently created
+     * a second home for 20 La Liga clubs under a slug nobody joins on. Failing
+     * here is the difference between a broken import and a corrupt database.
+     */
+    /*
+     * Pre-flight: reject payloads whose labels contradict the target column
+     * BEFORE any database access. Doing this first keeps the error message
+     * useful even when Supabase is unreachable, and avoids a round trip for a
+     * request that can never succeed.
+     */
+    const contradicted: Array<{ team: string; reason: string }> = [];
+    for (const team of teams) {
+      const nameForError = String(
+        team.raw_team_name ?? team.team_name ?? team.teamName ?? team.name ?? team.team ?? "UNKNOWN",
+      );
+      const data = team.stat_data ?? team.stats ?? team.values ?? team.data;
+      if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+      const reason = detectStatTypeContradiction(statType, data as Record<string, unknown>);
+      if (reason) contradicted.push({ team: nameForError, reason });
+    }
+
+    if (contradicted.length === teams.length) {
+      /* Every team in the payload contradicts its target column: refuse the
+         request outright instead of reporting a "successful" import of zero. */
+      res.status(422).json({
+        error: `Payload tidak cocok untuk stat_type "${statType}"`,
+        rejected: contradicted,
+        hint: "Periksa deteksi stat_type di ekstensi — blok yang dikirim berlabel sebaliknya.",
+      });
+      return;
+    }
+
+    const league = await resolveLeagueSlug(String(rawUrlPath));
+    if (!league.ok) {
+      logger.warn(
+        { rawUrlPath, resolved: league.slug, suggestions: league.suggestions },
+        "STATS INGEST: league_slug ditolak",
+      );
+      res.status(422).json({
+        error: league.reason,
+        raw_url_path: league.raw,
+        resolved_slug: league.slug,
+        suggestions: league.suggestions ?? [],
+        known_leagues: [...(await loadKnownLeagueSlugs())],
+        hint: "Kirim raw_url_path sebagai '<negara>/<kompetisi>', mis. 'spain/la-liga'.",
+      });
+      return;
+    }
+    const leagueSlug = league.slug;
+
+    const normalizedSeason = normalizeSeason(String(rawSeason));
+    if (!normalizedSeason || teams.length === 0) {
       res.status(400).json({
-        error: "League, season, and at least one team are required after normalization",
+        error: "Season dan minimal satu tim diwajibkan",
         normalized: { league_slug: leagueSlug, season: normalizedSeason, team_count: teams.length },
       });
       return;
+    }
+    if (league.reason) {
+      logger.warn({ leagueSlug, reason: league.reason }, "STATS INGEST: validasi liga dilewati");
     }
 
     logger.info(
@@ -271,7 +327,44 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
         continue;
       }
 
+      /*
+       * Blocking validation.
+       *
+       * `validateStatPayload` already knew which metrics a stat_type must
+       * contain, but the result was only logged as a warning, so a payload of
+       * "goals conceded" could be written into stats_goals_scored and nobody
+       * would notice until the model produced nonsense. A block whose label
+       * contradicts its destination column is now refused outright.
+       *
+       * Missing metrics are fatal only when EVERY expected metric is absent —
+       * FootyStats pages legitimately omit a column or two, and rejecting
+       * those would lose real data.
+       */
       const validation = validateStatPayload(statType, statData);
+      const contradiction = detectStatTypeContradiction(statType, statData);
+      const nothingUsable = validation.valid === false || validation.missing.length === 0
+        ? false
+        : validation.missing.length >= (STATS_DICTIONARY[statType]?.metrics.length ?? 1);
+
+      if (contradiction) {
+        results.push({
+          team: rawName,
+          success: false,
+          error: `stat_type ${statType} bertentangan dengan isi data: ${contradiction}`,
+          warnings: [`tidak ditulis — periksa deteksi stat_type di ekstensi`],
+        });
+        continue;
+      }
+      if (nothingUsable) {
+        results.push({
+          team: rawName,
+          success: false,
+          error: `data tidak cocok untuk ${statType}: metrik ${validation.missing.join(", ")} tidak ada`,
+          warnings: [`tidak ditulis — periksa deteksi stat_type di ekstensi`],
+        });
+        continue;
+      }
+
       const warnings = [
         ...(validation.missing.length > 0 ? [`Missing expected metrics: ${validation.missing.join(", ")}`] : []),
         ...(validation.unknown.length > 0 ? [`Unrecognized metrics preserved: ${validation.unknown.join(", ")}`] : []),

@@ -1,0 +1,19 @@
+# Artefak build lokal — dibangun ulang oleh Vercel.
+node_modules
+**/node_modules
+**/dist
+**/dist/public
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Berkas Replit tidak diperlukan di Vercel. `.replit` sendiri sengaja
+# dipertahankan agar konfigurasi asal tetap ada di repo.
+.cache
+.local
+.replitignore
+
+# Berkas pengembangan
+.git
+.github
+*.log
+.DS_Store

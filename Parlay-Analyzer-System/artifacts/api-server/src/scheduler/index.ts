@@ -5,11 +5,13 @@ import { runSettlement } from "../services/settlement";
 import { runAutonomousLearningCycle } from "../services/prompt-learning";
 import { runBaselineBackfill } from "../services/baseline-backfill";
 import { runRevalidationAndTriggeredReanalysis } from "../services/reanalysis";
+import { runClosingOddsCapture, runOutcomeSettlement } from "../services/closing-odds-capture";
 import { supabase } from "../lib/supabase-client";
 
 let currentOddsTask:         ReturnType<typeof cron.schedule> | null = null;
 let currentSettlementTask:   ReturnType<typeof cron.schedule> | null = null;
 let currentRevalidationTask: ReturnType<typeof cron.schedule> | null = null;
+let currentClosingTask:      ReturnType<typeof cron.schedule> | null = null;
 
 /* ─── Load config & run odds sync ─── */
 async function loadConfigAndSync() {
@@ -135,6 +137,7 @@ export function startScheduler() {
   if (currentOddsTask)         { currentOddsTask.stop(); }
   if (currentSettlementTask)   { currentSettlementTask.stop(); }
   if (currentRevalidationTask) { currentRevalidationTask.stop(); }
+  if (currentClosingTask)      { currentClosingTask.stop(); }
 
   /* The initial run loads scheduler_config; reconfigure from there. */
   let configuredExpression = DEFAULT_ODDS_CRON;
@@ -165,6 +168,24 @@ export function startScheduler() {
     );
   });
 
+  /* Closing odds: every 5 minutes, because the capture window is T-10 and a
+     10-minute cadence would miss fixtures whose kick-off falls between ticks.
+     Cost is zero — this reads odds_movement_history, it never calls the odds
+     provider. The job itself skips anything further than 10 minutes out. */
+  currentClosingTask = cron.schedule("*/5 * * * *", () => {
+    runClosingOddsCapture().catch((err) =>
+      logger.error({ err }, "Scheduled closing odds capture failed"),
+    );
+  });
+
+  /* Outcome settlement: hourly. Hasil hanya berubah setelah pertandingan
+     selesai, jadi lebih sering dari ini hanya membakar query. */
+  cron.schedule("20 * * * *", () => {
+    runOutcomeSettlement().catch((err) =>
+      logger.error({ err }, "Scheduled outcome settlement failed"),
+    );
+  });
+
   /* Revalidation: run after the regular 3-hour odds cadence so it sees the
      latest stored prices. It only tags active, pre-kickoff predictions. */
   currentRevalidationTask = cron.schedule("15 */3 * * *", () => {
@@ -173,5 +194,5 @@ export function startScheduler() {
     );
   });
 
-  logger.info("Scheduler running — odds sync uses scheduler_config | settlement daily at 06:00 | revalidation every 3h");
+  logger.info("Scheduler running — odds sync uses scheduler_config | settlement daily at 06:00 | revalidation every 3h | closing odds every 5m");
 }

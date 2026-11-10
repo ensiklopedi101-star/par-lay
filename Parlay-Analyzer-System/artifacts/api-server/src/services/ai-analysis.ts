@@ -16,6 +16,7 @@ import {
 } from "../lib/team-stats-freshness";
 import { latestOddsByMarket } from "./odds-history";
 import { getGeminiModel } from "./model-discovery";
+import { shadowLogQuantAnalysis } from "./quant-shadow";
 import { classifyOddsMarket } from "./odds-fetcher";
 import { getActiveLearningPromptVersion } from "./prompt-learning";
 import {
@@ -487,35 +488,17 @@ function formatOddsMovementTrend(rows: OddsMovementRow[]): string {
   return lines.join("\n");
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   M5: Performance Log — Fetch last 5 performance entries
-   ═══════════════════════════════════════════════════════════════ */
-async function fetchPerformanceLog(): Promise<Record<string, unknown>[]> {
-  try {
-    const { data } = await supabase
-      .from("performance_log")
-      .select("date, wins, losses, hit_rate, total_roi, total_parlays")
-      .order("date", { ascending: false })
-      .limit(5);
-    return (data ?? []) as Record<string, unknown>[];
-  } catch {
-    return [];
-  }
-}
-
-function formatPerformanceBlock(entries: Record<string, unknown>[]): string {
-  if (entries.length === 0) return "";
-  const lines = ["\n--- KINERJA AI TERBARU (performance_log) ---"];
-  for (const e of entries) {
-    const date = e.date ?? "?";
-    const w = e.wins ?? 0;
-    const l = e.losses ?? 0;
-    const hr = e.hit_rate != null ? `${(Number(e.hit_rate) * 100).toFixed(1)}%` : "N/A";
-    lines.push(`  ${date}: ${w}W / ${l}L | Hit Rate: ${hr}`);
-  }
-  lines.push("  Sesuaikan kepercayaan analisis hari ini berdasarkan tren di atas.");
-  return lines.join("\n");
-}
+/*
+ * M5: Performance log — deliberately REMOVED from the prompt.
+ *
+ * Feeding the last five days of "3W / 2L, hit rate 60%" into the prompt and
+ * telling the model to "adjust confidence based on the trend above" makes it
+ * chase noise: five bets carry no signal, and a short losing run makes the
+ * model systematically more timid (or bolder) for reasons unrelated to the
+ * match. Outcome feedback now goes exclusively through the settlement ledger
+ * and the learning audit, both of which require statistical significance.
+ */
+const PERFORMANCE_LOG_REMOVED = true;
 
 /* ═══════════════════════════════════════════════════════════════
    RAG — Fetch & Format Lessons Learned
@@ -962,7 +945,6 @@ function buildPrompt(
   oddsBlock: string,
   trendBlock: string,
   lessonsBlock: string,
-  perfBlock: string,
   relationalBlock: string,
   homeStats: Record<string, unknown>,
   awayStats: Record<string, unknown>,
@@ -989,7 +971,6 @@ ${oddsBlock}
 
 ${trendBlock}
 ${lessonsBlock}
-${perfBlock}
 ${relationalBlock}
 
 --- STATISTIK ${homeTeam} (HOME) ---
@@ -1131,7 +1112,6 @@ interface EvaluationSnapshot {
     headToHead: unknown;
     oddsMovement: unknown;
     ragLessons: unknown;
-    performanceLog: unknown;
   };
   dataQuality: AnalysisResult["data_quality"] | null;
   settlement: null;
@@ -1445,10 +1425,9 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
      the standings block below and the AI prompt — previously findTeamStats
      could run up to 4x per fixture (twice via the old fetchStandingContext,
      twice directly). ── */
-  const [movementRows, lessons, perfLog, h2h, homeStats, awayStats] = await Promise.all([
+  const [movementRows, lessons, h2h, homeStats, awayStats] = await Promise.all([
     fetchOddsMovementTrend(fixtureId),
     fetchRelevantLessons(homeTeam, awayTeam, leagueSlug),
-    fetchPerformanceLog(),
     fetchHeadToHead(homeTeam, awayTeam, leagueName, leagueSlug),
     findTeamStatsCached(homeTeam, leagueSlug, context?.statsCache),
     findTeamStatsCached(awayTeam, leagueSlug, context?.statsCache),
@@ -1459,7 +1438,6 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
 
   const trendBlock = formatOddsMovementTrend(movementRows);
   const lessonsBlock = formatLessonsBlock(lessons);
-  const perfBlock = formatPerformanceBlock(perfLog);
   const relationalBlock = [
     formatHeadToHeadBlock(h2h),
     formatStandingContextBlock("KLASEMEN HOME", homeStandings),
@@ -1517,7 +1495,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
   ].filter((section): section is string => Boolean(section)).join("\n\n");
   console.log(`[AI-ANALYSIS] Persona sumber: ${persona === DEFAULT_SYSTEM_INSTRUCTION ? "DEFAULT (fallback)" : "SUPABASE (kustom)"}`);
 
-   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, perfBlock, relationalBlock, homeStats, awayStats);
+   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, relationalBlock, homeStats, awayStats);
     let aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
     let predictionText = aiResult.text;
     let parsedRecommendation = extractPredictionRecommendation(predictionText, fixtureId, { homeTeam, awayTeam });
@@ -1677,7 +1655,6 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
        headToHead: h2h,
        oddsMovement: movementRows,
        ragLessons: lessons,
-       performanceLog: perfLog,
      },
      dataQuality: {
        stats: { home: homeStatsQuality, away: awayStatsQuality },
@@ -1740,6 +1717,41 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
      logger.error({ insertError, fixtureId }, "Failed to save prediction");
      throw new Error(`Failed to save AI prediction: ${insertError.message}`);
    }
+
+  /*
+   * Shadow-run the deterministic quant engine on the same fixture.
+   *
+   * This is observation only: it runs AFTER the prediction is saved and never
+   * touches the recommendation above, so behaviour is unchanged. Awaiting it
+   * (rather than firing and forgetting) keeps memory flat across a batch scan
+   * and guarantees the row exists before the fixture settles. Failures are
+   * swallowed inside shadowLogQuantAnalysis.
+   */
+  try {
+    const shadow = await shadowLogQuantAnalysis({
+      fixtureId,
+      homeTeam,
+      awayTeam,
+      leagueSlug,
+      structuredOdds,
+      /*
+       * The current prompt asks the model for prose plus a probability, not the
+       * PERSONA_V5 λ-adjustment contract, so there is no evidence-backed
+       * adjustment to pass yet. null means "no adjustment" — the engine runs on
+       * market + team statistics alone, which is exactly the baseline we want
+       * to measure in the shadow log.
+       */
+      llmAdjustment: null,
+    });
+    if (shadow.logged > 0) {
+      logger.info(
+        { fixtureId, selections: shadow.logged, warnings: shadow.warnings.length },
+        "[AI-ANALYSIS] Quant shadow log tersimpan",
+      );
+    }
+  } catch (shadowError) {
+    logger.warn({ shadowError, fixtureId }, "[AI-ANALYSIS] Quant shadow log dilewati");
+  }
 
   return {
     fixture_id: fixtureId,
