@@ -188,21 +188,27 @@ Langkah 1–5 bisa saya kerjakan sekarang tanpa menyentuh data apa pun.
 
 ---
 
-## 7. Soal fixtures yang kosong — ini terpisah dari Vercel
+## 7. Soal fixtures yang kosong — KOREKSI
 
-Supaya tidak salah harap: **migrasi ke Vercel tidak dengan sendirinya
-mengembalikan fixtures.**
+> **Catatan: bagian ini saya tulis ulang pada 2026-11-10 setelah diagnosis
+> lanjutan. Versi pertama dokumen ini menyimpulkan "penjadwal sudah berhenti,
+> kemungkinan Replit tidur" — itu SALAH.** Buktinya ada di
+> `FIXTURES_DIAGNOSIS.md`.
 
-Penyebabnya sudah saya pastikan dari database, bukan dugaan:
+Yang benar:
 
-- `fixtures`: 894 baris, **0 yang akan datang**, rentang 2026-07-03 → 2026-11-07
-- Route `/supabase/fixtures` memakai `.gte("fixture_date", now)` — jadi daftar
-  kosong itu **benar**, bukan bug render
+- Replit **tidak** tidur. Ada **3 sync run pada 10 Nov 2026**, semua `completed`
+- odds-api.io **tidak** bermasalah: 811 event dikembalikan, `errors: 0`
+- Penyebabnya: jendela `UPCOMING_WINDOW_DAYS = 10` bertemu **jeda internasional
+  FIFA 9–17 Nov**, sementara EPL baru kembali **21 Nov** — di luar jendela
+- Seharusnya sembuh sendiri mulai **11 Nov 15:00 UTC** saat EPL masuk jendela
 
-Artinya penjadwal yang mengambil fixtures baru sudah berhenti, konsisten dengan
-Replit yang tidur. Fixtures akan kembali terisi begitu langkah 8 selesai —
-selama `ODDS_API_KEY` masih valid. Kalau kuota API-nya habis, itu masalah lain
-lagi dan perlu dicek terpisah.
+Konsekuensi untuk dokumen ini: **migrasi ke Vercel tidak memperbaiki apa pun
+soal fixtures.** Masalahnya ada di logika jendela scan, bukan di hosting.
+Menyelesaikan migrasi tanpa memperbaiki `UPCOMING_WINDOW_DAYS` hanya akan
+memindahkan bug yang sama ke server lain.
+
+Lihat `FIXTURES_DIAGNOSIS.md` §5 untuk tiga perbaikan yang disarankan.
 
 ---
 
