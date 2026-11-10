@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "pnpm install --no-frozen-lockfile",
-  "buildCommand": "pnpm --filter @workspace/parlay-app run build && pnpm --filter @workspace/api-server run build:vercel",
+  "buildCommand": "pnpm --filter @workspace/parlay-app run build",
   "outputDirectory": "artifacts/parlay-app/dist/public",
   "functions": {
     "api/index.js": {
