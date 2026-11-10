@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateKelly, extractProbFromPrediction } from "./kelly-criterion";
+import { calculateKelly, extractProbFromPrediction, MAX_RECOMMENDED_UNIT } from "./kelly-criterion";
 
 /* ─── Stake recommendation (BUG-07) ─── */
 
@@ -27,11 +27,30 @@ test("a small positive edge still recommends a stake unit", () => {
   assert.notEqual(result.recommendedUnit, "0%");
 });
 
-test("Kelly units grow with the edge and are capped", () => {
+test("Kelly units grow with the edge and are hard-capped at 2%", () => {
   const small = calculateKelly(1.95, 0.55);
   const large = calculateKelly(4.0, 0.6);
   assert.notEqual(small.recommendedUnit, "0%");
-  assert.equal(large.recommendedUnit, "5% (max)");
+  /*
+   * The stake cap is a risk control, not an output of the Kelly formula: a
+   * 3-point error in the probability input roughly doubles the stake, and the
+   * probability is itself an estimate. 2% is the ceiling until the ledger
+   * proves calibration.
+   */
+  assert.equal(large.recommendedUnit, MAX_RECOMMENDED_UNIT);
+  assert.equal(large.recommendedUnit, "2%");
+});
+
+test("no recommendation can exceed the 2% ceiling", () => {
+  for (const odds of [1.5, 2, 3, 5, 10]) {
+    for (const prob of [0.2, 0.4, 0.6, 0.8]) {
+      const unit = calculateKelly(odds, prob).recommendedUnit;
+      assert.ok(
+        unit === "0%" || unit === "0.5%" || unit === "1%" || unit === "2%",
+        `unexpected unit ${unit} for odds=${odds} p=${prob}`,
+      );
+    }
+  }
 });
 
 test("invalid inputs stay at zero stake", () => {

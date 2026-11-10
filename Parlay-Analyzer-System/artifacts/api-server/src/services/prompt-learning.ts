@@ -18,8 +18,15 @@ import {
   type PolicyBacktestMetrics,
 } from "./learning-policy";
 
-const MIN_TRAINING_SAMPLES = 20;
-const MIN_VALIDATION_SAMPLES = 10;
+/*
+ * Promotion gates were far too small: 20 training / 10 holdout rows cannot
+ * distinguish a real improvement from noise, yet crossing them rewrote the
+ * live prompt for every future fixture. Raised to a size where a log-loss
+ * difference is meaningful, and the "how confident are you?" self-assessment
+ * gate is gone (see below) because it let the model grade its own homework.
+ */
+const MIN_TRAINING_SAMPLES = 100;
+const MIN_VALIDATION_SAMPLES = 100;
 const MAX_EVALUATIONS_PER_CLASSIFY = 10;
 const MAX_BACKTEST_SAMPLES = 500;
 const AUTO_PROMOTION_CONFIDENCE_THRESHOLD = 0.9;
@@ -791,10 +798,14 @@ export async function backtestLearningPromptProposal(proposalId: string): Promis
     && baseline.brierScore != null
     && candidate.brierScore != null
     && candidate.brierScore <= baseline.brierScore + 0.01;
+  /*
+   * Self-reported confidence is recorded for the audit trail but no longer
+   * gates promotion. Asking the model whether its own proposal is good, and
+   * requiring only a 40-character rationale, let it approve itself; the
+   * statistical criteria below are the ones that actually constrain risk.
+   */
   const geminiConfidence = finiteNumber(proposal.gemini_confidence) ?? 0;
   const confidenceRationalePresent = String(proposal.confidence_rationale ?? "").trim().length >= 40;
-  const confidenceEligible = geminiConfidence >= AUTO_PROMOTION_CONFIDENCE_THRESHOLD
-    && confidenceRationalePresent;
   const evidenceSummary = asRecord(proposal.evidence_summary);
   const sourceAudit = asRecord(evidenceSummary.sourceAudit);
   const dataQualityEligible = validation.length >= MIN_VALIDATION_SAMPLES
@@ -806,7 +817,6 @@ export async function backtestLearningPromptProposal(proposalId: string): Promis
     && isPolicyStrictlyTighter(candidatePolicy, baselinePolicy)
     && roiImproved
     && calibrationAcceptable
-    && confidenceEligible
     && dataQualityEligible;
   const status = validation.length < MIN_VALIDATION_SAMPLES ? "insufficient_data" : "backtested";
   const backtest = {
@@ -824,10 +834,9 @@ export async function backtestLearningPromptProposal(proposalId: string): Promis
       roiImproved,
       calibrationSampled,
       calibrationAcceptable,
+      confidenceRecordedOnlyNotGating: true,
       geminiConfidence,
-      minimumGeminiConfidence: AUTO_PROMOTION_CONFIDENCE_THRESHOLD,
       confidenceRationalePresent,
-      confidenceEligible,
       dataQualityEligible,
     },
     eligible,

@@ -196,46 +196,91 @@ function snapshotProbability(value: unknown): number | null {
 }
 
 /* ─────────────────────────────────────────
-   Gemini: evaluasi LOSS → buat pelajaran
-   (satu-satunya tugas Gemini di settlement)
+   Pelajaran proses (bukan pelajaran hasil)
+
+   Sebelumnya Gemini dipanggil untuk SETIAP kekalahan dan diminta menulis
+   "faktor kunci yang tidak terprediksi". Itu menghasilkan narasi atas noise:
+   satu pertandingan tidak memberi tahu apa pun tentang kualitas proses, dan
+   teks itu di-inject kembali ke prompt berikutnya sehingga bias menumpuk
+   (kalah → makin ragu → kalah lagi → makin ragu).
+
+   Sekarang pelajaran hanya dibuat untuk kegagalan PROSES yang bisa
+   diverifikasi (data tidak lengkap, odds basi, pasar tidak cocok), dan
+   dilarang menyebut skor akhir sebagai alasan. Hasil buruk tanpa bukti
+   kesalahan proses diklasifikasikan sebagai variance dan tidak dipelajari.
 ───────────────────────────────────────── */
-async function generateLossLesson(
-  prediction: PendingPrediction,
-  homeGoals: number,
-  awayGoals: number,
+export interface ProcessLessonContext {
+  match: string;
+  market: string;
+  flags: string[];
+}
+
+async function generateProcessLesson(
+  context: ProcessLessonContext,
   geminiKey: string | undefined,
 ): Promise<string | null> {
+  if (context.flags.length === 0) return null;
   try {
-    const prompt = `Anda adalah analis evaluasi pasca-pertandingan.
-
-Pertandingan : ${prediction.home_team} vs ${prediction.away_team}
-Skor Akhir   : ${homeGoals} - ${awayGoals}
-Pasaran Bet  : ${prediction.market_bet ?? prediction.best_market ?? "tidak diketahui"}
-
-Prediksi AI sebelumnya:
-${prediction.prediction_text?.slice(0, 1500) ?? "Tidak tersedia"}
-
-Hasil pertandingan ini BERBEDA dari yang direkomendasikan (LOSS).
-
-Tugas Anda — tulis dalam 2-3 kalimat maksimal:
-1. Faktor kunci yang tidak terprediksi dengan baik
-2. Satu pelajaran konkret untuk analisis pertandingan serupa di masa depan
-
-Format: langsung tulis pelajarannya, tanpa intro, tanpa header, dalam bahasa Indonesia.`;
+    const prompt = [
+      `Pertandingan: ${context.match}. Market: ${context.market}.`,
+      `Flag proses: ${context.flags.join(", ")}.`,
+      "Tulis maksimal 2 kalimat tentang KESALAHAN PROSES (kualitas data, waktu pengambilan harga, pencocokan market).",
+      "DILARANG menyebut skor akhir sebagai alasan. DILARANG memberi saran 'lebih yakin/kurang yakin'.",
+      "Format: langsung tulis pelajarannya, tanpa intro, tanpa header, dalam bahasa Indonesia.",
+    ].join("\n");
 
     const result = await generateAIResponse(
       geminiKey,
-      "Anda adalah evaluator hasil prediksi betting yang objektif.",
+      "Anda adalah auditor proses analisis, bukan penilai hasil pertandingan.",
       prompt,
     );
     return result.text.trim();
   } catch (err) {
-    logger.warn({ err }, "[SETTLEMENT] Gagal generate pelajaran dari Gemini");
+    logger.warn({ err }, "[SETTLEMENT] Gagal generate pelajaran proses");
     return null;
   }
 }
 
-function buildFallbackLesson(
+/**
+ * Verifiable process problems for a settled bet. Empty array means the loss (if
+ * any) is indistinguishable from variance — nothing to learn from.
+ *
+ * These are facts we can check after the fact, not opinions: a prediction
+ * stored without a probability, a price captured before the market formed,
+ * or no odds at all. Only these justify a narrative lesson.
+ */
+function collectProcessFailureFlags(
+  prediction: PendingPrediction,
+): string[] {
+  const flags: string[] = [];
+
+  /* Probability the model claimed at analysis time. Missing => the EV that
+     justified the bet cannot be audited afterwards. */
+  if (snapshotProbability(prediction.manual_context) == null) {
+    flags.push("probabilitas tidak tersimpan saat analisis");
+  }
+
+  const evAtBet = prediction.ev_at_analysis ?? prediction.expected_value;
+  if (evAtBet == null || !Number.isFinite(Number(evAtBet))) {
+    flags.push("EV tidak tersimpan saat analisis");
+  }
+
+  if (!(prediction.market_bet ?? prediction.best_market)) {
+    flags.push("market tidak tercatat");
+  }
+
+  if (prediction.best_odds == null || !Number.isFinite(Number(prediction.best_odds))) {
+    flags.push("odds tidak tercatat");
+  }
+
+  if (prediction.confidence_score == null) {
+    flags.push("confidence tidak tercatat");
+  }
+
+  return flags;
+}
+
+function buildOutcomeRecord(
   prediction: PendingPrediction,
   homeGoals: number,
   awayGoals: number,
@@ -247,7 +292,7 @@ function buildFallbackLesson(
   const score = `${homeGoals}-${awayGoals}`;
   switch (betResult) {
     case "WIN":
-      return `Prediksi WIN terkonfirmasi. Market: ${market}. Skor: ${score}. EV saat analisis: ${evAtBet.toFixed(2)}.`;
+      return `Hasil: WIN. Market: ${market}. Skor: ${score}. EV saat analisis: ${evAtBet.toFixed(2)}.`;
     case "HALF_WIN":
       return `Prediksi HALF_WIN. Market: ${market} menghasilkan kemenangan setengah berdasarkan skor ${score}; evaluasi line quarter perlu dipertahankan.`;
     case "HALF_LOSS":
@@ -255,7 +300,7 @@ function buildFallbackLesson(
     case "PUSH":
       return `Prediksi PUSH. Market: ${market} tepat pada line berdasarkan skor ${score}; tidak ada edge hasil yang terealisasi.`;
     case "LOSS":
-      return `Prediksi LOSS. Market: ${market}. Skor aktual ${score} berbeda dari rekomendasi; evaluasi ulang kualitas statistik, line, dan pergerakan odds.`;
+      return `Hasil: LOSS. Market: ${market}. Skor: ${score}. Tidak ada kesalahan proses terverifikasi; diperlakukan sebagai variance.`;
   }
 }
 
@@ -720,12 +765,25 @@ export async function runSettlement(options: {
           menjadi feedback yang dapat dipakai oleh RAG. */
     const evAtBet = prediction.ev_at_analysis ?? prediction.expected_value ?? 0;
 
-    let lessonText: string;
-    if (betResult === "LOSS" && aiAvailable) {
-      lessonText = await generateLossLesson(prediction, homeGoals, awayGoals, geminiKey)
-        ?? buildFallbackLesson(prediction, homeGoals, awayGoals, betResult, marketBet, evAtBet);
-    } else {
-      lessonText = buildFallbackLesson(prediction, homeGoals, awayGoals, betResult, marketBet, evAtBet);
+    /*
+     * Only process failures with verifiable flags produce a lesson. A plain
+     * LOSS is variance: writing a narrative about it would teach the model to
+     * chase noise, and that text is fed back into the next prompt.
+     */
+    const processFlags = collectProcessFailureFlags(prediction);
+    let lessonText: string | null = null;
+    if (processFlags.length > 0 && aiAvailable) {
+      lessonText = await generateProcessLesson(
+        {
+          match: `${prediction.home_team} vs ${prediction.away_team}`,
+          market: marketBet ?? "N/A",
+          flags: processFlags,
+        },
+        geminiKey,
+      );
+    }
+    if (!lessonText) {
+      lessonText = buildOutcomeRecord(prediction, homeGoals, awayGoals, betResult, marketBet, evAtBet);
     }
 
     /*

@@ -5,6 +5,13 @@
  * Semua kalkulasi di backend, tidak di Gemini.
  */
 
+/**
+ * Hard ceiling for any single bet. Raised only when the ledger shows a
+ * positive, statistically significant CLV over a large sample.
+ */
+export const MAX_RECOMMENDED_UNIT = "2%";
+export const MAX_RECOMMENDED_UNIT_PCT = 2;
+
 export interface KellyResult {
   stakePercent: number;        // f* dalam persen (0-100%)
   stakePercentHalf: number;    // Half Kelly (0-50%)
@@ -53,16 +60,15 @@ export function calculateKelly(odds: number, probWin: number): KellyResult {
     recommendedUnit = "0.5%";
   } else if (halfKelly >= 1 && halfKelly < 2) {
     recommendedUnit = "1%";
-  } else if (halfKelly >= 2 && halfKelly < 3.5) {
-    recommendedUnit = "2%";
-  } else if (halfKelly >= 3.5 && halfKelly < 5) {
-    recommendedUnit = "3%";
-  } else if (halfKelly >= 5 && halfKelly < 7.5) {
-    recommendedUnit = "4%";
-  } else if (halfKelly >= 7.5 && halfKelly < 12) {
-    recommendedUnit = "5%";
   } else {
-    recommendedUnit = "5% (max)";
+    /*
+     * Hard cap at 2%. The old ladder went up to "5% (max)", which is far too
+     * large when the win probability feeding Kelly is itself an estimate with
+     * a few points of error: a 3-point error in p roughly doubles the stake.
+     * Until the ledger proves calibration (see CODE_REVIEW_FIXES/risk gates),
+     * no single bet may risk more than 2% of the bankroll.
+     */
+    recommendedUnit = MAX_RECOMMENDED_UNIT;
   }
 
   return {
