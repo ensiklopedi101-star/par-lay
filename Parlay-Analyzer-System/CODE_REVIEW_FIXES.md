@@ -211,6 +211,16 @@ dipakai kode mana pun sementara `scripts/post-merge.sh` menjalankan
 **Yang perlu dijalankan di Supabase:** terapkan
 `supabase/migrations/20261109_odds_summary_functions.sql`.
 
+Status: **sudah diterapkan** ke project `parlayfb` (`hqbuwfyiqfxpnpdlgcru`)
+pada 2026-11-09. Verifikasi:
+
+```
+fixture_odds_summary(['72036250'])  -> 136 baris odds, 125 market, 279 movement
+EXPLAIN ANALYZE (100 fixture)       -> 70 ms
+anon / authenticated EXECUTE        -> false
+service_role EXECUTE                -> true
+```
+
 ---
 
 ## Catatan operasional
