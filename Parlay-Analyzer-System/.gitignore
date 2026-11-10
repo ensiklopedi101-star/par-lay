@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Bundel handler serverless — dibangun ulang oleh Vercel lewat
+# `pnpm --filter @workspace/api-server run build:vercel`.
+api/index.js

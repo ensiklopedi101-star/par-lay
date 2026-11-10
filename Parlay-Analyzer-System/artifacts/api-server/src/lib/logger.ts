@@ -19,6 +19,27 @@ function usePrettyTransport(): boolean {
   return true;
 }
 
+/**
+ * `pino-pretty` hanya aman bila benar-benar tersedia sebagai modul runtime.
+ *
+ * Saat fungsi dibundel esbuild (`api/index.js`), transport pino memuat target
+ * lewat `require` dinamis yang tidak bisa dibundel. Bila lingkungan serverless
+ * tidak menyetel `VERCEL` — mis. platform lain, atau pratinjau lokal terhadap
+ * bundel — logger akan memilih transport cantik lalu MATI saat cold start
+ * dengan galat `unable to determine transport target for "pino-pretty"`.
+ *
+ * Satu env var tidak cukup diandalkan sebagai penjaga, jadi ketersediaan
+ * modulnya diperiksa langsung.
+ */
+function prettyAvailable(): boolean {
+  try {
+    require.resolve("pino-pretty");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? "info",
   redact: [
@@ -26,7 +47,7 @@ export const logger = pino({
     "req.headers.cookie",
     "res.headers['set-cookie']",
   ],
-  ...(usePrettyTransport()
+  ...(usePrettyTransport() && prettyAvailable()
     ? {
         transport: {
           target: "pino-pretty",
