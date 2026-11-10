@@ -8,7 +8,8 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check-models": "node ./scripts/check-models.js"
+    "check-models": "node ./scripts/check-models.js",
+    "test": "tsx --test $(find src -name '*.test.ts')"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

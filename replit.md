@@ -61,7 +61,7 @@ Parlay-Analyzer-System/
 ### E. CSV Upload (Statistik Tim)
 - Upload file CSV untuk mengisi data `team_season_stats` (xG, BTTS, Form, dll.).
 - 11+ metrik statistik yang digunakan AI untuk analisis.
-- Password upload: `parlay2024` (default, bisa di-set via `CSV_UPLOAD_PASSWORD` env).
+- Password upload: WAJIB di-set via `CSV_UPLOAD_PASSWORD` env (tidak ada default; endpoint mengembalikan 503 bila belum diset).
 
 ---
 
@@ -151,7 +151,7 @@ Parlay-Analyzer-System/
 |--------|--------------|-----------|
 | `GEMINI_API_KEY` | Backend | Google Gemini API untuk analisis AI |
 | `ODDS_API_KEY` | Backend | API key dari odds-api.io untuk sync data |
-| `CSV_UPLOAD_PASSWORD` | Backend | Password untuk upload CSV (default: `parlay2024`) |
+| `CSV_UPLOAD_PASSWORD` | Backend | Password untuk upload CSV (wajib; tidak ada default) |
 
 ### Runtime (Auto-managed by Replit)
 
@@ -322,7 +322,7 @@ PORT=5000 BASE_PATH=/ pnpm --filter @workspace/parlay-app run serve
 
 ### E. CSV Upload
 - Buka `/upload` untuk upload statistik tim.
-- Password: `parlay2024` (default).
+- Password: dari `CSV_UPLOAD_PASSWORD` (wajib di-set).
 
 ---
 
@@ -381,7 +381,7 @@ git push origin main
 
 ### CSV Upload Security
 - Password dilindungi dengan env var `CSV_UPLOAD_PASSWORD`.
-- Default: `parlay2024`.
+- Default: tidak ada — endpoint mengembalikan 503 bila `CSV_UPLOAD_PASSWORD` belum diset.
 
 ### AI Prompt System
 - Persona AI bisa dikonfigurasi via `scheduler_config.ai_persona`.

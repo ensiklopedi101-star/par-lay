@@ -105,22 +105,12 @@ async function upsertTeamStat(
   teamName: string,
   statType: string,
   statData: Record<string, unknown>,
+  existingRows: Array<Record<string, unknown>>,
 ): Promise<{ success: boolean; error?: string }> {
   const cleanTeam = canonicalTeamName(teamName, leagueSlug);
 
-  // 1. Cek apakah row sudah ada
-  const { data: existingRows, error: lookupError } = await supabase
-    .from("team_season_stats")
-    .select("*")
-    .eq("league_slug", leagueSlug)
-    .eq("season", season)
-    .limit(500);
-
-  if (lookupError) {
-    return { success: false, error: `Existing-row lookup failed: ${lookupError.message}` };
-  }
   const candidates = findEquivalentTeamStatsRows(
-    (existingRows ?? []) as unknown as Array<Record<string, unknown>>,
+    existingRows,
     cleanTeam,
     leagueSlug,
   );
@@ -162,16 +152,22 @@ async function upsertTeamStat(
     if (error) {
       return { success: false, error: error.message };
     }
+    const snapshotIndex = existingRows.findIndex((row) => String(row.id) === existingId);
+    if (snapshotIndex >= 0) existingRows[snapshotIndex] = { ...existingRows[snapshotIndex], ...payload };
+    else existingRows.push({ id: existingId, ...payload });
   } else {
     // Insert new row
     payload.created_at = new Date().toISOString();
-    const { error } = await supabase
+    const { data: inserted, error } = await supabase
       .from("team_season_stats")
-      .insert(payload);
+      .insert(payload)
+      .select("id")
+      .maybeSingle();
 
     if (error) {
       return { success: false, error: error.message };
     }
+    existingRows.push({ id: inserted?.id, ...payload });
   }
 
   return { success: true };
@@ -228,6 +224,26 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
       "STATS INGEST: Processing payload",
     );
 
+    /*
+     * Load the league/season stats once for the whole payload. The lookup used
+     * to sit inside the per-team loop, so a 20-team payload read the same 11
+     * JSONB columns 20 times.
+     */
+    const existingStatsRows: Array<Record<string, unknown>> = [];
+    {
+      const { data: loadedRows, error: loadError } = await supabase
+        .from("team_season_stats")
+        .select("*")
+        .eq("league_slug", leagueSlug)
+        .eq("season", normalizedSeason)
+        .limit(500);
+      if (loadError) {
+        res.status(500).json({ error: `Existing-row lookup failed: ${loadError.message}` });
+        return;
+      }
+      existingStatsRows.push(...((loadedRows ?? []) as Array<Record<string, unknown>>));
+    }
+
     /* Proses setiap team */
     const results: Array<{
       team: string;
@@ -260,7 +276,14 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
         ...(validation.missing.length > 0 ? [`Missing expected metrics: ${validation.missing.join(", ")}`] : []),
         ...(validation.unknown.length > 0 ? [`Unrecognized metrics preserved: ${validation.unknown.join(", ")}`] : []),
       ];
-      const result = await upsertTeamStat(leagueSlug, normalizedSeason, rawName, statType, statData);
+      const result = await upsertTeamStat(
+        leagueSlug,
+        normalizedSeason,
+        rawName,
+        statType,
+        statData,
+        existingStatsRows,
+      );
       results.push({
         team: rawName,
         success: result.success,

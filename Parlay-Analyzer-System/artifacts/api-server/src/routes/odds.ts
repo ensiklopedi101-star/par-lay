@@ -6,20 +6,87 @@ import { requireAdmin } from "../middlewares/admin";
 import { latestOddsByMarket } from "../services/odds-history";
 
 const router: IRouter = Router();
+/* Upper bound for a single PostgREST page; also used to size the fallback. */
 const POSTGREST_PAGE_SIZE = 1000;
 
-type PageQueryResult<T> = { data: T[] | null; error: unknown | null };
+/**
+ * Bounded fallback for the odds radar when the aggregate RPC is not deployed.
+ *
+ * Instead of downloading the whole snapshot table, read the newest rows per
+ * fixture (ordered, capped) and collapse them per bookmaker/market. Counts are
+ * a lower bound in this mode, which is acceptable for a status badge and much
+ * cheaper than paging the full history.
+ */
+const FALLBACK_MAX_ROWS_PER_FIXTURE = 200;
 
-async function fetchAllPages<T>(
-  queryPage: (from: number, to: number) => Promise<PageQueryResult<T>>,
-): Promise<PageQueryResult<T>> {
-  const rows: T[] = [];
-  for (let from = 0; ; from += POSTGREST_PAGE_SIZE) {
-    const { data, error } = await queryPage(from, from + POSTGREST_PAGE_SIZE - 1);
-    if (error) return { data: rows, error };
-    const page = data ?? [];
-    rows.push(...page);
-    if (page.length < POSTGREST_PAGE_SIZE) return { data: rows, error: null };
+async function loadOddsStatusFallback(
+  fixtureIds: string[],
+  oddsByFixture: Map<string, { capturedAt: string | null; count: number }>,
+  movementByFixture: Map<string, number>,
+): Promise<void> {
+  const perFixtureLimit = Math.max(
+    FALLBACK_MAX_ROWS_PER_FIXTURE,
+    Math.floor(POSTGREST_PAGE_SIZE / Math.max(1, fixtureIds.length)),
+  );
+
+  const [oddsResult, movementResult] = await Promise.all([
+    supabase
+      .from("odds_history")
+      .select("match_id, bookmaker, market_type, captured_at")
+      .in("match_id", fixtureIds)
+      .order("captured_at", { ascending: false })
+      .limit(perFixtureLimit * fixtureIds.length),
+    supabase
+      .from("odds_movement_history")
+      .select("fixture_id, bookmaker, market_type, captured_at")
+      .in("fixture_id", fixtureIds)
+      .order("captured_at", { ascending: false })
+      .limit(perFixtureLimit * fixtureIds.length),
+  ]);
+
+  if (oddsResult.error) {
+    logger.warn({ error: oddsResult.error }, "Failed to load fallback odds status");
+  }
+  if (movementResult.error) {
+    logger.warn({ error: movementResult.error }, "Failed to load fallback odds movement status");
+  }
+
+  const countedMarkets = new Map<string, Set<string>>();
+  for (const row of (oddsResult.data ?? []) as Array<Record<string, unknown>>) {
+    const key = String(row.match_id);
+    const marketKey = `${String(row.bookmaker ?? "").toLowerCase()}::${String(row.market_type ?? "").toLowerCase()}`;
+    const markets = countedMarkets.get(key) ?? new Set<string>();
+    markets.add(marketKey);
+    countedMarkets.set(key, markets);
+
+    const current = oddsByFixture.get(key);
+    const capturedAt = row.captured_at ? String(row.captured_at) : null;
+    oddsByFixture.set(key, {
+      count: markets.size,
+      capturedAt:
+        current?.capturedAt && capturedAt
+          ? new Date(capturedAt).getTime() > new Date(current.capturedAt).getTime()
+            ? capturedAt
+            : current.capturedAt
+          : capturedAt ?? current?.capturedAt ?? null,
+    });
+  }
+
+  /* Movement count keeps the original semantic: extra snapshots beyond the
+     first one seen per fixture + bookmaker + market. */
+  const movementSnapshots = new Map<string, number>();
+  for (const row of (movementResult.data ?? []) as Array<Record<string, unknown>>) {
+    const key = [
+      String(row.fixture_id),
+      String(row.bookmaker ?? "").toLowerCase(),
+      String(row.market_type ?? "").toLowerCase(),
+    ].join("::");
+    movementSnapshots.set(key, (movementSnapshots.get(key) ?? 0) + 1);
+  }
+  for (const [key, count] of movementSnapshots) {
+    if (count <= 1) continue;
+    const fixtureId = key.split("::")[0]!;
+    movementByFixture.set(fixtureId, (movementByFixture.get(fixtureId) ?? 0) + count - 1);
   }
 }
 
@@ -53,74 +120,43 @@ router.get("/odds/events", async (req, res) => {
     }
 
     const fixtureIds = (data ?? []).map((event) => String(event.fixture_id));
-    let oddsRows: Array<Record<string, unknown>> = [];
-    let movementRows: Array<Record<string, unknown>> = [];
-    let oddsError: unknown | null = null;
-    let movementError: unknown | null = null;
-    if (fixtureIds.length > 0) {
-      const [oddsResult, movementResult] = await Promise.all([
-        fetchAllPages<Record<string, unknown>>(async (from, to) =>
-          await supabase
-            .from("odds_history")
-            .select("match_id, bookmaker, market_type, captured_at")
-            .in("match_id", fixtureIds)
-            .order("match_id", { ascending: true })
-            .order("bookmaker", { ascending: true })
-            .order("market_type", { ascending: true })
-            .order("captured_at", { ascending: true })
-            .range(from, to),
-        ),
-        fetchAllPages<Record<string, unknown>>(async (from, to) =>
-          await supabase
-            .from("odds_movement_history")
-            .select("fixture_id, bookmaker, market_type, captured_at")
-            .in("fixture_id", fixtureIds)
-            .order("fixture_id", { ascending: true })
-            .order("bookmaker", { ascending: true })
-            .order("market_type", { ascending: true })
-            .order("captured_at", { ascending: true })
-            .range(from, to),
-        ),
-      ]);
-      oddsRows = oddsResult.data ?? [];
-      oddsError = oddsResult.error;
-      movementRows = movementResult.data ?? [];
-      movementError = movementResult.error;
-    }
-
-    if (oddsError) logger.warn({ error: oddsError }, "Failed to load odds status for events");
-    if (movementError) logger.warn({ error: movementError }, "Failed to load odds movement status for events");
-
     const oddsByFixture = new Map<string, { capturedAt: string | null; count: number }>();
-    for (const row of oddsRows ?? []) {
-      const key = String(row.match_id);
-      const current = oddsByFixture.get(key);
-      const capturedAt = row.captured_at ? String(row.captured_at) : null;
-      oddsByFixture.set(key, {
-        count: (current?.count ?? 0) + 1,
-        capturedAt:
-          current?.capturedAt && capturedAt
-            ? new Date(capturedAt).getTime() > new Date(current.capturedAt).getTime()
-              ? capturedAt
-              : current.capturedAt
-            : capturedAt ?? current?.capturedAt ?? null,
-      });
-    }
-
-    const movementSnapshots = new Map<string, number>();
-    for (const row of movementRows ?? []) {
-      const key = [
-        String(row.fixture_id),
-        String(row.bookmaker ?? "").toLowerCase(),
-        String(row.market_type ?? "").toLowerCase(),
-      ].join("::");
-      movementSnapshots.set(key, (movementSnapshots.get(key) ?? 0) + 1);
-    }
     const movementByFixture = new Map<string, number>();
-    for (const [key, count] of movementSnapshots) {
-      if (count <= 1) continue;
-      const fixtureId = key.split("::")[0]!;
-      movementByFixture.set(fixtureId, (movementByFixture.get(fixtureId) ?? 0) + count - 1);
+
+    if (fixtureIds.length > 0) {
+      /*
+       * Ask Postgres for one aggregate row per fixture. The previous version
+       * paged every odds_history / odds_movement_history row into Node.js just
+       * to count them, so response time grew with every 3-hourly snapshot.
+       */
+      const [oddsSummary, movementSummary] = await Promise.all([
+        supabase.rpc("fixture_odds_summary", { p_match_ids: fixtureIds }),
+        supabase.rpc("fixture_odds_movement_summary", { p_fixture_ids: fixtureIds }),
+      ]);
+
+      if (!oddsSummary.error && !movementSummary.error) {
+        for (const row of (oddsSummary.data ?? []) as Array<Record<string, unknown>>) {
+          oddsByFixture.set(String(row.match_id), {
+            count: Number(row.odds_count ?? 0),
+            capturedAt: row.latest_captured_at ? String(row.latest_captured_at) : null,
+          });
+        }
+        for (const row of (movementSummary.data ?? []) as Array<Record<string, unknown>>) {
+          movementByFixture.set(String(row.fixture_id), Number(row.movement_count ?? 0));
+        }
+      } else {
+        /*
+         * The aggregate functions may not be deployed yet. Keep a bounded
+         * fallback that only reads the newest snapshot per market instead of
+         * the full history, so a missing migration degrades speed, not
+         * correctness.
+         */
+        logger.warn(
+          { oddsError: oddsSummary.error, movementError: movementSummary.error },
+          "Odds summary RPC unavailable — using bounded fallback",
+        );
+        await loadOddsStatusFallback(fixtureIds, oddsByFixture, movementByFixture);
+      }
     }
 
     res.json(
@@ -227,7 +263,19 @@ router.get("/odds/leagues", (_req, res) => {
   res.json(DEFAULT_LEAGUES);
 });
 
-router.get("/odds/bookmakers", async (_req, res) => {
+/*
+ * The provider list is effectively static, and every upstream call consumes the
+ * free Odds-API quota. Cache it for an hour and keep it behind the admin
+ * password so anonymous traffic cannot burn the quota.
+ */
+const BOOKMAKERS_CACHE_MS = 60 * 60 * 1000;
+let bookmakersCache: { data: { name: string; active: boolean }[]; expiresAt: number } | null = null;
+
+router.get("/odds/bookmakers", requireAdmin, async (_req, res) => {
+  if (bookmakersCache && Date.now() < bookmakersCache.expiresAt) {
+    res.json(bookmakersCache.data);
+    return;
+  }
   const apiKey = process.env["ODDS_API_KEY"];
   if (!apiKey) { res.status(500).json({ error: "ODDS_API_KEY not set" }); return; }
   try {
@@ -235,7 +283,9 @@ router.get("/odds/bookmakers", async (_req, res) => {
     const text = await r.text();
     if (!r.ok) { res.status(r.status).json({ error: `API ${r.status}`, body: text }); return; }
     const data = JSON.parse(text) as { name: string; active?: boolean }[];
-    res.json(data.map((b) => ({ name: b.name, active: b.active ?? true })));
+    const bookmakers = data.map((b) => ({ name: b.name, active: b.active ?? true }));
+    bookmakersCache = { data: bookmakers, expiresAt: Date.now() + BOOKMAKERS_CACHE_MS };
+    res.json(bookmakers);
   } catch (err) {
     logger.error({ err }, "Failed to fetch bookmakers");
     res.status(500).json({ error: "fetch failed" });

@@ -1,4 +1,12 @@
-import { pgTable, integer, text, timestamp } from "drizzle-orm/pg-core";
+/**
+ * @deprecated Production does not read or write `odds_events`.
+ *
+ * Fixtures live in the Supabase `fixtures` table and odds in `odds_history`
+ * (see `odds-history.ts`). This definition is kept only so existing type
+ * imports do not break; editing it has no effect on the running system.
+ */
+
+import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 

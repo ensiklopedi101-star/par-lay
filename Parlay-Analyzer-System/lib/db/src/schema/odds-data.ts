@@ -1,4 +1,11 @@
-import { pgTable, serial, integer, text, timestamp, json, unique } from "drizzle-orm/pg-core";
+/**
+ * @deprecated Production does not read or write `odds_data`.
+ *
+ * The live odds snapshots are stored per bookmaker/market in `odds_history`
+ * (see `odds-history.ts`). This definition is kept only for type imports.
+ */
+
+import { integer, json, pgTable, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { oddsEventsTable } from "./odds-events";

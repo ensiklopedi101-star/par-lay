@@ -9,7 +9,7 @@ A football betting analysis system that pulls odds from Odds-API, stores team st
 - `pnpm run typecheck` — full typecheck across packages
 - `pnpm --filter @workspace/db run push` — push DB schema changes
 - Required secrets: `ODDS_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`
-- `CSV_UPLOAD_PASSWORD` env var — defaults to `parlay2024` if not set
+- `CSV_UPLOAD_PASSWORD` env var — **required**; upload returns 503 when unset (no default)
 
 ## Stack
 
@@ -26,7 +26,7 @@ A football betting analysis system that pulls odds from Odds-API, stores team st
 
 - **Backend:** `artifacts/api-server/src/routes/` — odds, supabase, csv, config, health
 - **Frontend:** `artifacts/parlay-app/src/pages/` — dashboard, fixtures, teams, parlays, upload, settings
-- **Database schema:** `lib/db/src/schema/` — odds-events, odds-data, team-stats, scheduler-config
+- **Database schema:** `lib/db/src/schema/` — odds-history, team-stats, scheduler-config (mirrors the Supabase tables; odds-events/odds-data are deprecated type-only stubs)
 - **API hooks:** `artifacts/parlay-app/src/api/parlay-hooks.ts` — custom React Query hooks
 - **Team name mapping:** `artifacts/api-server/src/lib/team-name-map.ts` — FootyStats ↔ Odds-API name resolution
 - **Odds fetcher:** `artifacts/api-server/src/services/odds-fetcher.ts` — rate-limited, incremental sync
@@ -34,7 +34,7 @@ A football betting analysis system that pulls odds from Odds-API, stores team st
 ## Architecture decisions
 
 - **Custom hooks instead of Orval:** The OpenAPI spec is minimal; full API surface is handled via custom React Query hooks in `parlay-hooks.ts` to avoid codegen overhead.
-- **Supabase for operational data:** Fixtures, odds history, and parlays live in Supabase tables (not Drizzle), because the original schema was designed there. Drizzle only manages the odds sync + team stats tables.
+- **Supabase for operational data:** Fixtures, odds history, and parlays live in Supabase tables, because the original schema was designed there. The Drizzle schemas in `lib/db` mirror those tables so `drizzle-kit push` cannot replace them with an incompatible layout; application code reads and writes Supabase directly.
 - **Rate-limited odds sync:** `odds-fetcher.ts` checks active leagues first, skips off-season leagues, sleeps 300ms between event calls, and stops on 429 errors.
 - **CSV upload with password:** `csv.ts` enforces `CSV_UPLOAD_PASSWORD` for team stats uploads to prevent accidental overwrites.
 - **Dark mode only:** The frontend uses a dark theme (`index.css` overrides default red placeholder values) matching the "terminal" aesthetic.
@@ -57,7 +57,7 @@ A football betting analysis system that pulls odds from Odds-API, stores team st
 
 - Odds API rate-limits quickly — sync runs every 3 hours via cron, but may hit rate limits on first start
 - `SUPABASE_SERVICE_ROLE_KEY` is required (not anon key) for server-side operations
-- `CSV_UPLOAD_PASSWORD` defaults to `parlay2024` — set env var to change it
+- `CSV_UPLOAD_PASSWORD` has no default — set it in Secrets or CSV upload returns 503
 - The frontend uses `@/api/parlay-hooks` not `@workspace/api-client-react` for data fetching
 - If Supabase views (`v_active_parlays`, `v_odds_movement`) don't exist, the Supabase routes will return errors
 - External keep-alive: call `GET /api/cron?action=keep-alive` every 30 minutes with the `x-cron-secret` header (or `token` query parameter). Do not use `action=sync` every 15 minutes; it consumes Odds API quota.

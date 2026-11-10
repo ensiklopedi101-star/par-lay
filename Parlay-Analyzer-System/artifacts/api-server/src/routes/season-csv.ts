@@ -9,11 +9,17 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
-const CSV_UPLOAD_PASSWORD = process.env["CSV_UPLOAD_PASSWORD"] ?? "parlay2024";
+/* No hardcoded fallback — see routes/csv.ts. */
+const CSV_UPLOAD_PASSWORD = process.env["CSV_UPLOAD_PASSWORD"] ?? "";
 
 router.post("/upload-csv", upload.single("file"), async (req, res) => {
-  const { password, league_slug, season } = req.body as Record<string, string>;
+  /* A request without a multipart body leaves req.body undefined. */
+  const { password, league_slug, season } = (req.body ?? {}) as Record<string, string>;
 
+  if (!CSV_UPLOAD_PASSWORD) {
+    res.status(503).json({ error: "CSV_UPLOAD_PASSWORD belum dikonfigurasi di server secrets" });
+    return;
+  }
   if (!password || password !== CSV_UPLOAD_PASSWORD) {
     res.status(401).json({ error: "Unauthorized — wrong password" });
     return;

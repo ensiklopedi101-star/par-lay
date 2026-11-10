@@ -45,7 +45,11 @@ export function calculateKelly(odds: number, probWin: number): KellyResult {
   // Rekomendasi unit: gunakan half Kelly untuk konservatif
   const halfKelly = stakePercentHalf;
   let recommendedUnit: string;
-  if (halfKelly < 1) {
+  if (edge <= 0 || halfKelly <= 0) {
+    // Taruhan tanpa edge tidak boleh mendapat unit sama sekali. Sebelumnya
+    // `halfKelly < 1` juga menangkap nilai 0 dan menyarankan "0.5%".
+    recommendedUnit = "0%";
+  } else if (halfKelly < 1) {
     recommendedUnit = "0.5%";
   } else if (halfKelly >= 1 && halfKelly < 2) {
     recommendedUnit = "1%";
@@ -80,10 +84,27 @@ export function calculateKelly(odds: number, probWin: number): KellyResult {
  */
 export function extractProbFromPrediction(predictionText: string): number | null {
   const text = predictionText.toLowerCase();
-  // Cari "prob. nyata: 55%" atau "probabilitas: 0.55"
-  const probMatch = text.match(/prob(?:abilitas)?\s*(?:nyata)?:?\s*(\d+\.?\d*)\s*%/);
-  if (probMatch) {
-    return Math.min(0.99, Math.max(0.01, parseFloat(probMatch[1]) / 100));
+
+  // "prob. nyata: 55%", "probabilitas: 55,5 %", "probability 55%"
+  const percentMatch = text.match(
+    /prob(?:abilitas|abilitiy|ability)?\.?\s*(?:nyata|real|riil)?\s*:?\s*(\d+(?:[.,]\d+)?)\s*%/,
+  );
+  if (percentMatch) {
+    return clampProbability(parseFloat(percentMatch[1]!.replace(",", ".")) / 100);
   }
+
+  // "probabilitas: 0,55" / "prob nyata = 0.55" — a bare decimal, never a bare
+  // integer, because "probabilitas: 1" is far more likely prose than 100%.
+  const decimalMatch = text.match(
+    /prob(?:abilitas|abilitiy|ability)?\.?\s*(?:nyata|real|riil)?\s*[:=]?\s*(0[.,]\d+)/,
+  );
+  if (decimalMatch) {
+    return clampProbability(parseFloat(decimalMatch[1]!.replace(",", ".")));
+  }
+
   return null;
+}
+
+function clampProbability(value: number): number {
+  return Math.min(0.99, Math.max(0.01, value));
 }

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { addDays, formatISO } from "date-fns";
+import { useMemo, useState } from "react";
+import { addDays, formatISO, startOfDay } from "date-fns";
 import {
   useGetConfig,
   useGetSyncStatus,
@@ -27,7 +27,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { formatLeagueName } from "@/utils/format-league";
-import { useAdminPassword } from "@/hooks/use-admin-password";
+import { useAdminPassword, clearStoredAdminPassword } from "@/hooks/use-admin-password";
 import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
 
 function HealthDot({ status }: { status: string }) {
@@ -56,12 +56,22 @@ export default function Dashboard() {
   const { data: config } = useGetConfig();
   const scanDays = config?.scanDays ?? 11;
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
-  const now = new Date();
-  const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures({
-    date_from: formatISO(now),
-    date_to: formatISO(addDays(now, scanDays)),
-    limit: 500,
-  });
+
+  /*
+   * The scan window is anchored to the start of today, not to `new Date()` in
+   * the render body. A fresh timestamp on every render produced a new React
+   * Query key each time (every 1.5s polling tick during a batch scan), which
+   * refetched all 500 fixtures and grew the cache without bound.
+   */
+  const fixturesParams = useMemo(
+    () => ({
+      date_from: formatISO(startOfDay(new Date())),
+      date_to: formatISO(addDays(startOfDay(new Date()), scanDays)),
+      limit: 500,
+    }),
+    [scanDays],
+  );
+  const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures(fixturesParams);
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
   const { data: statsHealth, isLoading: isStatsHealthLoading } = useGetStatsHealth();
   const [scanState, setScanState] = useState<"idle" | "scanning">("idle");
@@ -105,6 +115,9 @@ export default function Dashboard() {
         headers: { "x-admin-password": pwd },
       });
       if (!res.ok) {
+        /* A rejected password must not stay cached, or every later admin
+           click retries the same wrong value and fails with 401 again. */
+        if (res.status === 401) clearStoredAdminPassword();
         const body = await res.json().catch(() => ({ error: `API ${res.status}` }));
         throw new Error(body.error ?? `API ${res.status}`);
       }
@@ -143,6 +156,7 @@ export default function Dashboard() {
           headers: { "x-admin-password": pwd },
         });
         if (!statusResponse.ok) {
+          if (statusResponse.status === 401) clearStoredAdminPassword();
           const body = await statusResponse.json().catch(() => ({ error: `API ${statusResponse.status}` }));
           throw new Error(body.error ?? `API ${statusResponse.status}`);
         }

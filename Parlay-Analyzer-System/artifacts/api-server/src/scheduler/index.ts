@@ -49,6 +49,8 @@ async function loadConfigAndSync() {
   await fetchAndSaveAllLeagues(leagues, bookmakers, scanDays);
 }
 
+export const DEFAULT_ODDS_CRON = "0 */6 * * *";
+
 function scheduleOddsTask(expression: string) {
   if (currentOddsTask) currentOddsTask.stop();
   currentOddsTask = cron.schedule(expression, () => {
@@ -57,6 +59,29 @@ function scheduleOddsTask(expression: string) {
     );
   });
   logger.info({ expression }, "Odds scheduler configured");
+}
+
+/**
+ * Re-register the odds cron after Settings saves a new expression.
+ *
+ * Saving scheduler_config used to leave the running node-cron task untouched,
+ * so the UI reported a new schedule while the server kept the old one until a
+ * restart. An invalid expression keeps the current task instead of silently
+ * disabling odds sync.
+ */
+export function reloadOddsSchedule(expression: string): { ok: boolean; expression: string; error?: string } {
+  const trimmed = expression.trim();
+  if (!cron.validate(trimmed)) {
+    logger.warn({ expression: trimmed }, "Invalid cron expression — keeping current odds schedule");
+    return { ok: false, expression: trimmed, error: "Invalid cron expression" };
+  }
+  try {
+    scheduleOddsTask(trimmed);
+    return { ok: true, expression: trimmed };
+  } catch (err) {
+    logger.error({ err, expression: trimmed }, "Failed to reload odds schedule");
+    return { ok: false, expression: trimmed, error: "Failed to reload odds schedule" };
+  }
 }
 
 /* ─── Daily settlement runner ─── */
@@ -112,7 +137,7 @@ export function startScheduler() {
   if (currentRevalidationTask) { currentRevalidationTask.stop(); }
 
   /* The initial run loads scheduler_config; reconfigure from there. */
-  let configuredExpression = "0 */6 * * *";
+  let configuredExpression = DEFAULT_ODDS_CRON;
   supabase
     .from("scheduler_config")
     .select("cron_expression")

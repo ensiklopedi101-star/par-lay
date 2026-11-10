@@ -474,8 +474,10 @@ router.get("/analyze/batch/:jobId", requireAdmin, (req, res) => {
  * POST /api/analyze/:fixtureId
  * Jalankan analisis baru, panggil Gemini, simpan & kembalikan hasil.
  */
-router.post("/analyze/:fixtureId", async (req, res) => {
-  const { fixtureId } = req.params;
+router.post("/analyze/:fixtureId", requireAdmin, async (req, res) => {
+  /* Express 5 types route params as string | string[] once a middleware is
+     attached to the handler; normalise to a single id. */
+  const fixtureId = String(req.params["fixtureId"] ?? "").trim();
 
   if (!fixtureId) {
     res.status(400).json({ error: "fixtureId is required" });
