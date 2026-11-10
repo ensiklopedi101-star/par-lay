@@ -10,7 +10,9 @@ import { ChevronDown, ChevronUp, Clock3, Radar, TrendingUp, DatabaseZap } from "
 import { formatLeagueName } from "@/utils/format-league";
 
 interface OddsEntry {
-  hdp?: number;
+  /** Handicap / totals line. The API sends `line`; `hdp` is a legacy alias. */
+  line?: number | string;
+  hdp?: number | string;
   over?: string;
   under?: string;
   home?: string;
@@ -18,7 +20,43 @@ interface OddsEntry {
   away?: string;
   yes?: string;
   no?: string;
+  odds_1?: string;
+  odds_2?: string;
+  odds_draw?: string;
   [key: string]: unknown;
+}
+
+/** `undefined` and `null` both mean "this market has no such outcome". */
+function hasValue(value: unknown): boolean {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function formatOddsValue(value: unknown): string {
+  if (!hasValue(value)) return "-";
+  return String(value);
+}
+
+/** Describe one odds row without hiding the draw price of a 1X2 market. */
+function describeOddsEntry(entry: OddsEntry): string {
+  const { home, draw, away, over, under, yes, no } = entry;
+
+  if (hasValue(draw) && (hasValue(home) || hasValue(away))) {
+    return `1 ${formatOddsValue(home)} | X ${formatOddsValue(draw)} | 2 ${formatOddsValue(away)}`;
+  }
+  if (hasValue(over) || hasValue(under)) {
+    return `Over ${formatOddsValue(over)} / Under ${formatOddsValue(under)}`;
+  }
+  if (hasValue(yes) || hasValue(no)) {
+    return `Yes ${formatOddsValue(yes)} / No ${formatOddsValue(no)}`;
+  }
+  if (hasValue(home) || hasValue(away)) {
+    return `Home ${formatOddsValue(home)} / Away ${formatOddsValue(away)}`;
+  }
+  if (hasValue(entry.odds_1) || hasValue(entry.odds_2)) {
+    const drawText = hasValue(entry.odds_draw) ? ` | X ${formatOddsValue(entry.odds_draw)}` : "";
+    return `1 ${formatOddsValue(entry.odds_1)}${drawText} | 2 ${formatOddsValue(entry.odds_2)}`;
+  }
+  return JSON.stringify(entry);
 }
 
 interface Market {
@@ -35,20 +73,17 @@ function MarketTable({ markets }: { markets: Market[] }) {
             {market.name}
           </div>
           <div className="space-y-1">
-            {market.odds.map((o, i) => (
-              <div key={i} className="flex justify-between text-xs font-mono">
-                <span className="text-muted-foreground">
-                  {o.home !== undefined && o.away !== undefined ? `${o.home} vs ${o.away}` :
-                   o.over !== undefined && o.under !== undefined ? `${o.over} / ${o.under}` :
-                   o.yes !== undefined && o.no !== undefined ? `${o.yes} / ${o.no}` :
-                   o.draw !== undefined ? `${o.home} / ${o.draw} / ${o.away}` :
-                   JSON.stringify(o)}
-                </span>
-                <span className="text-primary">
-                  {o.hdp !== undefined ? `HDP ${o.hdp}` : ""}
-                </span>
-              </div>
-            ))}
+            {market.odds.map((o, i) => {
+              const line = o.line ?? o.hdp;
+              return (
+                <div key={i} className="flex justify-between gap-2 text-xs font-mono">
+                  <span className="text-muted-foreground">{describeOddsEntry(o)}</span>
+                  <span className="text-primary font-semibold whitespace-nowrap">
+                    {hasValue(line) ? `Line ${line}` : ""}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}

@@ -1,7 +1,41 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ManualParlayLeg } from "@/utils/manual-parlay-selection";
+import {
+  ADMIN_PASSWORD_STORAGE_KEY,
+  clearStoredAdminPassword,
+} from "@/hooks/use-admin-password";
 
 const API_BASE = "/api";
+
+/**
+ * Build a query string from optional params.
+ *
+ * `new URLSearchParams({ a: undefined })` silently becomes `a=undefined`,
+ * which made "All Leagues" filter by the literal slug "undefined" and return
+ * an empty table. Skip empty values instead of serialising them.
+ */
+export function buildQueryString(
+  params?: Record<string, string | number | boolean | undefined | null>,
+): string {
+  if (!params) return "";
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text === "") continue;
+    searchParams.set(key, text);
+  }
+  const query = searchParams.toString();
+  return query ? `?${query}` : "";
+}
+
+/**
+ * Drop a rejected password so the next admin action asks for it again instead
+ * of retrying the same wrong value from localStorage forever.
+ */
+function handleUnauthorized(response: Response): void {
+  if (response.status === 401) clearStoredAdminPassword();
+}
 
 async function apiGet<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -16,6 +50,7 @@ async function apiAdminGet<T>(url: string): Promise<T> {
   });
   const json = await res.json().catch(() => null);
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(json && typeof json.error === "string" ? json.error : `API ${res.status}`);
   }
   return json as T;
@@ -319,7 +354,7 @@ export interface ParlayReadiness {
 
 function getAdminPassword(): string | null {
   try {
-    return localStorage.getItem("adminPassword");
+    return localStorage.getItem(ADMIN_PASSWORD_STORAGE_KEY);
   } catch {
     return null;
   }
@@ -337,6 +372,7 @@ async function apiPost<T>(url: string, body?: unknown): Promise<T> {
   });
   const json = await res.json().catch(() => null);
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(json && typeof json.error === "string" ? json.error : `API ${res.status}`);
   }
   return json as T;
@@ -443,10 +479,7 @@ export const getListSupabaseFixturesQueryKey = (params?: Record<string, string |
 export function useListSupabaseFixtures(params?: Record<string, string | number>) {
   return useQuery<FixtureEvent[]>({
     queryKey: getListSupabaseFixturesQueryKey(params),
-    queryFn: () => {
-      const qs = params ? new URLSearchParams(params as Record<string, string>).toString() : "";
-      return apiGet<FixtureEvent[]>(`${API_BASE}/supabase/fixtures${qs ? "?" + qs : ""}`);
-    },
+    queryFn: () => apiGet<FixtureEvent[]>(`${API_BASE}/supabase/fixtures${buildQueryString(params)}`),
   });
 }
 
@@ -458,10 +491,7 @@ export const getListEventsQueryKey = (params?: { league?: string; limit?: number
 export function useListEvents(params?: { league?: string; limit?: number }) {
   return useQuery<FixtureEvent[]>({
     queryKey: getListEventsQueryKey(params),
-    queryFn: () => {
-      const qs = params ? new URLSearchParams(params as Record<string, string>).toString() : "";
-      return apiGet<FixtureEvent[]>(`${API_BASE}/odds/events${qs ? "?" + qs : ""}`);
-    },
+    queryFn: () => apiGet<FixtureEvent[]>(`${API_BASE}/odds/events${buildQueryString(params)}`),
   });
 }
 
@@ -482,10 +512,7 @@ export const getListTeamStatsQueryKey = (params?: { leagueSlug?: string; season?
 export function useListTeamStats(params?: { leagueSlug?: string; season?: string }) {
   return useQuery<Record<string, unknown>[]>({
     queryKey: getListTeamStatsQueryKey(params),
-    queryFn: () => {
-      const qs = params ? new URLSearchParams(params as Record<string, string>).toString() : "";
-      return apiGet<Record<string, unknown>[]>(`${API_BASE}/csv/teams${qs ? "?" + qs : ""}`);
-    },
+    queryFn: () => apiGet<Record<string, unknown>[]>(`${API_BASE}/csv/teams${buildQueryString(params)}`),
   });
 }
 
@@ -542,10 +569,7 @@ export const getListStandingsQueryKey = (params?: { league_slug?: string; season
 export function useListStandings(params?: { league_slug?: string; season?: string }) {
   return useQuery<Standing[]>({
     queryKey: getListStandingsQueryKey(params),
-    queryFn: () => {
-      const qs = params ? new URLSearchParams(params as Record<string, string>).toString() : "";
-      return apiGet<Standing[]>(`${API_BASE}/supabase/standings${qs ? "?" + qs : ""}`);
-    },
+    queryFn: () => apiGet<Standing[]>(`${API_BASE}/supabase/standings${buildQueryString(params)}`),
   });
 }
 
@@ -868,17 +892,26 @@ export function useGetRiskCenter() {
   });
 }
 
+/**
+ * POST /analyze/:fixtureId is admin-only because it spends Gemini quota and
+ * writes a new ai_predictions row, so it must send the admin password.
+ */
 export function useRunAIAnalysis() {
   const queryClient = useQueryClient();
-  return useMutation<AIAnalysisResult, Error, string | number>({
-    mutationFn: async (fixtureId) => {
-      const res = await fetch(`${API_BASE}/analyze/${fixtureId}`, { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? `API ${res.status}`);
-      return json;
+  return useMutation<AIAnalysisResult, Error, { fixtureId: string | number; adminPassword?: string }>({
+    mutationFn: async ({ fixtureId, adminPassword }) => {
+      const password = adminPassword ?? getAdminPassword();
+      const res = await fetch(`${API_BASE}/analyze/${fixtureId}`, {
+        method: "POST",
+        headers: password ? { "x-admin-password": password } : undefined,
+      });
+      handleUnauthorized(res);
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error ?? `API ${res.status}`);
+      return json as AIAnalysisResult;
     },
-    onSuccess: (_data, fixtureId) => {
-      queryClient.invalidateQueries({ queryKey: getAIPredictionQueryKey(fixtureId) });
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: getAIPredictionQueryKey(variables.fixtureId) });
     },
   });
 }

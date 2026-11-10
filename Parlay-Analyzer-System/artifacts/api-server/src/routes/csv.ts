@@ -14,7 +14,11 @@ import {
 const router: IRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
-const CSV_UPLOAD_PASSWORD = process.env["CSV_UPLOAD_PASSWORD"] ?? "parlay2024";
+/*
+ * No hardcoded fallback: a published default password let anyone overwrite
+ * team_season_stats. Upload is disabled until the secret is configured.
+ */
+const CSV_UPLOAD_PASSWORD = process.env["CSV_UPLOAD_PASSWORD"] ?? "";
 
 /* 11 valid JSONB columns in team_season_stats */
 const VALID_CSV_TYPES = [
@@ -58,8 +62,13 @@ function cleanRow(raw: Record<string, string>): Record<string, string> {
 }
 
 router.post("/csv/upload", upload.single("file"), async (req, res) => {
-  const { password, leagueSlug, season, csvType } = req.body as Record<string, string>;
+  /* A request without a multipart body leaves req.body undefined. */
+  const { password, leagueSlug, season, csvType } = (req.body ?? {}) as Record<string, string>;
 
+  if (!CSV_UPLOAD_PASSWORD) {
+    res.status(503).json({ error: "CSV_UPLOAD_PASSWORD belum dikonfigurasi di server secrets" });
+    return;
+  }
   if (!password || password !== CSV_UPLOAD_PASSWORD) {
     res.status(401).json({ error: "Unauthorized — wrong password" });
     return;
@@ -114,6 +123,27 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
 
     logger.info({ rows: rows.length, leagueSlug, season, csvType, delimiter }, "CSV parsed");
 
+    /*
+     * Load the league/season stats once. The lookup used to run inside the row
+     * loop, so a 20-team file read the full team_season_stats slice (all 11
+     * JSONB columns) 20 times. Keep the in-memory copy in sync after each
+     * write so later rows for the same team still merge correctly.
+     */
+    const existingStatsRows: Array<Record<string, unknown>> = [];
+    {
+      const { data: loadedRows, error: loadError } = await supabase
+        .from("team_season_stats")
+        .select("*")
+        .eq("league_slug", leagueSlug)
+        .eq("season", season)
+        .limit(500);
+      if (loadError) {
+        logger.error({ error: loadError }, "CSV: failed to load existing team stats");
+      } else {
+        existingStatsRows.push(...((loadedRows ?? []) as Array<Record<string, unknown>>));
+      }
+    }
+
     for (const rawRow of rows) {
       const row = cleanRow(rawRow);
 
@@ -139,15 +169,9 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
       }
 
       try {
-        // Fetch existing row from Supabase
-        const { data: existingRows } = await supabase
-          .from("team_season_stats")
-          .select("*")
-          .eq("league_slug", leagueSlug)
-          .eq("season", season)
-          .limit(500);
+        // Match against the in-memory copy loaded once before the loop.
         const matchingRows = findEquivalentTeamStatsRows(
-          (existingRows ?? []) as unknown as Array<Record<string, unknown>>,
+          existingStatsRows,
           teamName,
           leagueSlug,
         );
@@ -186,18 +210,30 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
 
         logger.debug({ teamName, csvType, keys: Object.keys(jsonPayload) }, "Upserting row");
 
-         const write = target?.id
-           ? supabase.from("team_season_stats").update(dataToInsert).eq("id", target.id)
-           : supabase.from("team_season_stats").upsert(dataToInsert, {
-               onConflict: "league_slug, season, team_name",
-             });
-         const { error } = await write;
+        const write = target?.id
+          ? supabase.from("team_season_stats").update(dataToInsert).eq("id", target.id).select("id").maybeSingle()
+          : supabase.from("team_season_stats").upsert(dataToInsert, {
+              onConflict: "league_slug, season, team_name",
+            }).select("id").maybeSingle();
+        const { data: writtenRow, error } = await write;
 
         if (error) {
           logger.error({ error, teamName, csvType }, "Supabase upsert error");
           errors++;
           continue;
         }
+
+        /*
+         * Refresh the in-memory snapshot so a later row for the same team
+         * merges the column this row just wrote instead of the stale value.
+         */
+        const writtenId = writtenRow?.id ?? target?.id;
+        const refreshedRow = { id: writtenId, ...dataToInsert };
+        const snapshotIndex = existingStatsRows.findIndex((existingRow) =>
+          writtenId != null && String(existingRow.id) === String(writtenId),
+        );
+        if (snapshotIndex >= 0) existingStatsRows[snapshotIndex] = { ...existingStatsRows[snapshotIndex], ...refreshedRow };
+        else existingStatsRows.push(refreshedRow);
 
         teams.push(teamName);
         inserted++;

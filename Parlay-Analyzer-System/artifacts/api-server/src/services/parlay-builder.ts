@@ -259,13 +259,10 @@ export async function settleParlaysForFixtures(fixtureIds: number[]): Promise<vo
       .select("result")
       .eq("parlay_id", parlayId);
     const results = (parlayLegs ?? []).map((leg) => String(leg.result ?? "").toUpperCase());
-    if (results.length === 0 || results.some((result) => !result)) continue;
+    if (results.length === 0) continue;
 
-    const status = results.some((result) => result === "LOSS")
-      ? "lost"
-      : results.every((result) => result === "WIN")
-        ? "won"
-        : "settled";
+    const status = parlayStatusFromLegResults(results);
+    if (!status) continue;
     await supabase.from("parlays").update({
       status,
       actual_result: status,
@@ -273,4 +270,27 @@ export async function settleParlaysForFixtures(fixtureIds: number[]): Promise<vo
     }).eq("id", parlayId);
     logger.info({ parlayId, status }, "[PARLAY] Status parlay diperbarui");
   }
+}
+
+/**
+ * Decide a parlay's status from its leg results.
+ *
+ * A single losing leg (full or half) loses the whole parlay, so any pending
+ * leg cannot rescue it. A parlay only needs every leg to be settled before it
+ * can be declared won, and half wins / pushes still count as non-losing legs —
+ * previously `every(result === "WIN")` left such parlays stuck on "settled".
+ *
+ * Returns null while at least one leg is still unsettled and nothing has lost.
+ */
+export function parlayStatusFromLegResults(results: string[]): "won" | "lost" | "settled" | null {
+  if (results.length === 0) return null;
+  const normalized = results.map((result) => result.trim().toUpperCase());
+  const isLoss = (result: string) => result === "LOSS" || result === "HALF_LOSS";
+  const isWin = (result: string) => result === "WIN" || result === "HALF_WIN";
+
+  if (normalized.some(isLoss)) return "lost";
+  if (normalized.some((result) => result === "")) return null;
+  if (normalized.some(isWin)) return "won";
+  /* Every leg pushed: the stake is returned, which is a settled non-loss. */
+  return "settled";
 }

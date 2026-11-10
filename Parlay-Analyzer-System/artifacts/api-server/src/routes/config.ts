@@ -3,6 +3,8 @@ import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { isSyncRunning } from "../services/odds-fetcher";
 import { requireAdmin } from "../middlewares/admin";
+import cron from "node-cron";
+import { reloadOddsSchedule } from "../scheduler";
 
 export const LEAGUES_CATALOG = [
   { slug: "england-premier-league",      name: "Premier League",         country: "Inggris" },
@@ -47,7 +49,8 @@ async function getOrCreateConfig() {
   const { data: created, error: insertErr } = await supabase
     .from("scheduler_config")
     .insert({
-      leagues: ["serie-a"],
+      // Slug must match LEAGUES_CATALOG / DEFAULT_LEAGUES ("italy-serie-a").
+      leagues: ["italy-serie-a"],
       bookmakers: ["Bet365"],
       markets: ["ML", "Totals", "AH", "HT", "BTTS"],
       cron_expression: "0 */6 * * *",
@@ -96,6 +99,11 @@ router.post("/config", requireAdmin, async (req, res) => {
       res.status(400).json({ error: "scanDays must be an integer between 1 and 90" });
       return;
     }
+    const normalizedCron = cronExpression === undefined ? undefined : String(cronExpression).trim();
+    if (normalizedCron !== undefined && normalizedCron !== "" && !cron.validate(normalizedCron)) {
+      res.status(400).json({ error: "cronExpression is not a valid cron expression" });
+      return;
+    }
     const { data: existing } = await supabase
       .from("scheduler_config")
       .select("id")
@@ -107,7 +115,7 @@ router.post("/config", requireAdmin, async (req, res) => {
     if (leagues !== undefined) updatePayload.leagues = leagues;
     if (bookmakers !== undefined) updatePayload.bookmakers = bookmakers;
     if (markets !== undefined) updatePayload.markets = markets;
-    if (cronExpression !== undefined) updatePayload.cron_expression = cronExpression;
+    if (normalizedCron) updatePayload.cron_expression = normalizedCron;
     if (normalizedScanDays !== undefined) updatePayload.scan_days = normalizedScanDays;
     if (aiPersona !== undefined) updatePayload.ai_persona = aiPersona;
     if (agentInstructions !== undefined) updatePayload.agent_instructions = agentInstructions;
@@ -129,7 +137,7 @@ router.post("/config", requireAdmin, async (req, res) => {
           leagues,
           bookmakers,
           markets,
-          cron_expression: cronExpression,
+          cron_expression: normalizedCron ?? "0 */6 * * *",
           scan_days: normalizedScanDays ?? 11,
           ai_persona: aiPersona ?? null,
           agent_instructions: agentInstructions ?? null,
@@ -138,6 +146,18 @@ router.post("/config", requireAdmin, async (req, res) => {
         .single();
       if (error) throw error;
       cfg = created!;
+    }
+
+    /*
+     * Apply a new cron expression to the running scheduler. Persisting it in
+     * Supabase alone left the server on the old schedule until a restart.
+     */
+    const savedCron = typeof cfg.cron_expression === "string" ? cfg.cron_expression.trim() : "";
+    const schedulerReload = normalizedCron && savedCron
+      ? reloadOddsSchedule(savedCron)
+      : null;
+    if (schedulerReload && !schedulerReload.ok) {
+      logger.warn({ schedulerReload }, "Config saved but the odds schedule was not reloaded");
     }
 
     res.json({
@@ -150,6 +170,7 @@ router.post("/config", requireAdmin, async (req, res) => {
       aiPersona: cfg.ai_persona ?? null,
       agentInstructions: cfg.agent_instructions ?? null,
       updatedAt: cfg.updated_at ?? null,
+      schedulerReloaded: schedulerReload?.ok ?? false,
     });
   } catch (err) {
     logger.error({ err }, "Failed to save config");

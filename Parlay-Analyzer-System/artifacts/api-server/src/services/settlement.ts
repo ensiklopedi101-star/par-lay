@@ -17,6 +17,11 @@ import { settleParlaysForFixtures } from "./parlay-builder";
 import { refreshFixtureResultsForSettlement } from "./odds-fetcher";
 import { appendSettlementContext } from "../lib/settlement-context";
 import { recordSettledPredictionEvaluation } from "./prompt-learning";
+import {
+  calculateResult,
+  parlayLegMarketText,
+  type SettlementOutcome,
+} from "../lib/bet-settlement";
 
 /* ─────────────────────────────────────────
    Tipe
@@ -151,134 +156,11 @@ export function marketFromPredictionText(
 
 /* ─────────────────────────────────────────
    Tentukan WIN/LOSS dari skor + market
-   Return null jika market tidak dikenali
+   Matematika murni ada di lib/bet-settlement.ts supaya bisa diuji
+   tanpa Supabase. Return null jika market tidak dikenali.
 ───────────────────────────────────────── */
-export function calculateResult(
-  homeGoals: number,
-  awayGoals: number,
-  bestMarket: string | null,
-  predictionText: string | null,
-  homeGoalsHT?: number | null,
-  awayGoalsHT?: number | null,
-): "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH" | null {
-  const market = (bestMarket ?? "").toLowerCase().trim();
-  const text   = (predictionText ?? "").toLowerCase();
-  const isHalfTime = /\b(ht|half[\s-]?time|first[\s-]?half)\b/.test(market);
-  const evaluatedHomeGoals = isHalfTime ? homeGoalsHT : homeGoals;
-  const evaluatedAwayGoals = isHalfTime ? awayGoalsHT : awayGoals;
-  if (evaluatedHomeGoals == null || evaluatedAwayGoals == null) return null;
-  const evaluatedTotal = evaluatedHomeGoals + evaluatedAwayGoals;
-  const evaluatedDiff = evaluatedHomeGoals - evaluatedAwayGoals;
-
-  /* Over / Under */
-  if (market.includes("over") || market.includes("over_2")) {
-    const line = extractLine(market) ?? 2.5;
-    return evaluatedTotal > line ? "WIN" : evaluatedTotal === line ? "PUSH" : "LOSS";
-  }
-  if (market.includes("under")) {
-    const line = extractLine(market) ?? 2.5;
-    return evaluatedTotal < line ? "WIN" : evaluatedTotal === line ? "PUSH" : "LOSS";
-  }
-
-  /* BTTS */
-  if (market.includes("btts_yes") || market.includes("both teams to score yes")) {
-    return evaluatedHomeGoals > 0 && evaluatedAwayGoals > 0 ? "WIN" : "LOSS";
-  }
-  if (market.includes("btts_no") || market.includes("both teams to score no")) {
-    return evaluatedHomeGoals === 0 || evaluatedAwayGoals === 0 ? "WIN" : "LOSS";
-  }
-  if (market.includes("btts")) {
-    /* btts tanpa yes/no — inferensi dari teks */
-    if (text.includes("btts yes") || text.includes("kedua tim mencetak")) {
-      return evaluatedHomeGoals > 0 && evaluatedAwayGoals > 0 ? "WIN" : "LOSS";
-    }
-    return evaluatedHomeGoals > 0 && evaluatedAwayGoals > 0 ? "WIN" : "LOSS";
-  }
-
-  /* Asian Handicap — dengan quarter line support */
-  if (market.includes("draw no bet") || /\bdnb\b/.test(market)) {
-    const isAwaySelection = /\b(away|visitor|tamu)\b/.test(market);
-    const selectedTeamDiff = isAwaySelection ? -evaluatedDiff : evaluatedDiff;
-    return selectedTeamDiff > 0 ? "WIN" : selectedTeamDiff === 0 ? "PUSH" : "LOSS";
-  }
-
-  /* Asian Handicap — dengan quarter line support */
-  const isAsianHandicap = market.includes("handicap") ||
-    market.includes("spread") ||
-    market.includes("ah") ||
-    /\b(home|away|visitor|tamu)\b.*[-+]\d/.test(market);
-  if (isAsianHandicap) {
-    const line = extractLine(market);
-    if (line !== null) {
-      const isAwaySelection = /\b(away|visitor|tamu)\b|(?:^|[_\s])2(?:$|[_\s])/.test(market);
-      const selectedTeamDiff = isAwaySelection ? -evaluatedDiff : evaluatedDiff;
-      const margin = selectedTeamDiff + line;
-      const absLine = Math.abs(line);
-
-      // Quarter lines: 0.25, 0.75, 1.25, 1.75, dll
-      const fracPart = absLine % 1;
-      const isQuarterLine = fracPart === 0.25 || fracPart === 0.75;
-
-      if (isQuarterLine) {
-        // 0.25 line: split bet → half win / half loss
-        // 0.75 line: half win jika menang, half loss jika kalah
-        if (margin > 0.5) {
-          return "WIN";
-        } else if (margin > 0 && margin <= 0.5) {
-          return "HALF_WIN";
-        } else if (margin === 0) {
-          return "HALF_LOSS";
-        } else {
-          return "LOSS";
-        }
-      }
-
-      // Whole/half lines. An exact zero on a whole line is a push.
-      return margin > 0 ? "WIN" : margin === 0 ? "PUSH" : "LOSS";
-    }
-    return selectedTeamWins(market, evaluatedHomeGoals, evaluatedAwayGoals)
-      ? "WIN"
-      : "LOSS";
-  }
-
-  /* 1x2 / Moneyline */
-  if (market.includes("home") || market === "1" || market === "1x2_home") {
-    return evaluatedHomeGoals > evaluatedAwayGoals ? "WIN" : "LOSS";
-  }
-  if (market.includes("away") || market === "2" || market === "1x2_away") {
-    return evaluatedAwayGoals > evaluatedHomeGoals ? "WIN" : "LOSS";
-  }
-  if (market.includes("draw") || market === "x" || market === "1x2_draw") {
-    return evaluatedHomeGoals === evaluatedAwayGoals ? "WIN" : "LOSS";
-  }
-
-  /* Fallback: coba inferensi dari teks prediksi */
-  if (text.includes("menang") && (text.includes("home") || text.includes("tuan rumah"))) {
-    return evaluatedHomeGoals > evaluatedAwayGoals ? "WIN" : "LOSS";
-  }
-  if (text.includes("menang") && (text.includes("away") || text.includes("tamu"))) {
-    return evaluatedAwayGoals > evaluatedHomeGoals ? "WIN" : "LOSS";
-  }
-
-  return null; /* market tidak dikenali */
-}
-
-/* Helper: ekstrak angka dari string market (misal "over_2_5" → 2.5) */
-function extractLine(market: string): number | null {
-  const normalized = market.toLowerCase().replace(/,/g, ".");
-  const lineMatch = normalized.match(
-    /(?:over|under|handicap|asian[\s_-]*handicap|spread|ah).*?([-+]?\d+(?:[._]\d+)?)/,
-  ) ?? normalized.match(/[-+]?\d+(?:[._]\d+)?/);
-  if (!lineMatch) return null;
-  const parsed = Number(lineMatch[1]!.replace("_", "."));
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function selectedTeamWins(market: string, homeGoals: number, awayGoals: number): boolean {
-  return /\b(away|visitor|tamu)\b|(?:^|[_\s])2(?:$|[_\s])/.test(market)
-    ? awayGoals > homeGoals
-    : homeGoals > awayGoals;
-}
+export { calculateResult };
+export type { SettlementOutcome };
 
 function requiresHalfTimeScore(market: string | null): boolean {
   return /\b(ht|half[\s-]?time|first[\s-]?half)\b/i.test(market ?? "");
@@ -357,7 +239,7 @@ function buildFallbackLesson(
   prediction: PendingPrediction,
   homeGoals: number,
   awayGoals: number,
-  betResult: "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH",
+  betResult: SettlementOutcome,
   marketBet: string | null,
   evAtBet: number,
 ): string {
@@ -380,7 +262,7 @@ function buildFallbackLesson(
 async function ensureLearningLesson(
   prediction: PendingPrediction,
   fixture: CompletedFixture,
-  betResult: "WIN" | "LOSS" | "HALF_WIN" | "HALF_LOSS" | "PUSH",
+  betResult: SettlementOutcome,
   lessonText: string,
   evAtBet: number,
   marketBet: string | null,
@@ -498,6 +380,120 @@ async function rebuildPerformanceLog(): Promise<void> {
 }
 
 /* ─────────────────────────────────────────
+   Manual parlay legs (prediction_id IS NULL)
+───────────────────────────────────────── */
+
+interface ManualParlayLegRow {
+  id: string;
+  fixture_id: number | string;
+  market: string | null;
+  selection: string | null;
+}
+
+/**
+ * Settle legs that were picked manually and therefore have no AI prediction.
+ *
+ * The leg's own market + selection decides the outcome. The caller supplies the
+ * fixtures it already knows are finished; any manual leg on a finished fixture
+ * that the caller did not load (typically a fixture with no AI prediction at
+ * all) is resolved with one extra query so it can never hang a mixed parlay.
+ */
+async function settleManualParlayLegs(
+  completedFixtures: CompletedFixture[],
+  scopedFixtureIds?: number[],
+): Promise<{ settledLegs: number; fixtureIds: number[] }> {
+  const knownFixtures = new Map(completedFixtures.map((fixture) => [fixture.fixture_id, fixture]));
+
+  let legQuery = supabase
+    .from("parlay_legs")
+    .select("id, fixture_id, market, selection")
+    .is("prediction_id", null)
+    .is("result", null);
+  /* A scoped run (single fixture / single prediction) must not touch legs
+     outside the fixtures the caller asked about. */
+  if (scopedFixtureIds?.length) {
+    legQuery = legQuery.in("fixture_id", scopedFixtureIds);
+  }
+  const { data: legs, error } = await legQuery.limit(500);
+  if (error) {
+    logger.error({ err: error }, "[SETTLEMENT] Gagal memuat manual parlay legs");
+    return { settledLegs: 0, fixtureIds: [] };
+  }
+  if (!legs?.length) return { settledLegs: 0, fixtureIds: [] };
+
+  /* Resolve any finished fixture the caller did not already load. */
+  const missingFixtureIds = Array.from(new Set(
+    legs
+      .map((leg) => Number(leg.fixture_id))
+      .filter((fixtureId) => Number.isFinite(fixtureId) && !knownFixtures.has(fixtureId)),
+  ));
+  if (missingFixtureIds.length > 0) {
+    const { data: extraFixtures, error: extraError } = await supabase
+      .from("fixtures")
+      .select("fixture_id, home_team_name, away_team_name, league_name, status_short, home_goals, away_goals, home_goals_ht, away_goals_ht")
+      .in("fixture_id", missingFixtureIds)
+      .in("status_short", ["FT", "AET", "PEN", "finished", "completed", "settled"])
+      .not("home_goals", "is", null)
+      .not("away_goals", "is", null) as { data: CompletedFixture[] | null; error: { message: string } | null };
+    if (extraError) {
+      logger.error({ err: extraError }, "[SETTLEMENT] Gagal memuat fixture untuk manual legs");
+    }
+    for (const fixture of extraFixtures ?? []) {
+      knownFixtures.set(fixture.fixture_id, fixture);
+    }
+  }
+
+  const fixtureById = knownFixtures;
+  const settledFixtureIds = new Set<number>();
+  let settledLegs = 0;
+
+  for (const leg of (legs ?? []) as ManualParlayLegRow[]) {
+    const fixture = fixtureById.get(Number(leg.fixture_id));
+    if (!fixture || fixture.home_goals == null || fixture.away_goals == null) continue;
+
+    const marketText = parlayLegMarketText(leg, {
+      homeTeam: fixture.home_team_name,
+      awayTeam: fixture.away_team_name,
+    });
+    const legResult = calculateResult(
+      fixture.home_goals,
+      fixture.away_goals,
+      marketText,
+      null,
+      fixture.home_goals_ht,
+      fixture.away_goals_ht,
+    );
+    if (legResult === null) {
+      logger.warn(
+        { legId: leg.id, fixtureId: fixture.fixture_id, market: marketText },
+        "[SETTLEMENT] Manual leg tidak dapat dievaluasi — perlu review manual",
+      );
+      continue;
+    }
+
+    const { error: updateError } = await supabase
+      .from("parlay_legs")
+      .update({ result: legResult })
+      .eq("id", leg.id)
+      .is("result", null);
+    if (updateError) {
+      logger.error({ err: updateError, legId: leg.id }, "[SETTLEMENT] Gagal update manual parlay leg");
+      continue;
+    }
+    settledFixtureIds.add(fixture.fixture_id);
+    settledLegs++;
+  }
+
+  if (settledLegs > 0) {
+    logger.info(
+      { settledLegs, fixtures: [...settledFixtureIds] },
+      "[SETTLEMENT] Manual parlay legs diselesaikan",
+    );
+  }
+  return { settledLegs, fixtureIds: [...settledFixtureIds] };
+}
+
+/* ─────────────────────────────────────────
    Main runner — dipanggil oleh scheduler
    dan endpoint POST /api/sync/settle
 ───────────────────────────────────────── */
@@ -598,6 +594,11 @@ export async function runSettlement(options: {
 
   if (!completedFixtures?.length) {
     logger.info("[SETTLEMENT] Tidak ada fixture selesai dengan skor tersedia di DB");
+    /* Manual legs have no prediction, so they must still be settled here. */
+    const manualOnly = await settleManualParlayLegs([], options.fixtureIds);
+    if (manualOnly.fixtureIds.length > 0) {
+      await settleParlaysForFixtures(manualOnly.fixtureIds);
+    }
     await rebuildPerformanceLog();
     return { settled: 0, lessons: 0, skipped: 0 };
   }
@@ -774,16 +775,19 @@ export async function runSettlement(options: {
     }
 
     /*
-     * Update the parlay leg first. If this fails, the prediction remains
+     * Update the parlay legs that belong to THIS prediction. Scoping by
+     * fixture_id alone would overwrite manual legs on the same fixture that
+     * were placed on a different market (for example the AI picked Over 2.5
+     * while the user picked 1X2 Home). If this fails, the prediction remains
      * retryable and the parent parlay cannot be left with a null result.
      */
     const { error: legUpdateError } = await supabase
       .from("parlay_legs")
       .update({ result: betResult })
-      .eq("fixture_id", fixture.fixture_id)
+      .eq("prediction_id", prediction.id)
       .is("result", null);
     if (legUpdateError) {
-      logger.error({ err: legUpdateError, fixtureId: fixture.fixture_id }, "[SETTLEMENT] Gagal update hasil parlay leg");
+      logger.error({ err: legUpdateError, fixtureId: fixture.fixture_id, predictionId: prediction.id }, "[SETTLEMENT] Gagal update hasil parlay leg");
       skipped++;
       continue;
     }
@@ -824,7 +828,20 @@ export async function runSettlement(options: {
     lessons++;
   }
 
-  await settleParlaysForFixtures(completedFixtures.map((fixture) => fixture.fixture_id));
+  /*
+   * Manual parlay legs (prediction_id IS NULL) have no AI prediction to drive
+   * settlement, so they are settled here from the finished fixture using the
+   * leg's own market/selection. Without this pass a mixed AI + manual parlay
+   * stays "active" forever once any manual leg is on a fixture that has no
+   * active prediction.
+   */
+  const manualLegs = await settleManualParlayLegs(completedFixtures, options.fixtureIds);
+  const parlayFixtureIds = Array.from(new Set([
+    ...completedFixtures.map((fixture) => fixture.fixture_id),
+    ...manualLegs.fixtureIds,
+  ]));
+
+  await settleParlaysForFixtures(parlayFixtureIds);
 
   /* M6: AI Feedback Loop — rebuild aggregates from durable lessons. */
   await rebuildPerformanceLog();

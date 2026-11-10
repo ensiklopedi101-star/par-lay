@@ -80,9 +80,12 @@ ALTER TABLE public.parlay_legs
   FOREIGN KEY (fixture_id) REFERENCES public.fixtures(fixture_id)
   ON DELETE SET NULL;
 
--- NOTE: odds_history.match_id berisi ID acak dari provider odds (bukan fixture_id).
--- Tidak dibuat FK ke fixtures karena tipe dan referensi tidak cocok.
--- Hanya index di atas yang digunakan untuk performa query.
+-- NOTE (diperbarui): odds_history.match_id SEBENARNYA berisi fixture_id dari
+-- provider (INTEGER) yang disimpan sebagai TEXT. Audit 2026-11-09 terhadap
+-- database produksi menemukan 465 dari 500 id sampel cocok dengan
+-- fixtures.fixture_id, jadi join ke fixtures memang valid.
+-- FK tetap belum dibuat semata karena beda tipe (TEXT vs INTEGER); kolom yang
+-- di-index di atas dipakai untuk performa query.
 
 -- NOTE: odds_movement_history.fixture_id bertipe TEXT sedangkan fixtures.fixture_id
 -- bertipe INTEGER. Sebelum FK bisa dibuat, kolom harus disamakan tipenya (ALTER COLUMN)
