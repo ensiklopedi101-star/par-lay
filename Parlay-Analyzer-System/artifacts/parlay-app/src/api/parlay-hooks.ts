@@ -57,13 +57,69 @@ async function apiAdminGet<T>(url: string): Promise<T> {
 }
 
 /* ─── Shared Types ─── */
+/**
+ * Satu baris riwayat sync (`sync_runs`) yang sudah dinormalkan server.
+ * Dipakai untuk menampilkan apa yang sebenarnya terjadi saat sync berjalan:
+ * berapa event ditarik, berapa tersimpan, berapa error, berapa detik kena
+ * rate limit.
+ */
+export interface SyncRunSummary {
+  id: number | null;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  /** `null` bila run belum selesai. */
+  durationMs: number | null;
+  leagues: string[];
+  leagueCount: number;
+  eventsFetched: number;
+  eventsInserted: number;
+  oddsFetched: number;
+  errors: number;
+  rateLimitedSeconds: number;
+  errorMessage: string | null;
+  /** Proporsi event tersimpan dari yang ditarik (0–1), `null` bila nol. */
+  insertRatio: number | null;
+  /** Penjelasan bila tidak ada event tersimpan meski ada yang ditarik. */
+  zeroInsertReason?: string | null;
+}
+
+/**
+ * Ringkasan proses settlement — lihat `services/settlement-summary.ts`.
+ * Semua angka dihitung di server; klien hanya menampilkan.
+ */
+export interface SettlementSummary {
+  predictions: { total: number; settled: number; pending: number; noBet: number };
+  selections: { total: number; settled: number; pending: number; noBet: number };
+  outcomes: { outcome: string; count: number }[];
+  coverage: { withClosingOdds: number; withOutcome: number; betRows: number; total: number };
+  /** Fixture yang sudah lewat tetapi belum punya skor akhir. */
+  fixturesMissingScore: number;
+  fixturesScored: number;
+  generatedAt: string;
+  /** Penjelasan jujur apa yang belum bisa dihitung dan kenapa. */
+  notes: string[];
+}
+
 export interface SyncStatus {
   isRunning: boolean;
   totalEvents: number;
   configuredLeagueCount?: number;
   configuredLeagues?: string[];
   lastSyncAt?: string;
+  lastSyncStatus?: string | null;
   leagueBreakdown?: { leagueSlug: string; eventCount: number }[];
+
+  /** ─── Transparansi (baru) ─── */
+  lastSyncRun?: SyncRunSummary | null;
+  recentSyncRuns?: SyncRunSummary[];
+  /** Umur run yang masih berstatus `running`, dalam detik. */
+  runningAgeSeconds?: number | null;
+  /** `true` bila ada run `running` yang umurnya melewati ambang (proses mati). */
+  staleRunning?: boolean;
+  staleThresholdSeconds?: number;
+  /** Jendela pemindaian fixture dalam hari (dari `scheduler_config.scan_days`). */
+  scanDays?: number;
 }
 
 export interface Health {
@@ -384,6 +440,15 @@ export function useGetSyncStatus() {
   return useQuery<SyncStatus>({
     queryKey: getGetSyncStatusQueryKey(),
     queryFn: () => apiGet<SyncStatus>(`${API_BASE}/sync/status`),
+  });
+}
+
+/* ─── Ringkasan Settlement ─── */
+export const getGetSettlementSummaryQueryKey = () => ["sync/settlement-summary"];
+export function useGetSettlementSummary() {
+  return useQuery<SettlementSummary>({
+    queryKey: getGetSettlementSummaryQueryKey(),
+    queryFn: () => apiGet<SettlementSummary>(`${API_BASE}/sync/settlement-summary`),
   });
 }
 

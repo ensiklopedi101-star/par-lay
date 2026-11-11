@@ -15788,14 +15788,14 @@ var require_object_inspect = __commonJS({
     var gPO = (typeof Reflect === "function" ? Reflect.getPrototypeOf : Object.getPrototypeOf) || ([].__proto__ === Array.prototype ? function(O) {
       return O.__proto__;
     } : null);
-    function addNumericSeparator(num, str) {
-      if (num === Infinity || num === -Infinity || num !== num || num && num > -1e3 && num < 1e3 || $test.call(/e/, str)) {
+    function addNumericSeparator(num2, str) {
+      if (num2 === Infinity || num2 === -Infinity || num2 !== num2 || num2 && num2 > -1e3 && num2 < 1e3 || $test.call(/e/, str)) {
         return str;
       }
       var sepRegex = /[0-9](?=(?:[0-9]{3})+(?![0-9]))/g;
-      if (typeof num === "number") {
-        var int = num < 0 ? -$floor(-num) : $floor(num);
-        if (int !== num) {
+      if (typeof num2 === "number") {
+        var int = num2 < 0 ? -$floor(-num2) : $floor(num2);
+        if (int !== num2) {
           var intStr = String(int);
           var dec = $slice.call(str, intStr.length + 1);
           return $replace.call(intStr, sepRegex, "$&_") + "." + $replace.call($replace.call(dec, /([0-9]{3})/g, "$&_"), /_$/, "");
@@ -26520,14 +26520,14 @@ var require_tools = __commonJS({
       }
       return point < 32 ? JSON.stringify(str) : '"' + result2 + '"';
     }
-    function asJson(obj, msg, num, time) {
+    function asJson(obj, msg, num2, time) {
       if (asJsonChan.hasSubscribers === false) {
-        return _asJson.call(this, obj, msg, num, time);
+        return _asJson.call(this, obj, msg, num2, time);
       }
       const store = { instance: this, arguments };
-      return asJsonChan.traceSync(_asJson, store, this, obj, msg, num, time);
+      return asJsonChan.traceSync(_asJson, store, this, obj, msg, num2, time);
     }
-    function _asJson(obj, msg, num, time) {
+    function _asJson(obj, msg, num2, time) {
       const stringify2 = this[stringifySym];
       const stringifySafe = this[stringifySafeSym];
       const stringifiers = this[stringifiersSym];
@@ -26537,7 +26537,7 @@ var require_tools = __commonJS({
       const formatters = this[formattersSym];
       const messageKey = this[messageKeySym];
       const errorKey = this[errorKeySym];
-      let data = this[lsCacheSym][num] + time;
+      let data = this[lsCacheSym][num2] + time;
       data = data + chindings;
       let value;
       if (formatters.log) {
@@ -27163,7 +27163,7 @@ var require_proto = __commonJS({
     function defaultMixinMergeStrategy(mergeObject, mixinObject) {
       return Object.assign(mixinObject, mergeObject);
     }
-    function write(_obj, msg, num) {
+    function write(_obj, msg, num2) {
       const t = this[timeSym]();
       const mixin = this[mixinSym];
       const errorKey = this[errorKeySym];
@@ -27185,12 +27185,12 @@ var require_proto = __commonJS({
         }
       }
       if (mixin) {
-        obj = mixinMergeStrategy(obj, mixin(obj, num, this));
+        obj = mixinMergeStrategy(obj, mixin(obj, num2, this));
       }
-      const s = this[asJsonSym](obj, msg, num, t);
+      const s = this[asJsonSym](obj, msg, num2, t);
       const stream = this[streamSym];
       if (stream[needsMetadataGsym] === true) {
-        stream.lastLevel = num;
+        stream.lastLevel = num2;
         stream.lastObj = obj;
         stream.lastMsg = msg;
         stream.lastTime = t.slice(this[timeSliceIndexSym]);
@@ -55539,7 +55539,7 @@ function parseLearningPolicy(value) {
     (market) => MARKET_FAMILIES.includes(market)
   ) : [];
   return {
-    minConfidence: Number.isFinite(minConfidence) ? Math.min(9.5, Math.max(6.5, minConfidence)) : BASELINE_LEARNING_POLICY.minConfidence,
+    minConfidence: Number.isFinite(minConfidence) ? Math.min(9.5, Math.max(0, minConfidence)) : BASELINE_LEARNING_POLICY.minConfidence,
     minEvPercent: Number.isFinite(minEvPercent) ? Math.min(20, Math.max(0, minEvPercent)) : BASELINE_LEARNING_POLICY.minEvPercent,
     excludedMarketFamilies: Array.from(new Set(excluded))
   };
@@ -55553,7 +55553,7 @@ function isPolicyNoWeaker(candidate, baseline) {
 function buildLearningPolicyAddendum(policyInput) {
   const policy = parseLearningPolicy(policyInput);
   const rules = [
-    `JANGAN memilih rekomendasi dengan confidence di bawah ${policy.minConfidence.toFixed(1)}/10.`,
+    ...policy.minConfidence > 0 ? [`JANGAN memilih rekomendasi dengan confidence di bawah ${policy.minConfidence.toFixed(1)}/10.`] : [`Confidence BUKAN gerbang keputusan. Nilai keputusan adalah EV setelah dihitung ulang server; laporkan confidence apa adanya.`],
     `JANGAN memilih rekomendasi dengan EV di bawah ${policy.minEvPercent.toFixed(1)}%.`
   ];
   if (policy.excludedMarketFamilies.length > 0) {
@@ -55647,7 +55647,7 @@ var init_learning_policy = __esm({
     "use strict";
     MARKET_FAMILIES = ["ML", "HT", "Totals", "AH", "BTTS"];
     BASELINE_LEARNING_POLICY = {
-      minConfidence: 6.5,
+      minConfidence: 0,
       minEvPercent: 0,
       excludedMarketFamilies: []
     };
@@ -57248,7 +57248,7 @@ ${repaired.text}`;
   const policyRejectedConfidence = parsedRecommendation.confidence < aiConfig.learningPolicy.minConfidence;
   const policyRejectedEv = computedEvPercent < aiConfig.learningPolicy.minEvPercent;
   const recommendationIsEligible = Boolean(
-    verifiedOdds != null && parsedRecommendation.probability != null && parsedRecommendation.probability > 0 && parsedRecommendation.probability < 1 && parsedRecommendation.confidence >= 6.5 && computedEvPercent > 0 && !policyRejectedConfidence && !policyRejectedEv && !policyRejectedMarket
+    verifiedOdds != null && parsedRecommendation.probability != null && parsedRecommendation.probability > 0 && parsedRecommendation.probability < 1 && computedEvPercent > 0 && !policyRejectedConfidence && !policyRejectedEv && !policyRejectedMarket
   );
   const recommendation = recommendationIsEligible ? {
     ...parsedRecommendation,
@@ -57260,7 +57260,7 @@ ${repaired.text}`;
     odds: 0,
     evPercent: 0
   };
-  const rejectionReason = parsedRecommendation.marketBet == null ? "AI tidak memilih market taruhan." : verifiedOdds == null ? oddsMatch?.reason ?? "Market rekomendasi AI tidak dapat dipetakan ke odds snapshot provider." : parsedRecommendation.probability == null || parsedRecommendation.probability <= 0 || parsedRecommendation.probability >= 1 ? "Probabilitas nyata eksplisit tidak valid; confidence tidak digunakan sebagai probabilitas." : parsedRecommendation.confidence < 6.5 ? "Confidence di bawah ambang minimum 6.5." : computedEvPercent <= 0 ? "EV hasil perhitungan ulang tidak positif." : policyRejectedConfidence ? `Confidence di bawah kebijakan aktif ${aiConfig.learningPolicy.minConfidence.toFixed(1)}.` : policyRejectedEv ? `EV di bawah kebijakan aktif ${aiConfig.learningPolicy.minEvPercent.toFixed(1)}%.` : policyRejectedMarket ? `Keluarga market ${learningMarketFamily} diblokir oleh kebijakan aktif.` : void 0;
+  const rejectionReason = parsedRecommendation.marketBet == null ? "AI tidak memilih market taruhan." : verifiedOdds == null ? oddsMatch?.reason ?? "Market rekomendasi AI tidak dapat dipetakan ke odds snapshot provider." : parsedRecommendation.probability == null || parsedRecommendation.probability <= 0 || parsedRecommendation.probability >= 1 ? "Probabilitas nyata eksplisit tidak valid; confidence tidak digunakan sebagai probabilitas." : computedEvPercent <= 0 ? "EV hasil perhitungan ulang tidak positif." : policyRejectedConfidence ? `Confidence di bawah kebijakan aktif ${aiConfig.learningPolicy.minConfidence.toFixed(1)}.` : policyRejectedEv ? `EV di bawah kebijakan aktif ${aiConfig.learningPolicy.minEvPercent.toFixed(1)}%.` : policyRejectedMarket ? `Keluarga market ${learningMarketFamily} diblokir oleh kebijakan aktif.` : void 0;
   const hasValidProbability = parsedRecommendation.probability != null && parsedRecommendation.probability > 0 && parsedRecommendation.probability < 1;
   const hasTechnicalGap = Boolean(
     parsedRecommendation.marketBet && (verifiedOdds == null || !hasValidProbability)
@@ -57456,9 +57456,10 @@ PRINSIP INTI:
 1. Expected Value (EV) matematis murni: (1 / Odds) \xD7 100% = probabilitas implisit bandar. Jika probabilitas nyata > implisit bandar \u2192 EV positif.
 2. Sharp Money Detection: pergerakan odds signifikan (turun) menunjukkan informasi orang dalam.
 3. Psychological Momentum: bentuk 5 pertandingan terakhir, H2H, klasemen, derbi, dll.
-4. Confidence Level: JANGAN pernah merekomendasikan dengan confidence < 6.5/10.
+4. AMBANG KEPUTUSAN ADALAH EV, BUKAN CONFIDENCE. Angka probabilitas dan EV yang Anda hasilkan akan diperiksa ulang oleh mesin kuantitatif yang menghitung EV konservatif (EV dikurangi margin ketidakpastian \u03C3\xB7odds). Selection hanya dianggap layak bila EV \u2265 3% DAN EV konservatif > 0. Confidence 7/10 dengan EV +0.5% tetap ditolak; confidence 6/10 dengan EV +6% yang bertahan setelah margin tetap lolos. Laporkan confidence sebagai keterangan, bukan sebagai gerbang.
 5. HIERARKI RESOLUSI KONFLIK: Jika terjadi konflik antara statistik historis (11 laci) dan pergerakan pasar kontemporer (Sharp Money), prioritaskan efisiensi harga pasar terkini jika penurunan odds melebihi threshold 0.10, karena pergerakan drastis menandakan adanya variabel fundamental baru (cedera pemain kunci mendadak, rotasi tak terduga) yang belum terekam oleh statistik masa lalu.
 6. PRIORITAS DATA MUSIM: Jika musim baru baru berjalan < 6 pertandingan, data musim lalu menjadi jangkar utama karena sampel musim berjalan terlalu kecil. Setelah tim memainkan \u2265 6 pertandingan di musim berjalan, data musim berjalan menjadi prioritas penuh dan data musim lalu hanya menjadi referensi sekunder.
+7. JUJUR SOAL KETIDAKPASTIAN: Bila data tidak cukup (sampel kecil, statistik tim kosong, odds tidak tersedia), katakan begitu dan turunkan keyakinan. Lebih baik satu NO BET yang jujur daripada satu AMBIL yang dasarnya hanya tebakan. Sistem ini menilai kualitas alasan, bukan jumlah rekomendasi.
 
 INPUT DATA:
 - 11 statistik JSONB (xG, form, BTTS, Over, Under, Shots, HT, dll)
@@ -57466,7 +57467,7 @@ INPUT DATA:
 - Tren pergerakan odds (histori snapshot)
 - Pelajaran dari settlement (lessons_learned \u2014 RAG)
 - Klasemen liga (jika tersedia)
-- Performance log (hit rate dan ROI terakhir \u2014 jika tersedia)
+Catatan: performance log (hit rate/ROI jangka pendek) SENGAJA tidak diberikan. Jangan menebak atau mengarang angka performa terakhir; dasarkan penilaian hanya pada data yang benar-benar ada di atas.
 
 ANALISIS TREN PASAR:
 Interpretasikan pergerakan odds. Perhatikan:
@@ -57517,16 +57518,37 @@ OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
 }
 
 VALIDATION GATE:
-- Bandingkan semua market yang tersedia (ML, HT, Totals, AH, BTTS) sebelum memilih.
+- Bandingkan SEMUA market yang tersedia (ML, HT, Totals, AH, BTTS) sebelum memilih. Jangan berhenti di market pertama yang terlihat bagus.
 - Market harus berasal dari snapshot provider. Totals dan Asian Handicap wajib memakai line yang
   cocok persis; jika line tidak tersedia atau berbeda, gunakan NO_BET.
 - Keluarkan market sebagai field terstruktur: market_type harus ML, HT, Totals, AH, atau BTTS;
   outcome harus home/draw/away, over/under, atau yes/no sesuai market; line harus angka persis dari provider
   untuk Totals/AH dan null untuk market lain. Jangan mengarang nama market atau line.
 - Probability wajib eksplisit, 0 < probability < 1, dan bukan confidence atau probabilitas implisit.
-- Hitung ulang EV = (probability \xD7 odds provider) - 1. Jika EV tidak positif atau confidence < 6.5, gunakan "NO_BET".
+- Hitung ulang EV = (probability \xD7 odds provider) - 1. Gunakan "NO_BET" bila EV tidak positif,
+  probability tidak valid, market/line tidak cocok, atau data terlalu tipis untuk dinilai.
 
-Field "probability" adalah probabilitas nyata untuk selection dalam angka 0-1, bukan confidence dan bukan probabilitas implisit bandar. Field ini wajib untuk selection selain NO_BET. Jika confidence < 6.5, probabilitas nyata tidak valid, market/line tidak cocok, atau EV tidak positif, gunakan selection "NO_BET".`;
+Field "probability" adalah probabilitas nyata untuk selection dalam angka 0-1, bukan confidence dan bukan probabilitas implisit bandar. Field ini wajib untuk selection selain NO_BET.
+
+GERBANG KEPUTUSAN (menggantikan ambang confidence):
+- Mesin kuantitatif memakai EV, bukan confidence. Selection layak bila EV \u2265 3% DAN EV konservatif > 0.
+- Jangan menolak selection hanya karena confidence berada di 6\u20136.5, bila EV-nya kuat dan bertahan.
+- Jangan menerima selection hanya karena confidence \u2265 8, bila EV-nya tipis.
+- NO BET ditujukan untuk data yang benar-benar tidak bisa dinilai \u2014 bukan untuk menghindari risiko.
+  Sistem ini dibuat untuk memilih sedikit leg dari puluhan kandidat dengan alasan yang bisa dipertanggungjawabkan,
+  bukan untuk menghindari semua taruhan. Kalah wajar; kalah tanpa alasan yang tidak.
+
+KOMPOSISI PARLAY (bila lebih dari satu selection tersedia):
+- Tujuan sistem ini adalah menyusun parlay dari beberapa leg yang dipilih dari puluhan kandidat market.
+- Urutkan kandidat berdasarkan EV konservatif, bukan EV mentah \u2014 EV mentah mudah menipu.
+- PERIKSA KORELASI antar leg sebelum menggabungkan:
+  * Over 2.5 dan BTTS Yes pada pertandingan yang SAMA saling memperkuat (korelatif positif).
+    Menggabungkannya menggelembungkan odds tanpa menambah edge nyata \u2014 hindari.
+  * ML Home dan Over pada pertandingan yang sama juga cenderung berkorelasi.
+  * Dua leg dari pertandingan BERBEDA yang tidak berhubungan memberi diversifikasi nyata.
+- Pilih 3\u20135 leg terbaik untuk parlay, bukan sebanyak mungkin. Setiap leg tambahan mengalikan variansi.
+- Leg dengan EV negatif tidak boleh dimasukkan hanya untuk menaikkan odds.
+- Bila hanya 1 leg yang layak, katakan demikian \u2014 parlay tunggal lebih jujur daripada memaksakan leg lemah.`;
     REQUIRED_STAT_KEYS = [
       "stats_xg",
       "stats_fts",
@@ -69441,8 +69463,8 @@ var require_utils4 = __commonJS({
 var require_sbmh = __commonJS({
   "../../node_modules/.pnpm/streamsearch@1.1.0/node_modules/streamsearch/lib/sbmh.js"(exports2, module2) {
     "use strict";
-    function memcmp(buf1, pos1, buf2, pos2, num) {
-      for (let i = 0; i < num; ++i) {
+    function memcmp(buf1, pos1, buf2, pos2, num2) {
+      for (let i = 0; i < num2; ++i) {
         if (buf1[pos1 + i] !== buf2[pos2 + i])
           return false;
       }
@@ -80495,7 +80517,193 @@ function reloadOddsSchedule(expression) {
   }
 }
 
+// src/services/settlement-summary.ts
+init_supabase_client();
+init_logger();
+var SETTLED_STATUSES = ["WIN", "LOSS", "PUSH", "HALF_WIN", "HALF_LOSS", "VOID"];
+function countsFrom(total, settled, noBet) {
+  return {
+    total,
+    settled,
+    noBet,
+    pending: Math.max(0, total - settled - noBet)
+  };
+}
+async function countWhere(client, table, apply) {
+  let query = client.from(table).select("*", { count: "exact", head: true });
+  if (apply) query = apply(query);
+  const { count, error } = await query;
+  if (error) {
+    logger.debug({ error, table }, "Settlement count gagal");
+    return 0;
+  }
+  return count ?? 0;
+}
+async function buildSettlementSummary(options = {}) {
+  const client = options.supabase ?? supabase;
+  const notes = [];
+  const empty = {
+    predictions: { total: 0, settled: 0, pending: 0, noBet: 0 },
+    selections: { total: 0, settled: 0, pending: 0, noBet: 0 },
+    outcomes: [],
+    coverage: { withClosingOdds: 0, withOutcome: 0, betRows: 0, total: 0 },
+    fixturesMissingScore: 0,
+    fixturesScored: 0,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    notes: ["Supabase tidak tersedia \u2014 ringkasan settlement tidak bisa dihitung."]
+  };
+  if (!client) return empty;
+  const predTotal = await countWhere(client, "ai_predictions");
+  const predSettled = await countWhere(
+    client,
+    "ai_predictions",
+    (q) => q.in("status", SETTLED_STATUSES)
+  );
+  const predNoBet = await countWhere(
+    client,
+    "ai_predictions",
+    (q) => q.eq("status", "no_bet")
+  );
+  const selTotal = await countWhere(client, "prediction_selections");
+  const selWithOutcome = await countWhere(
+    client,
+    "prediction_selections",
+    (q) => q.not("outcome", "is", null)
+  );
+  const selWithClose = await countWhere(
+    client,
+    "prediction_selections",
+    (q) => q.not("odds_close", "is", null)
+  );
+  const selBetRows = await countWhere(
+    client,
+    "prediction_selections",
+    (q) => q.eq("was_bet", true)
+  );
+  const outcomes = [];
+  try {
+    const { data } = await client.from("prediction_selections").select("outcome").not("outcome", "is", null).limit(5e3);
+    if (Array.isArray(data)) {
+      const tally = /* @__PURE__ */ new Map();
+      for (const row of data) {
+        const key = row.outcome ?? "unknown";
+        tally.set(key, (tally.get(key) ?? 0) + 1);
+      }
+      for (const [outcome, count] of Array.from(tally.entries()).sort((a, b) => b[1] - a[1])) {
+        outcomes.push({ outcome, count });
+      }
+    }
+  } catch (err) {
+    logger.debug({ err }, "Gagal membaca sebaran outcome");
+  }
+  let fixturesMissingScore = 0;
+  let fixturesScored = 0;
+  try {
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    fixturesScored = await countWhere(
+      client,
+      "fixtures",
+      (q) => q.lt("fixture_date", nowIso).not("home_goals", "is", null)
+    );
+    const pastTotal = await countWhere(
+      client,
+      "fixtures",
+      (q) => q.lt("fixture_date", nowIso)
+    );
+    fixturesMissingScore = Math.max(0, pastTotal - fixturesScored);
+  } catch (err) {
+    logger.debug({ err }, "Gagal menghitung fixture tanpa skor");
+  }
+  if (selTotal === 0) {
+    notes.push(
+      "Ledger quant (prediction_selections) masih kosong. Settlement ledger belum bisa dinilai sampai ada analisis nyata yang berjalan."
+    );
+  }
+  if (selTotal > 0 && selWithOutcome === 0) {
+    notes.push(
+      "Belum ada satu pun selection punya outcome. Job `?action=outcomes` perlu berjalan setelah fixture selesai dan skornya terisi."
+    );
+  }
+  if (selTotal > 0 && selWithClose === 0) {
+    notes.push(
+      "Belum ada odds_close terisi. Job `?action=closing` mengisinya 10 menit sebelum kick-off; tanpa ini CLV tidak bisa dihitung."
+    );
+  }
+  if (fixturesMissingScore > 0) {
+    notes.push(
+      `${fixturesMissingScore} fixture sudah lewat tetapi belum punya skor akhir. Fixture ini tidak akan pernah tersettle sampai skornya diisi.`
+    );
+  }
+  return {
+    predictions: countsFrom(predTotal, predSettled, predNoBet),
+    selections: countsFrom(selTotal, selWithOutcome, 0),
+    outcomes,
+    coverage: {
+      withClosingOdds: selWithClose,
+      withOutcome: selWithOutcome,
+      betRows: selBetRows,
+      total: selTotal
+    },
+    fixturesMissingScore,
+    fixturesScored,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    notes
+  };
+}
+
 // src/routes/config.ts
+var STALE_RUN_SECONDS = 10 * 60;
+var SYNC_HISTORY_LIMIT = 12;
+var SYNC_RUN_COLUMNS = [
+  "id",
+  "started_at",
+  "finished_at",
+  "status",
+  "leagues",
+  "events_fetched",
+  "events_inserted",
+  "odds_fetched",
+  "errors",
+  "rate_limited_seconds",
+  "error_message",
+  "created_at"
+].join(", ");
+function num(value) {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+function toSyncRunSummary(input) {
+  const row = input ?? {};
+  const startedAt = row["started_at"] ?? row["created_at"] ?? (/* @__PURE__ */ new Date()).toISOString();
+  const finishedAt = row["finished_at"] ?? null;
+  const startMs = new Date(startedAt).getTime();
+  const endMs = finishedAt ? new Date(finishedAt).getTime() : NaN;
+  const durationMs = Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : null;
+  const eventsFetched = num(row["events_fetched"]);
+  const eventsInserted = num(row["events_inserted"]);
+  const leagues = Array.isArray(row["leagues"]) ? row["leagues"] : [];
+  return {
+    id: row["id"] != null ? num(row["id"]) : null,
+    status: row["status"] ?? "unknown",
+    startedAt,
+    finishedAt,
+    durationMs,
+    leagues,
+    leagueCount: leagues.length,
+    eventsFetched,
+    eventsInserted,
+    oddsFetched: num(row["odds_fetched"]),
+    errors: num(row["errors"]),
+    rateLimitedSeconds: num(row["rate_limited_seconds"]),
+    errorMessage: row["error_message"] ?? null,
+    insertRatio: eventsFetched > 0 ? eventsInserted / eventsFetched : null,
+    zeroInsertReason: explainZeroInsert(eventsFetched, eventsInserted)
+  };
+}
+function explainZeroInsert(fetched, inserted) {
+  if (fetched <= 0 || inserted > 0) return null;
+  return `Tidak ada event baru yang masuk jendela pemindaian. Provider mengembalikan ${fetched} event, tetapi semuanya jatuh di luar jendela (atau sudah tersinkron sebelumnya). Ini normal saat liga sedang jeda atau jadwal belum dirilis \u2014 bukan kegagalan. Perbesar scan_days bila ingin jendela lebih jauh.`;
+}
 var LEAGUES_CATALOG = [
   { slug: "england-premier-league", name: "Premier League", country: "Inggris" },
   { slug: "england-championship", name: "Championship", country: "Inggris" },
@@ -80671,10 +80879,31 @@ router3.post("/sync/reanalyze", requireAdmin, async (req, res) => {
     res.status(500).json({ error: "Triggered AI re-analysis failed" });
   }
 });
-router3.get("/sync/status", async (_req, res) => {
+router3.get("/sync/settlement-summary", async (_req, res) => {
   try {
-    const { data: schedulerConfig } = await supabase.from("scheduler_config").select("leagues").limit(1).maybeSingle();
+    const summary = await buildSettlementSummary();
+    res.json(summary);
+  } catch (err) {
+    logger.error({ err }, "Gagal membangun ringkasan settlement");
+    res.status(500).json({
+      error: "Gagal membangun ringkasan settlement",
+      detail: err instanceof Error ? err.message : String(err)
+    });
+  }
+});
+router3.get("/sync/status", async (_req, res) => {
+  if (!supabase) {
+    res.status(503).json({
+      error: "Supabase tidak terkonfigurasi",
+      detail: "SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY harus tersedia agar status sync bisa dibaca.",
+      configured: false
+    });
+    return;
+  }
+  try {
+    const { data: schedulerConfig } = await supabase.from("scheduler_config").select("leagues, scan_days").limit(1).maybeSingle();
     const configuredLeagues = Array.isArray(schedulerConfig?.leagues) ? schedulerConfig.leagues : [];
+    const scanDays = typeof schedulerConfig?.scan_days === "number" && schedulerConfig.scan_days >= 1 ? schedulerConfig.scan_days : 10;
     const { count: totalCount, error: countErr } = await supabase.from("fixtures").select("*", { count: "exact", head: true });
     if (countErr) {
       logger.error({ error: countErr }, "Failed to count fixtures");
@@ -80689,17 +80918,23 @@ router3.get("/sync/status", async (_req, res) => {
     }
     let lastSyncAt = null;
     let lastSyncStatus = null;
+    let lastSyncRun = null;
+    let recentSyncRuns = [];
     try {
-      const { data: lastSync } = await supabase.from("sync_runs").select("finished_at, status").order("created_at", { ascending: false }).limit(1).maybeSingle();
-      if (lastSync) {
-        lastSyncAt = lastSync.finished_at ?? null;
-        lastSyncStatus = lastSync.status ?? null;
+      const { data: runs } = await supabase.from("sync_runs").select(SYNC_RUN_COLUMNS).order("created_at", { ascending: false }).limit(SYNC_HISTORY_LIMIT);
+      if (Array.isArray(runs) && runs.length > 0) {
+        recentSyncRuns = runs.map(toSyncRunSummary);
+        lastSyncRun = recentSyncRuns[0] ?? null;
+        lastSyncAt = lastSyncRun.finishedAt ?? lastSyncRun.startedAt;
+        lastSyncStatus = lastSyncRun.status;
       }
     } catch (err) {
-      logger.debug({ err }, "sync_runs table not available, falling back to fixtures.updated_at");
+      logger.debug({ err }, "sync_runs tidak tersedia, memakai fixtures.updated_at");
       const { data: fallback } = await supabase.from("fixtures").select("updated_at").order("updated_at", { ascending: false }).limit(1).maybeSingle();
       lastSyncAt = fallback?.updated_at ?? null;
     }
+    const runningRun = recentSyncRuns.find((r) => r.status === "running") ?? null;
+    const runningAgeSeconds = runningRun ? Math.max(0, Math.round((Date.now() - new Date(runningRun.startedAt).getTime()) / 1e3)) : null;
     res.json({
       totalEvents: totalCount ?? 0,
       configuredLeagueCount: configuredLeagues.length,
@@ -80710,7 +80945,17 @@ router3.get("/sync/status", async (_req, res) => {
       leagueBreakdown: Array.from(leagueMap.entries()).map(([leagueSlug, eventCount]) => ({
         leagueSlug,
         eventCount
-      }))
+      })),
+      /* ─── Detail transparansi (baru) ─── */
+      lastSyncRun,
+      recentSyncRuns,
+      scanDays,
+      runningAgeSeconds,
+      /* `true` bila ada run berstatus `running` yang umurnya melewati ambang —
+       * tanda prosesnya mati, bukan sedang berjalan. */
+      staleRunning: runningAgeSeconds != null && runningAgeSeconds > STALE_RUN_SECONDS,
+      staleThresholdSeconds: STALE_RUN_SECONDS,
+      historyLimit: SYNC_HISTORY_LIMIT
     });
   } catch (err) {
     logger.error({ err }, "Failed to get sync status");
@@ -82695,13 +82940,13 @@ function detectOverUnder(headers) {
     const underMatch = norm.match(/under\s*(\d\.\d)/);
     const overMatch = norm.match(/over\s*(\d\.\d)/);
     if (underMatch) {
-      const num = parseFloat(underMatch[1]);
-      if (num > 5.5) continue;
+      const num2 = parseFloat(underMatch[1]);
+      if (num2 > 5.5) continue;
       const key = `under_${underMatch[1].replace(".", "")}_pct`;
       map[key] = h;
     } else if (overMatch) {
-      const num = parseFloat(overMatch[1]);
-      if (num > 5.5) continue;
+      const num2 = parseFloat(overMatch[1]);
+      if (num2 > 5.5) continue;
       const key = `over_${overMatch[1].replace(".", "")}_pct`;
       map[key] = h;
     }
@@ -82714,8 +82959,8 @@ function detectShots(headers) {
     const norm = normalizeHeader(h);
     const m = norm.match(/over\s*(\d\.\d)/);
     if (m) {
-      const num = parseFloat(m[1]);
-      if (num >= 10.5) {
+      const num2 = parseFloat(m[1]);
+      if (num2 >= 10.5) {
         const key = `shots_over_${m[1].replace(".", "")}_pct`;
         map[key] = h;
       }

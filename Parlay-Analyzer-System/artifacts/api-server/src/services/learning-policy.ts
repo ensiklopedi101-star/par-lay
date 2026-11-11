@@ -32,8 +32,22 @@ export interface PolicyBacktestMetrics {
   brierSampleSize: number;
 }
 
+/**
+ * Kebijakan dasar.
+ *
+ * `minConfidence` sengaja 0: confidence adalah penilaian subjektif model,
+ * bukan bukti. Gerbang keputusan yang sebenarnya adalah EV — dihitung ulang
+ * di server, lalu diperketat lagi oleh mesin kuantitatif lewat EV konservatif
+ * (EV dikurangi σ·odds). Menjadikan confidence sebagai gerbang menolak
+ * rekomendasi yang EV-nya kuat hanya karena angkanya 6.0, dan itu berujung
+ * pada NO_BET berlebihan tanpa alasan statistik.
+ *
+ * Nilai ini tetap bisa dinaikkan admin lewat kebijakan belajar terkontrol
+ * bila data backtest benar-benar mendukungnya — tetapi tidak lagi menjadi
+ * gerbang bawaan.
+ */
 export const BASELINE_LEARNING_POLICY: LearningPolicy = {
-  minConfidence: 6.5,
+  minConfidence: 0,
   minEvPercent: 0,
   excludedMarketFamilies: [],
 };
@@ -48,7 +62,7 @@ export function parseLearningPolicy(value: unknown): LearningPolicy {
       )
     : [];
   return {
-    minConfidence: Number.isFinite(minConfidence) ? Math.min(9.5, Math.max(6.5, minConfidence)) : BASELINE_LEARNING_POLICY.minConfidence,
+    minConfidence: Number.isFinite(minConfidence) ? Math.min(9.5, Math.max(0, minConfidence)) : BASELINE_LEARNING_POLICY.minConfidence,
     minEvPercent: Number.isFinite(minEvPercent) ? Math.min(20, Math.max(0, minEvPercent)) : BASELINE_LEARNING_POLICY.minEvPercent,
     excludedMarketFamilies: Array.from(new Set(excluded)),
   };
@@ -69,7 +83,9 @@ export function isPolicyNoWeaker(candidate: LearningPolicy, baseline: LearningPo
 export function buildLearningPolicyAddendum(policyInput: unknown): string {
   const policy = parseLearningPolicy(policyInput);
   const rules = [
-    `JANGAN memilih rekomendasi dengan confidence di bawah ${policy.minConfidence.toFixed(1)}/10.`,
+    ...(policy.minConfidence > 0
+      ? [`JANGAN memilih rekomendasi dengan confidence di bawah ${policy.minConfidence.toFixed(1)}/10.`]
+      : [`Confidence BUKAN gerbang keputusan. Nilai keputusan adalah EV setelah dihitung ulang server; laporkan confidence apa adanya.`]),
     `JANGAN memilih rekomendasi dengan EV di bawah ${policy.minEvPercent.toFixed(1)}%.`,
   ];
   if (policy.excludedMarketFamilies.length > 0) {
