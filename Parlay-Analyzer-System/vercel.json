@@ -22,7 +22,7 @@
   ],
   "crons": [
     {
-      "path": "/api/cron?action=sync",
+      "path": "/api/cron?action=daily",
       "schedule": "0 6 * * *"
     }
   ]

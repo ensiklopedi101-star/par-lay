@@ -6,6 +6,7 @@ import { requireAdmin } from "../middlewares/admin";
 import cron from "node-cron";
 import { reloadOddsSchedule } from "../scheduler";
 import { buildSettlementSummary } from "../services/settlement-summary";
+import { buildAutomationStatus } from "../services/automation-status";
 
 /**
  * ─── Transparansi sync ────────────────────────────────────────────────────
@@ -343,6 +344,51 @@ router.post("/sync/reanalyze", requireAdmin, async (req, res) => {
   } catch (err) {
     logger.error({ err }, "Triggered AI re-analysis failed");
     res.status(500).json({ error: "Triggered AI re-analysis failed" });
+  }
+});
+
+/**
+ * Jadwal yang dideklarasikan di `vercel.json`.
+ *
+ * Disalin, bukan dibaca dari disk: berkas itu berada di luar paket api-server
+ * dan tidak ikut ter-bundel ke fungsi serverless. Bila `vercel.json` diubah,
+ * salinan ini harus ikut diubah — dan laporan otomatisasi akan menunjukkan
+ * ketidakcocokan sebagai celah, bukan diam-diam menganggapnya beres.
+ */
+const DECLARED_VERCEL_CRONS: Array<{ path: string; schedule: string }> = [
+  { path: "/api/cron?action=daily", schedule: "0 6 * * *" },
+];
+
+/**
+ * Jadwal `node-cron` di `scheduler/index.ts`.
+ *
+ * Dicatat **hanya** untuk menjelaskan: jadwal ini tidak pernah berjalan di
+ * Vercel karena `startScheduler()` dilewati ketika `PORT` tidak diset.
+ * Menampilkannya membuat sebab kegagalan terbaca, bukan sekadar "tidak ada".
+ */
+const DECLARED_NODE_CRON: Array<{ action: string; schedule: string }> = [
+  { action: "results", schedule: "0 6 * * *" },
+  { action: "closing", schedule: "*/5 * * * *" },
+  { action: "outcomes", schedule: "20 * * * *" },
+];
+
+/**
+ * GET /sync/automation-status — apakah rantai otomatis benar-benar hidup.
+ *
+ * Menjawab pertanyaan yang tidak bisa dijawab panel sync: bukan "kapan sync
+ * terakhir", melainkan "tugas mana yang tidak akan pernah berjalan sendiri".
+ * Hanya membaca.
+ */
+router.get("/sync/automation-status", async (_req, res) => {
+  try {
+    const status = await buildAutomationStatus({
+      vercelCrons: DECLARED_VERCEL_CRONS,
+      nodeCronSchedules: DECLARED_NODE_CRON,
+    });
+    res.json(status);
+  } catch (err) {
+    logger.error({ err }, "Gagal menyusun status otomatisasi");
+    res.status(500).json({ error: "Gagal menyusun status otomatisasi" });
   }
 });
 

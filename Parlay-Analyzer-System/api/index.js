@@ -80651,6 +80651,136 @@ async function buildSettlementSummary(options = {}) {
   };
 }
 
+// src/services/automation-status.ts
+init_supabase_client();
+init_logger();
+var HOBBY_CRON_LIMIT = 2;
+var REQUIRED_SCHEDULED_ACTIONS = ["sync", "results", "closing", "outcomes"];
+function estimateRunsPerDay(expression) {
+  const parts = expression.trim().split(/\s+/);
+  if (parts.length !== 5) return 1;
+  const [minute, hour] = parts;
+  const stepCount = (field, span) => {
+    const step = /^\*\/(\d+)$/.exec(field);
+    if (step) {
+      const n = Number(step[1]);
+      return n > 0 ? Math.floor(span / n) : null;
+    }
+    return null;
+  };
+  const minuteSteps = stepCount(minute, 60);
+  if (minuteSteps !== null && (hour === "*" || stepCount(hour, 24) !== null)) {
+    return minuteSteps * (stepCount(hour, 24) ?? 1) * 24;
+  }
+  const hourSteps = stepCount(hour, 24);
+  if (hourSteps !== null) return hourSteps;
+  if (hour === "*") return 24;
+  return 1;
+}
+var COMPOSITE_ACTIONS = {
+  daily: ["sync", "results", "closing", "outcomes"]
+};
+function buildCronTriggers(input) {
+  const triggers = [];
+  for (const cron3 of input.vercelCrons) {
+    const match = /action=([a-z-]+)/i.exec(cron3.path);
+    if (!match) continue;
+    const action = match[1].toLowerCase();
+    triggers.push({
+      action,
+      schedule: cron3.schedule,
+      source: "vercel",
+      runsPerDay: estimateRunsPerDay(cron3.schedule),
+      covers: [action, ...COMPOSITE_ACTIONS[action] ?? []]
+    });
+  }
+  for (const entry of input.nodeCronSchedules ?? []) {
+    triggers.push({
+      action: entry.action,
+      schedule: entry.schedule,
+      source: "node-cron",
+      runsPerDay: estimateRunsPerDay(entry.schedule),
+      covers: [entry.action]
+    });
+  }
+  return triggers;
+}
+var CONSEQUENCE = {
+  sync: "Tanpa sync, tidak ada fixture maupun harga baru. Semua analisis berhenti di data lama.",
+  results: "Tanpa penarikan hasil, fixture selesai tetap berstatus `pending` selamanya. Tidak ada skor \u2192 tidak ada settlement \u2192 tidak ada outcome \u2192 tidak ada data untuk menilai sistem.",
+  closing: "Tanpa penangkapan odds penutup, CLV tidak bisa dihitung, sehingga tidak bisa dibedakan menang karena model bagus atau karena harga bergerak menguntungkan.",
+  outcomes: "Tanpa pengisian outcome, ledger quant tidak pernah punya hasil dan Fase 3 tidak bisa dievaluasi."
+};
+function maxGapHoursOf(triggers) {
+  const daily = triggers.filter((trigger) => trigger.runsPerDay > 0);
+  if (daily.length === 0) return 0;
+  const fastest = Math.max(...daily.map((trigger) => trigger.runsPerDay));
+  return Math.round(24 / fastest * 10) / 10;
+}
+async function buildAutomationStatus(input) {
+  const triggers = buildCronTriggers({
+    vercelCrons: input.vercelCrons,
+    nodeCronSchedules: input.nodeCronSchedules
+  });
+  const coveredByVercel = [
+    ...new Set(
+      triggers.filter((t) => t.source === "vercel").flatMap((t) => t.covers).filter((name) => REQUIRED_SCHEDULED_ACTIONS.includes(name))
+    )
+  ];
+  const gaps = [];
+  for (const action of REQUIRED_SCHEDULED_ACTIONS) {
+    const onVercel = coveredByVercel.includes(action);
+    const onNodeCron = triggers.some((t) => t.source === "node-cron" && t.action === action);
+    if (onVercel) continue;
+    gaps.push({
+      action,
+      consequence: CONSEQUENCE[action] ?? "Aksi ini tidak berjalan otomatis.",
+      unscheduled: !onNodeCron,
+      onlyOnDeadScheduler: onNodeCron
+    });
+  }
+  const notes = [];
+  let fixturesAwaitingScore = 0;
+  const client = input.supabase ?? supabase;
+  if (client) {
+    try {
+      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+      const past = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso);
+      const scored = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso).not("home_goals", "is", null);
+      if (!past.error && !scored.error) {
+        fixturesAwaitingScore = Math.max(0, (past.count ?? 0) - (scored.count ?? 0));
+      }
+    } catch (err) {
+      logger.debug({ err }, "Gagal menghitung fixture yang menunggu skor");
+    }
+  }
+  if (gaps.some((gap) => gap.action === "results" && gap.onlyOnDeadScheduler)) {
+    notes.push(
+      "Penarikan hasil sudah ada kodenya, tetapi hanya dijadwalkan oleh `node-cron` di `scheduler/index.ts` \u2014 dan scheduler itu tidak hidup di Vercel karena `PORT` tidak diset. Artinya skor tidak pernah diminta ulang, berapa pun lama sistem menyala."
+    );
+  }
+  if (fixturesAwaitingScore > 0) {
+    notes.push(
+      `${fixturesAwaitingScore} fixture sudah lewat tanpa skor akhir. Ini angka dampak dari pemicu yang hilang di atas, bukan masalah terpisah.`
+    );
+  }
+  if (triggers.filter((t) => t.source === "vercel").length >= HOBBY_CRON_LIMIT) {
+    notes.push(
+      `Cron Vercel sudah memakai ${HOBBY_CRON_LIMIT}/${HOBBY_CRON_LIMIT} slot yang diizinkan paket Hobby. Menambah tugas baru menuntut salah satu tugas lama digabung, bukan ditambah.`
+    );
+  }
+  return {
+    triggers,
+    gaps,
+    coveredByVercel,
+    maxGapHours: maxGapHoursOf(triggers.filter((t) => t.source === "vercel")),
+    atHobbyLimit: triggers.filter((t) => t.source === "vercel").length >= HOBBY_CRON_LIMIT,
+    fixturesAwaitingScore,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    notes
+  };
+}
+
 // src/routes/config.ts
 var STALE_RUN_SECONDS = 10 * 60;
 var SYNC_HISTORY_LIMIT = 12;
@@ -80877,6 +81007,26 @@ router3.post("/sync/reanalyze", requireAdmin, async (req, res) => {
   } catch (err) {
     logger.error({ err }, "Triggered AI re-analysis failed");
     res.status(500).json({ error: "Triggered AI re-analysis failed" });
+  }
+});
+var DECLARED_VERCEL_CRONS = [
+  { path: "/api/cron?action=daily", schedule: "0 6 * * *" }
+];
+var DECLARED_NODE_CRON = [
+  { action: "results", schedule: "0 6 * * *" },
+  { action: "closing", schedule: "*/5 * * * *" },
+  { action: "outcomes", schedule: "20 * * * *" }
+];
+router3.get("/sync/automation-status", async (_req, res) => {
+  try {
+    const status = await buildAutomationStatus({
+      vercelCrons: DECLARED_VERCEL_CRONS,
+      nodeCronSchedules: DECLARED_NODE_CRON
+    });
+    res.json(status);
+  } catch (err) {
+    logger.error({ err }, "Gagal menyusun status otomatisasi");
+    res.status(500).json({ error: "Gagal menyusun status otomatisasi" });
   }
 });
 router3.get("/sync/settlement-summary", async (_req, res) => {
@@ -84502,6 +84652,99 @@ init_logger();
 init_revalidation();
 init_baseline_backfill();
 init_reanalysis();
+
+// src/services/fixture-results.ts
+init_supabase_client();
+init_logger();
+init_odds_fetcher();
+var HISTORICAL_WINDOW_DAYS = 31;
+var MAX_FIXTURES_PER_RUN = 120;
+async function refreshElapsedFixtureResults(options = {}) {
+  const client = options.supabase ?? supabase;
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const limit = Math.min(options.limit ?? MAX_FIXTURES_PER_RUN, MAX_FIXTURES_PER_RUN);
+  const notes = [];
+  const empty = {
+    candidates: 0,
+    refreshed: 0,
+    notFound: 0,
+    skipped: 0,
+    tooOld: 0,
+    stillAwaitingScore: 0,
+    errors: 0,
+    notes: [],
+    generatedAt: now.toISOString()
+  };
+  if (!client) {
+    empty.notes.push("Supabase tidak tersedia \u2014 penarikan hasil dilewati.");
+    return empty;
+  }
+  const nowIso = now.toISOString();
+  const windowStart = new Date(
+    now.getTime() - HISTORICAL_WINDOW_DAYS * 24 * 60 * 60 * 1e3
+  ).toISOString();
+  try {
+    const past = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso).is("home_goals", null);
+    const tooOld = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", windowStart).is("home_goals", null);
+    if (!past.error) empty.stillAwaitingScore = past.count ?? 0;
+    if (!tooOld.error) empty.tooOld = tooOld.count ?? 0;
+  } catch (err) {
+    logger.debug({ err }, "[RESULTS] Gagal menghitung fixture tanpa skor");
+  }
+  let fixtureIds = [];
+  try {
+    const { data, error } = await client.from("fixtures").select("fixture_id, fixture_date").lt("fixture_date", nowIso).gte("fixture_date", windowStart).is("home_goals", null).order("fixture_date", { ascending: false }).limit(limit);
+    if (error) {
+      empty.notes.push(`Gagal membaca kandidat fixture: ${error.message}`);
+      return empty;
+    }
+    fixtureIds = (data ?? []).map((row) => Number(row.fixture_id)).filter((id) => Number.isInteger(id));
+  } catch (err) {
+    empty.notes.push(`Gagal membaca kandidat fixture: ${String(err)}`);
+    return empty;
+  }
+  empty.candidates = fixtureIds.length;
+  if (fixtureIds.length === 0) {
+    if (empty.stillAwaitingScore > 0) {
+      empty.notes.push(
+        `${empty.stillAwaitingScore} fixture menunggu skor, tetapi semuanya lebih tua dari ${HISTORICAL_WINDOW_DAYS} hari sehingga Odds-API tidak bisa lagi menyediakannya. Skor harus diisi manual.`
+      );
+    } else {
+      empty.notes.push("Tidak ada fixture lewat yang menunggu skor \u2014 tidak ada yang perlu dikerjakan.");
+    }
+    return empty;
+  }
+  const refreshFn = options.refresh ?? ((ids) => refreshFixtureResultsForSettlement(ids));
+  try {
+    const result2 = await refreshFn(fixtureIds);
+    empty.refreshed = result2.refreshed ?? 0;
+    empty.notFound = result2.notFound ?? 0;
+    empty.skipped = result2.skipped ?? 0;
+    empty.errors = result2.errors ?? 0;
+  } catch (err) {
+    empty.errors = fixtureIds.length;
+    empty.notes.push(`Penarikan hasil gagal: ${err instanceof Error ? err.message : String(err)}`);
+    logger.error({ err }, "[RESULTS] Penarikan hasil fixture gagal");
+    return empty;
+  }
+  try {
+    const past = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso).is("home_goals", null);
+    if (!past.error) empty.stillAwaitingScore = past.count ?? 0;
+  } catch {
+  }
+  if (empty.refreshed === 0 && empty.candidates > 0) {
+    empty.notes.push(
+      `${empty.candidates} fixture dicoba, tidak ada yang menghasilkan skor. Penyedia belum menerbitkan hasilnya, atau statusnya belum final. Ini normal untuk pertandingan yang baru selesai \u2014 putaran berikutnya akan mencoba lagi.`
+    );
+  }
+  empty.notes = [...notes, ...empty.notes];
+  empty.notes.push(
+    "Skor yang berhasil ditarik hanya disimpan bila status pertandingan sudah final dan kedua skor tersedia \u2014 sistem tidak pernah mengarang hasil."
+  );
+  return empty;
+}
+
+// src/routes/cron.ts
 init_supabase_client();
 var router9 = (0, import_express9.Router)();
 var CRON_SECRET = process.env["CRON_SECRET"];
@@ -84612,6 +84855,70 @@ function handleCron(req, res) {
       res.json({ message: "Settlement outcome selesai", ...result2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     }).catch((err) => {
       logger.error({ err }, "Cron-triggered outcome settlement gagal");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    });
+    return;
+  }
+  if (action === "results") {
+    const limit = Number(req.query["limit"]) || void 0;
+    refreshElapsedFixtureResults({ limit }).then((summary) => {
+      res.json({ message: "Penarikan hasil fixture selesai", ...summary });
+    }).catch((err) => {
+      logger.error({ err }, "Cron-triggered fixture results refresh gagal");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    });
+    return;
+  }
+  if (action === "daily") {
+    const runDaily = async () => {
+      const startedAt = Date.now();
+      const step = async (name, fn) => {
+        const t0 = Date.now();
+        try {
+          const result2 = await fn();
+          return { step: name, ok: true, ms: Date.now() - t0, result: result2 };
+        } catch (err) {
+          logger.error({ err, step: name }, "[CRON-DAILY] Langkah gagal");
+          return {
+            step: name,
+            ok: false,
+            ms: Date.now() - t0,
+            error: err instanceof Error ? err.message : String(err)
+          };
+        }
+      };
+      const steps = [];
+      const scanDays = await getConfiguredScanDays().catch(() => 10);
+      const leagueIdMap = await (async () => {
+        const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
+        return new Map((data ?? []).map((l) => [l.slug ?? l.name, l.id]));
+      })().catch(() => /* @__PURE__ */ new Map());
+      for (const league of DEFAULT_LEAGUES) {
+        steps.push(
+          await step(
+            `sync:${league.slug}`,
+            () => fetchAndSaveLeagueOdds(
+              league,
+              String(process.env["ODDS_API_KEY"]),
+              DEFAULT_BOOKMAKERS,
+              leagueIdMap,
+              { scanDays }
+            )
+          )
+        );
+      }
+      steps.push(await step("results", () => refreshElapsedFixtureResults({})));
+      steps.push(await step("closing", () => runClosingOddsCapture()));
+      steps.push(await step("outcomes", () => runOutcomeSettlement()));
+      return {
+        message: "Rangkaian tugas harian selesai",
+        totalMs: Date.now() - startedAt,
+        failedSteps: steps.filter((s) => !s.ok).map((s) => s.step),
+        steps
+      };
+    };
+    runDaily().then((summary) => res.json(summary)).catch((err) => {
+      logger.error({ err }, "Cron harian gagal total");
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     });
     return;
