@@ -6,6 +6,7 @@ import {
   useGetSettlementSummary,
   useGetAutomationStatus,
   useGetParlayComposition,
+  useGetAnalysisStatus,
   useListSupabaseParlays,
   useListSupabaseFixtures,
   useGetHealth,
@@ -32,6 +33,7 @@ import { Badge } from "@/components/ui/badge";
 import { SyncTransparencyPanel } from "@/components/sync-transparency-panel";
 import { SettlementTransparencyPanel } from "@/components/settlement-transparency-panel";
 import { ParlayCompositionPanel } from "@/components/parlay-composition-panel";
+import { AnalysisStatusPanel } from "@/components/analysis-status-panel";
 import { AutomationStatusPanel } from "@/components/automation-status-panel";
 import { formatLeagueName } from "@/utils/format-league";
 import { useAdminPassword, clearStoredAdminPassword } from "@/hooks/use-admin-password";
@@ -63,6 +65,7 @@ export default function Dashboard() {
   const { data: settlementSummary, isLoading: isSettlementLoading } = useGetSettlementSummary();
   const { data: automationStatus, isLoading: isAutomationLoading } = useGetAutomationStatus();
   const { data: parlayComposition, isLoading: isCompositionLoading } = useGetParlayComposition();
+  const { data: analysisStatus, isLoading: isAnalysisLoading } = useGetAnalysisStatus();
   const { data: config } = useGetConfig();
   const scanDays = config?.scanDays ?? 11;
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
@@ -474,6 +477,12 @@ export default function Dashboard() {
           prosesnya (kandidat, kombinasi diuji, korelasi) supaya hasilnya bisa
           diperiksa, bukan dipercaya begitu saja. */}
       <ParlayCompositionPanel composition={parlayComposition} isLoading={isCompositionLoading} />
+
+      {/* Panel analisis AI — menjawab "kapan prediksi terakhir lahir dan berapa
+          yang menunggu". Tanpa ini, analisis yang mati di tengah jalan hanya
+          terlihat sebagai "tidak ada prediksi baru", yang tidak bisa dibedakan
+          dari "tidak ada pertandingan". */}
+      <AnalysisStatusPanel status={analysisStatus} isLoading={isAnalysisLoading} />
 
       {/* Panel jadwal otomatis — menjawab "tugas mana yang tidak akan pernah
           berjalan sendiri". Penarikan skor sudah ada kodenya, tetapi hanya

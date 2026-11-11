@@ -130,13 +130,13 @@ export function AutomationStatusPanel({ status }: { status?: AutomationStatus; i
             <div className="flex items-center gap-1.5 font-medium">
               <Clock className="h-3.5 w-3.5" />
               {evidence.hoursSinceDailyRun === null
-                ? "Belum ada run harian yang tercatat"
-                : `Run harian terakhir ${evidence.hoursSinceDailyRun} jam lalu`}
+                ? "Belum ada run sync yang SELESAI tercatat"
+                : `Run sync terakhir yang selesai: ${evidence.hoursSinceDailyRun} jam lalu`}
             </div>
             <p className="mt-1 text-muted-foreground">
               {evidence.stale
                 ? "Jadwal boleh dideklarasikan, tetapi tanpa jejak eksekusi itu belum membuktikan apa pun. Cron bisa berhenti karena deploy gagal, kunci yang berubah, atau kuota habis."
-                : "Cron benar-benar memanggil sistem dalam dua hari terakhir."}
+                : "Ini bukti cron memanggil sistem. Yang dihitung hanya run berstatus selesai — run yang tersangkut \"running\" justru bukti kegagalan, bukan keberhasilan. Bukti ini belum memastikan keempat tugas dalam aksi harian berjalan; itu baru terlihat setelah satu putaran penuh meninggalkan jejak."}
             </p>
           </div>
         )}

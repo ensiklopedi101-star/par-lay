@@ -496,6 +496,25 @@ export function useGetAutomationStatus() {
   });
 }
 
+/* ─── Status Analisis AI ─── */
+export interface AnalysisStatus {
+  upcomingFixtures: number;
+  totalPredictions: number;
+  lastPredictionAt: string | null;
+  hoursSinceLastPrediction: number | null;
+  awaitingAnalysis: number;
+  generatedAt: string;
+  notes: string[];
+}
+
+export const getGetAnalysisStatusQueryKey = () => ["sync/analysis-status"];
+export function useGetAnalysisStatus() {
+  return useQuery<AnalysisStatus>({
+    queryKey: getGetAnalysisStatusQueryKey(),
+    queryFn: () => apiGet<AnalysisStatus>(`${API_BASE}/sync/analysis-status`),
+  });
+}
+
 /* ─── Komposisi Parlay ─── */
 export interface ScoredCombination {
   legs: Array<{

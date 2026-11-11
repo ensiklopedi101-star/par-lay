@@ -382,32 +382,153 @@ const DECLARED_NODE_CRON: Array<{ action: string; schedule: string }> = [
 router.get("/sync/automation-status", async (_req, res) => {
   try {
     /* Bukti pelaksanaan, bukan sekadar deklarasi: kapan run sync terakhir
-     * benar-benar terjadi. Cron harian yang sehat meninggalkan baris baru di
-     * `sync_runs` setiap hari; jeda panjang berarti pemicunya mati. */
-    let lastDailyRunAt: string | null = null;
+     * benar-benar SELESAI.
+     *
+     * HANYA run berstatus `completed` yang dihitung bukti. Versi pertama kode
+     * ini mengambil baris terbaru apa pun statusnya — dan baris terbaru
+     * ternyata run yang tersangkut `running` selama 20 jam, yaitu justru BUKTI
+     * KEGAGALAN. Akibatnya panel menulis "berjalan & terbukti" sambil
+     * menunjuk mayat. Menyelesaikan berarti selesai, bukan sekadar dimulai. */
+    let lastCompletedRunAt: string | null = null;
     if (supabase) {
       try {
         const { data } = await supabase
           .from("sync_runs")
           .select("started_at")
+          .eq("status", "completed")
           .order("started_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-        lastDailyRunAt = (data as { started_at?: string } | null)?.started_at ?? null;
+        lastCompletedRunAt = (data as { started_at?: string } | null)?.started_at ?? null;
       } catch (err) {
-        logger.debug({ err }, "Gagal membaca bukti run harian terakhir");
+        logger.debug({ err }, "Gagal membaca bukti run sync terakhir yang selesai");
       }
     }
 
     const status = await buildAutomationStatus({
       vercelCrons: DECLARED_VERCEL_CRONS,
       nodeCronSchedules: DECLARED_NODE_CRON,
-      lastDailyRunAt,
+      lastDailyRunAt: lastCompletedRunAt,
     });
     res.json(status);
   } catch (err) {
     logger.error({ err }, "Gagal menyusun status otomatisasi");
     res.status(500).json({ error: "Gagal menyusun status otomatisasi" });
+  }
+});
+
+/**
+ * GET /sync/analysis-status — apakah analisis AI benar-benar berjalan.
+ *
+ * Menjawab pertanyaan yang tidak dijawab panel mana pun: **kapan prediksi
+ * terakhir lahir, dan berapa yang menunggu dianalisis?**
+ *
+ * Kegagalan yang membuat rute ini ada: batch scanner menyelesaikan hingga 20
+ * fixture tanpa pemeriksaan waktu dan diputus platform pada detik ke-60.
+ * Hasil yang hilang tidak meninggalkan error apa pun — satu-satunya jejak
+ * adalah tidak adanya prediksi baru. Tanpa angka "menunggu dianalisis",
+ * tidak ada cara membedakan "tidak ada pertandingan" dari "analisis mati".
+ */
+router.get("/sync/analysis-status", async (_req, res) => {
+  if (!supabase) {
+    res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
+    return;
+  }
+  try {
+    const nowIso = new Date().toISOString();
+    const horizon = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { count: upcoming } = await supabase
+      .from("fixtures")
+      .select("*", { count: "exact", head: true })
+      .gt("fixture_date", nowIso)
+      .lte("fixture_date", horizon);
+
+    const { data: lastPrediction } = await supabase
+      .from("ai_predictions")
+      .select("created_at, status")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const { count: totalPredictions } = await supabase
+      .from("ai_predictions")
+      .select("*", { count: "exact", head: true });
+
+    /* Berapa fixture akan datang yang sudah punya harga tapi belum dianalisis —
+     * angka yang seharusnya turun setiap kali cron `analyze` berjalan. */
+    const { data: upcomingRows } = await supabase
+      .from("fixtures")
+      .select("fixture_id")
+      .gt("fixture_date", nowIso)
+      .lte("fixture_date", horizon)
+      .limit(500);
+    const ids = (upcomingRows ?? []).map((r: { fixture_id: number }) => Number(r.fixture_id));
+
+    let awaiting = 0;
+    if (ids.length > 0) {
+      const { data: priced } = await supabase
+        .from("odds_history")
+        .select("match_id")
+        .in("match_id", ids.map((id) => String(id)))
+        .limit(2000);
+      const pricedSet = new Set(
+        (priced ?? []).map((r: { match_id: string | number }) => Number(r.match_id)),
+      );
+      const { data: analysed } = await supabase
+        .from("ai_predictions")
+        .select("fixture_id")
+        .in("fixture_id", ids)
+        .limit(2000);
+      const analysedSet = new Set(
+        (analysed ?? []).map((r: { fixture_id: number }) => Number(r.fixture_id)),
+      );
+      awaiting = [...pricedSet].filter((id) => !analysedSet.has(id)).length;
+    }
+
+    const lastAt =
+      (lastPrediction as { created_at?: string } | null)?.created_at ?? null;
+    const hoursSince = lastAt
+      ? Math.round(((Date.now() - new Date(lastAt).getTime()) / 3_600_000) * 10) / 10
+      : null;
+
+    const notes: string[] = [];
+    if (lastAt === null) {
+      notes.push("Belum ada satu pun prediksi. Analisis AI belum pernah berhasil menyimpan hasil.");
+    } else if (hoursSince !== null && hoursSince > 72) {
+      notes.push(
+        `Prediksi terakhir ${hoursSince} jam lalu. Cron harian seharusnya menambah prediksi ` +
+          "setiap hari; jeda sepanjang ini berarti analisis tidak berjalan atau selalu gagal " +
+          "sebelum menyimpan.",
+      );
+    }
+    if (awaiting > 0) {
+      const seconds = Math.round((awaiting * 15) / 60);
+      notes.push(
+        `${awaiting} fixture sudah punya harga tetapi belum dianalisis. Dengan ~15 detik per ` +
+          `fixture, menyelesaikannya butuh sekitar ${seconds} menit terbagi ke beberapa putaran ` +
+          "— cron `analyze` mengerjakan sebagian setiap hari.",
+      );
+    }
+    if ((upcoming ?? 0) === 0) {
+      notes.push(
+        "Tidak ada fixture dalam 10 hari ke depan. Analisis tidak punya bahan sampai sync " +
+          "menambah jadwal baru.",
+      );
+    }
+
+    res.json({
+      upcomingFixtures: upcoming ?? 0,
+      totalPredictions: totalPredictions ?? 0,
+      lastPredictionAt: lastAt,
+      hoursSinceLastPrediction: hoursSince,
+      awaitingAnalysis: awaiting,
+      generatedAt: new Date().toISOString(),
+      notes,
+    });
+  } catch (err) {
+    logger.error({ err }, "Gagal menyusun status analisis");
+    res.status(500).json({ error: "Gagal menyusun status analisis" });
   }
 });
 
