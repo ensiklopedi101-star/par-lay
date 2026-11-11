@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { logger } from "../lib/logger";
-import { fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, type LeagueConfig } from "../services/odds-fetcher";
+import { fetchAndSaveAllLeagues, getConfiguredScanDays, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, normalizeConfiguredBookmakers, type LeagueConfig } from "../services/odds-fetcher";
 import { runSettlement } from "../services/settlement";
 import { runAutonomousLearningCycle } from "../services/prompt-learning";
 import { runBaselineBackfill } from "../services/baseline-backfill";
@@ -31,13 +31,10 @@ async function loadConfigAndSync() {
         if (matched.length > 0) leagues = matched;
       }
       if (Array.isArray(cfg.bookmakers) && cfg.bookmakers.length > 0) {
-        // The current free plan rejects sharp/exchange books (including
-        // Sbobet) and rejects legacy 1xBet/Betano selections. Keep outbound
-        // requests on the known-free recreational bookmaker.
-        const freeBookmakers = cfg.bookmakers
-          .map((name: unknown) => String(name).trim().toLowerCase())
-          .filter((name: string) => name === "bet365");
-        bookmakers = freeBookmakers.length > 0 ? "Bet365" : DEFAULT_BOOKMAKERS;
+        // Ikuti pilihan admin apa adanya (mis. ["1xbet", "M88"]). Filter
+        // bet365-only lama membuang pilihan ini dan memaksa Bet365 yang kini
+        // berbayar, sehingga permintaan odds selalu ditolak API.
+        bookmakers = normalizeConfiguredBookmakers(cfg.bookmakers);
       }
       scanDays = Number.isInteger(Number(cfg.scan_days)) && Number(cfg.scan_days) >= 1 && Number(cfg.scan_days) <= 90
         ? Number(cfg.scan_days)

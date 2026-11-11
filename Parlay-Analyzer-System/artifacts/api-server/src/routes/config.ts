@@ -170,7 +170,7 @@ async function getOrCreateConfig() {
     .insert({
       // Slug must match LEAGUES_CATALOG / DEFAULT_LEAGUES ("italy-serie-a").
       leagues: ["italy-serie-a"],
-      bookmakers: ["Bet365"],
+      bookmakers: ["1xbet", "M88"],
       markets: ["ML", "Totals", "AH", "HT", "BTTS"],
       cron_expression: "0 */6 * * *",
     })
