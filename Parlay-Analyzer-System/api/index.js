@@ -80520,6 +80520,99 @@ function reloadOddsSchedule(expression) {
 // src/services/settlement-summary.ts
 init_supabase_client();
 init_logger();
+
+// src/services/fixture-results.ts
+init_supabase_client();
+init_logger();
+init_odds_fetcher();
+var HISTORICAL_WINDOW_DAYS = 31;
+var MAX_FIXTURES_PER_RUN = 120;
+async function refreshElapsedFixtureResults(options = {}) {
+  const client = options.supabase ?? supabase;
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const limit = Math.min(options.limit ?? MAX_FIXTURES_PER_RUN, MAX_FIXTURES_PER_RUN);
+  const notes = [];
+  const empty = {
+    candidates: 0,
+    refreshed: 0,
+    notFound: 0,
+    skipped: 0,
+    tooOld: 0,
+    stillAwaitingScore: 0,
+    errors: 0,
+    notes: [],
+    generatedAt: now.toISOString()
+  };
+  if (!client) {
+    empty.notes.push("Supabase tidak tersedia \u2014 penarikan hasil dilewati.");
+    return empty;
+  }
+  const nowIso = now.toISOString();
+  const windowStart = new Date(
+    now.getTime() - HISTORICAL_WINDOW_DAYS * 24 * 60 * 60 * 1e3
+  ).toISOString();
+  try {
+    const past = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso).is("home_goals", null);
+    const tooOld = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", windowStart).is("home_goals", null);
+    if (!past.error) empty.stillAwaitingScore = past.count ?? 0;
+    if (!tooOld.error) empty.tooOld = tooOld.count ?? 0;
+  } catch (err) {
+    logger.debug({ err }, "[RESULTS] Gagal menghitung fixture tanpa skor");
+  }
+  let fixtureIds = [];
+  try {
+    const { data, error } = await client.from("fixtures").select("fixture_id, fixture_date").lt("fixture_date", nowIso).gte("fixture_date", windowStart).is("home_goals", null).order("fixture_date", { ascending: false }).limit(limit);
+    if (error) {
+      empty.notes.push(`Gagal membaca kandidat fixture: ${error.message}`);
+      return empty;
+    }
+    fixtureIds = (data ?? []).map((row) => Number(row.fixture_id)).filter((id) => Number.isInteger(id));
+  } catch (err) {
+    empty.notes.push(`Gagal membaca kandidat fixture: ${String(err)}`);
+    return empty;
+  }
+  empty.candidates = fixtureIds.length;
+  if (fixtureIds.length === 0) {
+    if (empty.stillAwaitingScore > 0) {
+      empty.notes.push(
+        `${empty.stillAwaitingScore} fixture menunggu skor, tetapi semuanya lebih tua dari ${HISTORICAL_WINDOW_DAYS} hari sehingga Odds-API tidak bisa lagi menyediakannya. Skor harus diisi manual.`
+      );
+    } else {
+      empty.notes.push("Tidak ada fixture lewat yang menunggu skor \u2014 tidak ada yang perlu dikerjakan.");
+    }
+    return empty;
+  }
+  const refreshFn = options.refresh ?? ((ids) => refreshFixtureResultsForSettlement(ids));
+  try {
+    const result2 = await refreshFn(fixtureIds);
+    empty.refreshed = result2.refreshed ?? 0;
+    empty.notFound = result2.notFound ?? 0;
+    empty.skipped = result2.skipped ?? 0;
+    empty.errors = result2.errors ?? 0;
+  } catch (err) {
+    empty.errors = fixtureIds.length;
+    empty.notes.push(`Penarikan hasil gagal: ${err instanceof Error ? err.message : String(err)}`);
+    logger.error({ err }, "[RESULTS] Penarikan hasil fixture gagal");
+    return empty;
+  }
+  try {
+    const past = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso).is("home_goals", null);
+    if (!past.error) empty.stillAwaitingScore = past.count ?? 0;
+  } catch {
+  }
+  if (empty.refreshed === 0 && empty.candidates > 0) {
+    empty.notes.push(
+      `${empty.candidates} fixture dicoba, tidak ada yang menghasilkan skor. Penyedia belum menerbitkan hasilnya, atau statusnya belum final. Ini normal untuk pertandingan yang baru selesai \u2014 putaran berikutnya akan mencoba lagi.`
+    );
+  }
+  empty.notes = [...notes, ...empty.notes];
+  empty.notes.push(
+    "Skor yang berhasil ditarik hanya disimpan bila status pertandingan sudah final dan kedua skor tersedia \u2014 sistem tidak pernah mengarang hasil."
+  );
+  return empty;
+}
+
+// src/services/settlement-summary.ts
 var SETTLED_STATUSES = ["WIN", "LOSS", "PUSH", "HALF_WIN", "HALF_LOSS", "VOID"];
 function countsFrom(total, settled, noBet) {
   return {
@@ -80549,6 +80642,8 @@ async function buildSettlementSummary(options = {}) {
     coverage: { withClosingOdds: 0, withOutcome: 0, betRows: 0, total: 0 },
     fixturesMissingScore: 0,
     fixturesScored: 0,
+    fixturesRecoverable: 0,
+    fixturesUnrecoverable: 0,
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
     notes: ["Supabase tidak tersedia \u2014 ringkasan settlement tidak bisa dihitung."]
   };
@@ -80598,8 +80693,13 @@ async function buildSettlementSummary(options = {}) {
   }
   let fixturesMissingScore = 0;
   let fixturesScored = 0;
+  let fixturesRecoverable = 0;
+  let fixturesUnrecoverable = 0;
   try {
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const windowStart = new Date(
+      Date.now() - HISTORICAL_WINDOW_DAYS * 24 * 60 * 60 * 1e3
+    ).toISOString();
     fixturesScored = await countWhere(
       client,
       "fixtures",
@@ -80611,6 +80711,12 @@ async function buildSettlementSummary(options = {}) {
       (q) => q.lt("fixture_date", nowIso)
     );
     fixturesMissingScore = Math.max(0, pastTotal - fixturesScored);
+    fixturesUnrecoverable = await countWhere(
+      client,
+      "fixtures",
+      (q) => q.lt("fixture_date", windowStart).is("home_goals", null)
+    );
+    fixturesRecoverable = Math.max(0, fixturesMissingScore - fixturesUnrecoverable);
   } catch (err) {
     logger.debug({ err }, "Gagal menghitung fixture tanpa skor");
   }
@@ -80629,9 +80735,14 @@ async function buildSettlementSummary(options = {}) {
       "Belum ada odds_close terisi. Job `?action=closing` mengisinya 10 menit sebelum kick-off; tanpa ini CLV tidak bisa dihitung."
     );
   }
-  if (fixturesMissingScore > 0) {
+  if (fixturesRecoverable > 0) {
     notes.push(
-      `${fixturesMissingScore} fixture sudah lewat tetapi belum punya skor akhir. Fixture ini tidak akan pernah tersettle sampai skornya diisi.`
+      `${fixturesRecoverable} fixture baru saja lewat dan belum berskor, tetapi masih bisa ditarik otomatis \u2014 cron \`?action=results\` akan mengambilnya pada putaran berikutnya.`
+    );
+  }
+  if (fixturesUnrecoverable > 0) {
+    notes.push(
+      `${fixturesUnrecoverable} fixture sudah lebih tua dari ${HISTORICAL_WINDOW_DAYS} hari, sehingga Odds-API tidak bisa lagi menyediakan skornya. Ini BUKAN kegagalan sistem dan tidak akan sembuh sendiri \u2014 skornya harus diisi manual, atau dibiarkan dianggap tidak dapat dinilai.`
     );
   }
   return {
@@ -80646,6 +80757,8 @@ async function buildSettlementSummary(options = {}) {
     },
     fixturesMissingScore,
     fixturesScored,
+    fixturesRecoverable,
+    fixturesUnrecoverable,
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
     notes
   };
@@ -80739,16 +80852,35 @@ async function buildAutomationStatus(input) {
       onlyOnDeadScheduler: onNodeCron
     });
   }
+  const now = input.now ?? /* @__PURE__ */ new Date();
   const notes = [];
+  const lastDailyRun = input.lastDailyRunAt ? new Date(input.lastDailyRunAt) : null;
+  const hoursSinceDailyRun = lastDailyRun && Number.isFinite(lastDailyRun.getTime()) ? Math.round((now.getTime() - lastDailyRun.getTime()) / 36e5 * 10) / 10 : null;
+  const stale = hoursSinceDailyRun === null || hoursSinceDailyRun > 48;
+  if (stale) {
+    notes.push(
+      hoursSinceDailyRun === null ? "Belum ada satu pun run harian yang tercatat. Jadwal sudah dideklarasikan, tetapi belum pernah terbukti berjalan \u2014 bisa jadi cron belum pernah terpicu, atau `CRON_SECRET` tidak cocok sehingga setiap panggilan ditolak." : `Run harian terakhir ${hoursSinceDailyRun} jam lalu. Cron harian seharusnya meninggalkan jejak setiap 24 jam; jeda sepanjang ini berarti pemicunya berhenti tanpa memberi tahu siapa pun.`
+    );
+  }
   let fixturesAwaitingScore = 0;
+  let fixturesRecoverable = 0;
+  let fixturesUnrecoverable = 0;
   const client = input.supabase ?? supabase;
   if (client) {
     try {
-      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+      const nowIso = now.toISOString();
+      const windowStart = new Date(
+        now.getTime() - HISTORICAL_WINDOW_DAYS * 24 * 60 * 60 * 1e3
+      ).toISOString();
       const past = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso);
       const scored = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso).not("home_goals", "is", null);
+      const tooOld = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", windowStart).is("home_goals", null);
       if (!past.error && !scored.error) {
         fixturesAwaitingScore = Math.max(0, (past.count ?? 0) - (scored.count ?? 0));
+      }
+      if (!tooOld.error) {
+        fixturesUnrecoverable = tooOld.count ?? 0;
+        fixturesRecoverable = Math.max(0, fixturesAwaitingScore - fixturesUnrecoverable);
       }
     } catch (err) {
       logger.debug({ err }, "Gagal menghitung fixture yang menunggu skor");
@@ -80764,6 +80896,11 @@ async function buildAutomationStatus(input) {
       `${fixturesAwaitingScore} fixture sudah lewat tanpa skor akhir. Ini angka dampak dari pemicu yang hilang di atas, bukan masalah terpisah.`
     );
   }
+  if (fixturesUnrecoverable > 0) {
+    notes.push(
+      `${fixturesUnrecoverable} di antaranya lebih tua dari ${HISTORICAL_WINDOW_DAYS} hari. Odds-API tidak bisa lagi menyediakan skornya \u2014 ini bukan kegagalan sistem dan tidak akan sembuh sendiri. Butuh pengisian manual.`
+    );
+  }
   if (triggers.filter((t) => t.source === "vercel").length >= HOBBY_CRON_LIMIT) {
     notes.push(
       `Cron Vercel sudah memakai ${HOBBY_CRON_LIMIT}/${HOBBY_CRON_LIMIT} slot yang diizinkan paket Hobby. Menambah tugas baru menuntut salah satu tugas lama digabung, bukan ditambah.`
@@ -80776,7 +80913,14 @@ async function buildAutomationStatus(input) {
     maxGapHours: maxGapHoursOf(triggers.filter((t) => t.source === "vercel")),
     atHobbyLimit: triggers.filter((t) => t.source === "vercel").length >= HOBBY_CRON_LIMIT,
     fixturesAwaitingScore,
-    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    fixturesRecoverable,
+    fixturesUnrecoverable,
+    evidence: {
+      lastDailyRunAt: lastDailyRun && Number.isFinite(lastDailyRun.getTime()) ? lastDailyRun.toISOString() : null,
+      hoursSinceDailyRun,
+      stale
+    },
+    generatedAt: now.toISOString(),
     notes
   };
 }
@@ -81019,9 +81163,19 @@ var DECLARED_NODE_CRON = [
 ];
 router3.get("/sync/automation-status", async (_req, res) => {
   try {
+    let lastDailyRunAt = null;
+    if (supabase) {
+      try {
+        const { data } = await supabase.from("sync_runs").select("started_at").order("started_at", { ascending: false }).limit(1).maybeSingle();
+        lastDailyRunAt = data?.started_at ?? null;
+      } catch (err) {
+        logger.debug({ err }, "Gagal membaca bukti run harian terakhir");
+      }
+    }
     const status = await buildAutomationStatus({
       vercelCrons: DECLARED_VERCEL_CRONS,
-      nodeCronSchedules: DECLARED_NODE_CRON
+      nodeCronSchedules: DECLARED_NODE_CRON,
+      lastDailyRunAt
     });
     res.json(status);
   } catch (err) {
@@ -84652,99 +84806,6 @@ init_logger();
 init_revalidation();
 init_baseline_backfill();
 init_reanalysis();
-
-// src/services/fixture-results.ts
-init_supabase_client();
-init_logger();
-init_odds_fetcher();
-var HISTORICAL_WINDOW_DAYS = 31;
-var MAX_FIXTURES_PER_RUN = 120;
-async function refreshElapsedFixtureResults(options = {}) {
-  const client = options.supabase ?? supabase;
-  const now = options.now ?? /* @__PURE__ */ new Date();
-  const limit = Math.min(options.limit ?? MAX_FIXTURES_PER_RUN, MAX_FIXTURES_PER_RUN);
-  const notes = [];
-  const empty = {
-    candidates: 0,
-    refreshed: 0,
-    notFound: 0,
-    skipped: 0,
-    tooOld: 0,
-    stillAwaitingScore: 0,
-    errors: 0,
-    notes: [],
-    generatedAt: now.toISOString()
-  };
-  if (!client) {
-    empty.notes.push("Supabase tidak tersedia \u2014 penarikan hasil dilewati.");
-    return empty;
-  }
-  const nowIso = now.toISOString();
-  const windowStart = new Date(
-    now.getTime() - HISTORICAL_WINDOW_DAYS * 24 * 60 * 60 * 1e3
-  ).toISOString();
-  try {
-    const past = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso).is("home_goals", null);
-    const tooOld = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", windowStart).is("home_goals", null);
-    if (!past.error) empty.stillAwaitingScore = past.count ?? 0;
-    if (!tooOld.error) empty.tooOld = tooOld.count ?? 0;
-  } catch (err) {
-    logger.debug({ err }, "[RESULTS] Gagal menghitung fixture tanpa skor");
-  }
-  let fixtureIds = [];
-  try {
-    const { data, error } = await client.from("fixtures").select("fixture_id, fixture_date").lt("fixture_date", nowIso).gte("fixture_date", windowStart).is("home_goals", null).order("fixture_date", { ascending: false }).limit(limit);
-    if (error) {
-      empty.notes.push(`Gagal membaca kandidat fixture: ${error.message}`);
-      return empty;
-    }
-    fixtureIds = (data ?? []).map((row) => Number(row.fixture_id)).filter((id) => Number.isInteger(id));
-  } catch (err) {
-    empty.notes.push(`Gagal membaca kandidat fixture: ${String(err)}`);
-    return empty;
-  }
-  empty.candidates = fixtureIds.length;
-  if (fixtureIds.length === 0) {
-    if (empty.stillAwaitingScore > 0) {
-      empty.notes.push(
-        `${empty.stillAwaitingScore} fixture menunggu skor, tetapi semuanya lebih tua dari ${HISTORICAL_WINDOW_DAYS} hari sehingga Odds-API tidak bisa lagi menyediakannya. Skor harus diisi manual.`
-      );
-    } else {
-      empty.notes.push("Tidak ada fixture lewat yang menunggu skor \u2014 tidak ada yang perlu dikerjakan.");
-    }
-    return empty;
-  }
-  const refreshFn = options.refresh ?? ((ids) => refreshFixtureResultsForSettlement(ids));
-  try {
-    const result2 = await refreshFn(fixtureIds);
-    empty.refreshed = result2.refreshed ?? 0;
-    empty.notFound = result2.notFound ?? 0;
-    empty.skipped = result2.skipped ?? 0;
-    empty.errors = result2.errors ?? 0;
-  } catch (err) {
-    empty.errors = fixtureIds.length;
-    empty.notes.push(`Penarikan hasil gagal: ${err instanceof Error ? err.message : String(err)}`);
-    logger.error({ err }, "[RESULTS] Penarikan hasil fixture gagal");
-    return empty;
-  }
-  try {
-    const past = await client.from("fixtures").select("*", { count: "exact", head: true }).lt("fixture_date", nowIso).is("home_goals", null);
-    if (!past.error) empty.stillAwaitingScore = past.count ?? 0;
-  } catch {
-  }
-  if (empty.refreshed === 0 && empty.candidates > 0) {
-    empty.notes.push(
-      `${empty.candidates} fixture dicoba, tidak ada yang menghasilkan skor. Penyedia belum menerbitkan hasilnya, atau statusnya belum final. Ini normal untuk pertandingan yang baru selesai \u2014 putaran berikutnya akan mencoba lagi.`
-    );
-  }
-  empty.notes = [...notes, ...empty.notes];
-  empty.notes.push(
-    "Skor yang berhasil ditarik hanya disimpan bila status pertandingan sudah final dan kedua skor tersedia \u2014 sistem tidak pernah mengarang hasil."
-  );
-  return empty;
-}
-
-// src/routes/cron.ts
 init_supabase_client();
 var router9 = (0, import_express9.Router)();
 var CRON_SECRET = process.env["CRON_SECRET"];

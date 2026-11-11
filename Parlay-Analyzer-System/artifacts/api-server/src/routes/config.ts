@@ -381,9 +381,28 @@ const DECLARED_NODE_CRON: Array<{ action: string; schedule: string }> = [
  */
 router.get("/sync/automation-status", async (_req, res) => {
   try {
+    /* Bukti pelaksanaan, bukan sekadar deklarasi: kapan run sync terakhir
+     * benar-benar terjadi. Cron harian yang sehat meninggalkan baris baru di
+     * `sync_runs` setiap hari; jeda panjang berarti pemicunya mati. */
+    let lastDailyRunAt: string | null = null;
+    if (supabase) {
+      try {
+        const { data } = await supabase
+          .from("sync_runs")
+          .select("started_at")
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        lastDailyRunAt = (data as { started_at?: string } | null)?.started_at ?? null;
+      } catch (err) {
+        logger.debug({ err }, "Gagal membaca bukti run harian terakhir");
+      }
+    }
+
     const status = await buildAutomationStatus({
       vercelCrons: DECLARED_VERCEL_CRONS,
       nodeCronSchedules: DECLARED_NODE_CRON,
+      lastDailyRunAt,
     });
     res.json(status);
   } catch (err) {

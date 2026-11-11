@@ -13,6 +13,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase as defaultSupabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { HISTORICAL_WINDOW_DAYS } from "./fixture-results";
 
 /** Status pada `ai_predictions` yang dianggap sudah selesai. */
 const SETTLED_STATUSES = ["WIN", "LOSS", "PUSH", "HALF_WIN", "HALF_LOSS", "VOID"];
@@ -48,6 +49,18 @@ export interface SettlementSummary {
   fixturesMissingScore: number;
   /** Fixture yang sudah lewat dan sudah punya skor. */
   fixturesScored: number;
+  /**
+   * Dari `fixturesMissingScore`, berapa yang MASIH bisa ditarik lewat Odds-API
+   * (jendela historis 31 hari).
+   *
+   * Tanpa pemisahan ini, angka "817 tanpa skor" menyesatkan: 589 di antaranya
+   * sudah terlalu tua dan **tidak akan pernah** bisa diambil otomatis. Panel
+   * yang hanya menampilkan 817 membuat sistem tampak rusak padahal sebagian
+   * besar sudah di luar jangkauan sejak awal.
+   */
+  fixturesRecoverable: number;
+  /** Fixture tanpa skor yang sudah di luar jendela 31 hari — hanya bisa manual. */
+  fixturesUnrecoverable: number;
   generatedAt: string;
   /** Catatan jujur soal apa yang belum bisa dihitung. */
   notes: string[];
@@ -101,6 +114,8 @@ export async function buildSettlementSummary(
     coverage: { withClosingOdds: 0, withOutcome: 0, betRows: 0, total: 0 },
     fixturesMissingScore: 0,
     fixturesScored: 0,
+    fixturesRecoverable: 0,
+    fixturesUnrecoverable: 0,
     generatedAt: new Date().toISOString(),
     notes: ["Supabase tidak tersedia — ringkasan settlement tidak bisa dihitung."],
   };
@@ -155,8 +170,15 @@ export async function buildSettlementSummary(
    * menumpuk dan tidak akan pernah tersettle berapa pun lama ditunggu. */
   let fixturesMissingScore = 0;
   let fixturesScored = 0;
+  let fixturesRecoverable = 0;
+  let fixturesUnrecoverable = 0;
   try {
     const nowIso = new Date().toISOString();
+    /* Batas jendela historis Odds-API — lihat HISTORICAL_WINDOW_DAYS. */
+    const windowStart = new Date(
+      Date.now() - HISTORICAL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
     fixturesScored = await countWhere(client, "fixtures", (q) =>
       q.lt("fixture_date", nowIso).not("home_goals", "is", null),
     );
@@ -164,6 +186,12 @@ export async function buildSettlementSummary(
       q.lt("fixture_date", nowIso),
     );
     fixturesMissingScore = Math.max(0, pastTotal - fixturesScored);
+
+    /* Dari yang belum berskor, mana yang masih di dalam jendela. */
+    fixturesUnrecoverable = await countWhere(client, "fixtures", (q) =>
+      q.lt("fixture_date", windowStart).is("home_goals", null),
+    );
+    fixturesRecoverable = Math.max(0, fixturesMissingScore - fixturesUnrecoverable);
   } catch (err) {
     logger.debug({ err }, "Gagal menghitung fixture tanpa skor");
   }
@@ -187,10 +215,18 @@ export async function buildSettlementSummary(
         "tanpa ini CLV tidak bisa dihitung.",
     );
   }
-  if (fixturesMissingScore > 0) {
+  if (fixturesRecoverable > 0) {
     notes.push(
-      `${fixturesMissingScore} fixture sudah lewat tetapi belum punya skor akhir. ` +
-        "Fixture ini tidak akan pernah tersettle sampai skornya diisi.",
+      `${fixturesRecoverable} fixture baru saja lewat dan belum berskor, tetapi masih bisa ` +
+        "ditarik otomatis — cron `?action=results` akan mengambilnya pada putaran berikutnya.",
+    );
+  }
+  if (fixturesUnrecoverable > 0) {
+    notes.push(
+      `${fixturesUnrecoverable} fixture sudah lebih tua dari ${HISTORICAL_WINDOW_DAYS} hari, ` +
+        "sehingga Odds-API tidak bisa lagi menyediakan skornya. Ini BUKAN kegagalan sistem " +
+        "dan tidak akan sembuh sendiri — skornya harus diisi manual, atau dibiarkan dianggap " +
+        "tidak dapat dinilai.",
     );
   }
 
@@ -206,6 +242,8 @@ export async function buildSettlementSummary(
     },
     fixturesMissingScore,
     fixturesScored,
+    fixturesRecoverable,
+    fixturesUnrecoverable,
     generatedAt: new Date().toISOString(),
     notes,
   };

@@ -8,10 +8,10 @@ import {
 } from "./automation-status";
 
 /** Klien tiruan: hanya dibutuhkan dua hitungan `fixtures`. */
-function fakeClient(counts: { past?: number; scored?: number }) {
+function fakeClient(counts: { past?: number; scored?: number; tooOld?: number }) {
   return {
     from() {
-      let notNull = false;
+      let mode: "all" | "scored" | "tooOld" = "all";
       const builder: any = {
         select() {
           return builder;
@@ -20,11 +20,20 @@ function fakeClient(counts: { past?: number; scored?: number }) {
           return builder;
         },
         not() {
-          notNull = true;
+          mode = "scored";
+          return builder;
+        },
+        is() {
+          mode = "tooOld";
           return builder;
         },
         then(resolve: (v: unknown) => void) {
-          const count = notNull ? (counts.scored ?? 0) : (counts.past ?? 0);
+          const count =
+            mode === "scored"
+              ? (counts.scored ?? 0)
+              : mode === "tooOld"
+                ? (counts.tooOld ?? 0)
+                : (counts.past ?? 0);
           resolve({ count, error: null });
         },
       };
@@ -90,14 +99,65 @@ test("celah yang sama sekali tidak terjadwal ditandai berbeda", async () => {
 test("dampak nyata dilaporkan sebagai angka fixture, bukan peringatan umum", async () => {
   const status = await buildAutomationStatus({
     vercelCrons: VERCEL_SYNC_ONLY,
-    supabase: fakeClient({ past: 894, scored: 77 }),
+    supabase: fakeClient({ past: 894, scored: 77, tooOld: 589 }),
   });
 
   assert.equal(status.fixturesAwaitingScore, 817);
+  assert.equal(status.fixturesUnrecoverable, 589);
+  assert.equal(status.fixturesRecoverable, 228);
   assert.ok(
     status.notes.some((note) => note.includes("817 fixture")),
     "angka dampak harus muncul di catatan",
   );
+  assert.ok(
+    status.notes.some((note) => note.includes("tidak akan sembuh sendiri")),
+    "yang permanen harus dinyatakan, bukan disembunyikan",
+  );
+});
+
+test("deklarasi jadwal tanpa jejak eksekusi ditandai belum terbukti", async () => {
+  /* Kondisi nyata saat panel pertama dipasang: cron `daily` baru dideklarasikan,
+     sync_runs terakhir 21 jam lalu dari cron LAMA (action=sync). Deklarasi
+     tidak boleh dihitung sebagai bukti. */
+  const status = await buildAutomationStatus({
+    vercelCrons: [{ path: "/api/cron?action=daily", schedule: "0 6 * * *" }],
+    supabase: fakeClient({}),
+    lastDailyRunAt: null,
+    now: new Date("2026-11-11T12:00:00Z"),
+  });
+
+  assert.equal(status.evidence.lastDailyRunAt, null);
+  assert.equal(status.evidence.hoursSinceDailyRun, null);
+  assert.equal(status.evidence.stale, true);
+  assert.ok(
+    status.notes.some((note) => note.includes("belum pernah terbukti berjalan")),
+    "harus jujur bahwa jadwal belum terbukti",
+  );
+});
+
+test("jejak eksekusi yang terlalu tua ditandai basi", async () => {
+  const status = await buildAutomationStatus({
+    vercelCrons: [{ path: "/api/cron?action=daily", schedule: "0 6 * * *" }],
+    supabase: fakeClient({}),
+    lastDailyRunAt: "2026-11-08T06:00:00Z",
+    now: new Date("2026-11-11T12:00:00Z"),
+  });
+
+  assert.equal(status.evidence.hoursSinceDailyRun, 78);
+  assert.equal(status.evidence.stale, true);
+  assert.ok(status.notes.some((note) => note.includes("78 jam lalu")));
+});
+
+test("jejak eksekusi segar dianggap bukti", async () => {
+  const status = await buildAutomationStatus({
+    vercelCrons: [{ path: "/api/cron?action=daily", schedule: "0 6 * * *" }],
+    supabase: fakeClient({}),
+    lastDailyRunAt: "2026-11-11T06:00:00Z",
+    now: new Date("2026-11-11T12:00:00Z"),
+  });
+
+  assert.equal(status.evidence.hoursSinceDailyRun, 6);
+  assert.equal(status.evidence.stale, false);
 });
 
 test("batas Hobby dilaporkan saat slot cron habis", async () => {

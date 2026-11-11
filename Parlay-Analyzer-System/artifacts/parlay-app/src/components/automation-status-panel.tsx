@@ -50,7 +50,12 @@ export function AutomationStatusPanel({ status }: { status?: AutomationStatus; i
   }
 
   const gaps = status.gaps ?? [];
-  const healthy = gaps.length === 0;
+  const evidence = status.evidence;
+  /* Hijau hanya bila jadwal lengkap DAN sudah terbukti berjalan. Deklarasi
+     tanpa bukti bukan alasan untuk menampilkan tanda centang. */
+  const scheduled = gaps.length === 0;
+  const proven = !evidence?.stale;
+  const healthy = scheduled && proven;
 
   return (
     <Card>
@@ -61,11 +66,16 @@ export function AutomationStatusPanel({ status }: { status?: AutomationStatus; i
           {healthy ? (
             <Badge variant="outline" className="ml-auto border-emerald-500/40 text-emerald-600">
               <CheckCircle2 className="mr-1 h-3 w-3" />
-              semua terjadwal
+              berjalan &amp; terbukti
             </Badge>
-          ) : (
+          ) : scheduled ? (
             <Badge variant="outline" className="ml-auto border-amber-500/40 text-amber-600">
               <AlertTriangle className="mr-1 h-3 w-3" />
+              terjadwal, belum terbukti
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="ml-auto border-rose-500/40 text-rose-600">
+              <XCircle className="mr-1 h-3 w-3" />
               {gaps.length} tugas tidak berjalan
             </Badge>
           )}
@@ -105,6 +115,29 @@ export function AutomationStatusPanel({ status }: { status?: AutomationStatus; i
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* ── Bukti pelaksanaan: deklarasi vs kenyataan ── */}
+        {evidence && (
+          <div
+            className={
+              evidence.stale
+                ? "rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs"
+                : "rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs"
+            }
+          >
+            <div className="flex items-center gap-1.5 font-medium">
+              <Clock className="h-3.5 w-3.5" />
+              {evidence.hoursSinceDailyRun === null
+                ? "Belum ada run harian yang tercatat"
+                : `Run harian terakhir ${evidence.hoursSinceDailyRun} jam lalu`}
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              {evidence.stale
+                ? "Jadwal boleh dideklarasikan, tetapi tanpa jejak eksekusi itu belum membuktikan apa pun. Cron bisa berhenti karena deploy gagal, kunci yang berubah, atau kuota habis."
+                : "Cron benar-benar memanggil sistem dalam dua hari terakhir."}
+            </p>
           </div>
         )}
 
@@ -148,8 +181,26 @@ export function AutomationStatusPanel({ status }: { status?: AutomationStatus; i
               {status.fixturesAwaitingScore.toLocaleString("id-ID")} fixture menunggu skor
             </div>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Pertandingan ini sudah selesai tetapi skornya tidak pernah ditarik. Selama skornya
-              kosong, tidak ada yang bisa disettle — berapa pun lama ditunggu.
+              Pertandingan ini sudah selesai tetapi skornya belum ditarik. Selama skornya kosong,
+              tidak ada yang bisa disettle.
+              {status.fixturesUnrecoverable > 0 && (
+                <>
+                  {" "}
+                  <strong>
+                    {status.fixturesUnrecoverable.toLocaleString("id-ID")} di antaranya
+                  </strong>{" "}
+                  sudah lebih tua dari jendela 31 hari penyedia — skornya tidak akan pernah bisa
+                  diambil otomatis dan harus diisi manual.
+                </>
+              )}
+              {status.fixturesRecoverable > 0 && (
+                <>
+                  {" "}
+                  Sisa{" "}
+                  <strong>{status.fixturesRecoverable.toLocaleString("id-ID")}</strong> masih bisa
+                  ditarik otomatis.
+                </>
+              )}
             </p>
           </div>
         )}

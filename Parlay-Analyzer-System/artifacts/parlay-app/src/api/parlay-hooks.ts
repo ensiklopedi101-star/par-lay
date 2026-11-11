@@ -475,6 +475,15 @@ export interface AutomationStatus {
   maxGapHours: number;
   atHobbyLimit: boolean;
   fixturesAwaitingScore: number;
+  /** Dari yang menunggu: masih bisa ditarik otomatis vs permanen tanpa skor. */
+  fixturesRecoverable: number;
+  fixturesUnrecoverable: number;
+  /** Bukti cron benar-benar berjalan, bukan sekadar dideklarasikan. */
+  evidence: {
+    lastDailyRunAt: string | null;
+    hoursSinceDailyRun: number | null;
+    stale: boolean;
+  };
   generatedAt: string;
   notes: string[];
 }
