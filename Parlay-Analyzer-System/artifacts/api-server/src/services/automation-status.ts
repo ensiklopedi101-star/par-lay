@@ -34,6 +34,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase as defaultSupabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { HISTORICAL_WINDOW_DAYS } from "./fixture-results";
 
 /** Batas Vercel Hobby: dua cron per proyek, masing-masing paling sering 1×/hari. */
 export const HOBBY_CRON_LIMIT = 2;
@@ -176,6 +177,25 @@ export interface AutomationStatus {
   atHobbyLimit: boolean;
   /** Jumlah fixture lewat yang belum punya skor — angka dampak, bukan teori. */
   fixturesAwaitingScore: number;
+  /** Dari yang menunggu skor: masih di jendela 31 hari, bisa ditarik otomatis. */
+  fixturesRecoverable: number;
+  /** Dari yang menunggu skor: sudah terlalu tua, hanya bisa manual. */
+  fixturesUnrecoverable: number;
+  /**
+   * Bukti bahwa cron Vercel benar-benar memanggil sistem.
+   *
+   * Tanpa ini, panel hanya membuktikan jadwal **dideklarasikan** — bukan
+   * bahwa ia **berjalan**. Cron Vercel bisa berhenti karena deploy gagal,
+   * `CRON_SECRET` berubah, atau kuota habis, dan semua tanda di atas tetap
+   * terlihat hijau. Kalau `lastDailyRunAt` lebih tua dari 48 jam, deklarasi
+   * itu tidak terbukti apa-apa.
+   */
+  evidence: {
+    lastDailyRunAt: string | null;
+    hoursSinceDailyRun: number | null;
+    /** `true` bila belum pernah ada bukti, atau buktinya terlalu tua. */
+    stale: boolean;
+  };
   generatedAt: string;
   notes: string[];
 }
@@ -212,6 +232,10 @@ export async function buildAutomationStatus(input: {
   vercelCrons: Array<{ path: string; schedule: string }>;
   nodeCronSchedules?: Array<{ action: string; schedule: string }>;
   supabase?: SupabaseClient;
+  /** Waktu run harian terakhir yang terbukti, dari `sync_runs`. */
+  lastDailyRunAt?: string | null;
+  /** Untuk pengujian. */
+  now?: Date;
 }): Promise<AutomationStatus> {
   const triggers = buildCronTriggers({
     vercelCrons: input.vercelCrons,
@@ -241,14 +265,42 @@ export async function buildAutomationStatus(input: {
     });
   }
 
+  const now = input.now ?? new Date();
   const notes: string[] = [];
+
+  /* ─── Bukti pelaksanaan: deklarasi saja tidak cukup ─── */
+  const lastDailyRun = input.lastDailyRunAt ? new Date(input.lastDailyRunAt) : null;
+  const hoursSinceDailyRun =
+    lastDailyRun && Number.isFinite(lastDailyRun.getTime())
+      ? Math.round(((now.getTime() - lastDailyRun.getTime()) / 3_600_000) * 10) / 10
+      : null;
+  /* Cron harian yang sehat selalu meninggalkan jejak < 48 jam. */
+  const stale = hoursSinceDailyRun === null || hoursSinceDailyRun > 48;
+
+  if (stale) {
+    notes.push(
+      hoursSinceDailyRun === null
+        ? "Belum ada satu pun run harian yang tercatat. Jadwal sudah dideklarasikan, " +
+          "tetapi belum pernah terbukti berjalan — bisa jadi cron belum pernah terpicu, " +
+          "atau `CRON_SECRET` tidak cocok sehingga setiap panggilan ditolak."
+        : `Run harian terakhir ${hoursSinceDailyRun} jam lalu. Cron harian seharusnya ` +
+          "meninggalkan jejak setiap 24 jam; jeda sepanjang ini berarti pemicunya berhenti " +
+          "tanpa memberi tahu siapa pun.",
+    );
+  }
 
   /* Dampak nyata, bukan teori: berapa fixture menunggu skor sekarang. */
   let fixturesAwaitingScore = 0;
+  let fixturesRecoverable = 0;
+  let fixturesUnrecoverable = 0;
   const client = input.supabase ?? defaultSupabase;
   if (client) {
     try {
-      const nowIso = new Date().toISOString();
+      const nowIso = now.toISOString();
+      const windowStart = new Date(
+        now.getTime() - HISTORICAL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+      ).toISOString();
+
       const past = await client
         .from("fixtures")
         .select("*", { count: "exact", head: true })
@@ -258,8 +310,18 @@ export async function buildAutomationStatus(input: {
         .select("*", { count: "exact", head: true })
         .lt("fixture_date", nowIso)
         .not("home_goals", "is", null);
+      const tooOld = await client
+        .from("fixtures")
+        .select("*", { count: "exact", head: true })
+        .lt("fixture_date", windowStart)
+        .is("home_goals", null);
+
       if (!past.error && !scored.error) {
         fixturesAwaitingScore = Math.max(0, (past.count ?? 0) - (scored.count ?? 0));
+      }
+      if (!tooOld.error) {
+        fixturesUnrecoverable = tooOld.count ?? 0;
+        fixturesRecoverable = Math.max(0, fixturesAwaitingScore - fixturesUnrecoverable);
       }
     } catch (err) {
       logger.debug({ err }, "Gagal menghitung fixture yang menunggu skor");
@@ -279,6 +341,13 @@ export async function buildAutomationStatus(input: {
         "pemicu yang hilang di atas, bukan masalah terpisah.",
     );
   }
+  if (fixturesUnrecoverable > 0) {
+    notes.push(
+      `${fixturesUnrecoverable} di antaranya lebih tua dari ${HISTORICAL_WINDOW_DAYS} hari. ` +
+        "Odds-API tidak bisa lagi menyediakan skornya — ini bukan kegagalan sistem dan tidak " +
+        "akan sembuh sendiri. Butuh pengisian manual.",
+    );
+  }
   if (triggers.filter((t) => t.source === "vercel").length >= HOBBY_CRON_LIMIT) {
     notes.push(
       `Cron Vercel sudah memakai ${HOBBY_CRON_LIMIT}/${HOBBY_CRON_LIMIT} slot yang diizinkan paket Hobby. ` +
@@ -293,7 +362,16 @@ export async function buildAutomationStatus(input: {
     maxGapHours: maxGapHoursOf(triggers.filter((t) => t.source === "vercel")),
     atHobbyLimit: triggers.filter((t) => t.source === "vercel").length >= HOBBY_CRON_LIMIT,
     fixturesAwaitingScore,
-    generatedAt: new Date().toISOString(),
+    fixturesRecoverable,
+    fixturesUnrecoverable,
+    evidence: {
+      lastDailyRunAt: lastDailyRun && Number.isFinite(lastDailyRun.getTime())
+        ? lastDailyRun.toISOString()
+        : null,
+      hoursSinceDailyRun,
+      stale,
+    },
+    generatedAt: now.toISOString(),
     notes,
   };
 }

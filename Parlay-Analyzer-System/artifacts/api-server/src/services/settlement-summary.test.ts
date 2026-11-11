@@ -17,6 +17,8 @@ function fakeClient(counts: {
   selectionsBet?: number;
   fixturesPast?: number;
   fixturesScored?: number;
+  /** Fixture lewat tanpa skor yang sudah di luar jendela 31 hari. */
+  fixturesTooOld?: number;
   outcomes?: { outcome: string }[];
 }) {
   return {
@@ -36,6 +38,10 @@ function fakeClient(counts: {
         },
         not() {
           filters.push("not");
+          return builder;
+        },
+        is() {
+          filters.push("is");
           return builder;
         },
         lt() {
@@ -60,10 +66,15 @@ function fakeClient(counts: {
                 : (counts.selectionsWithOutcome ?? 0)
               : (counts.selectionsTotal ?? 0);
           } else if (table === "fixtures") {
-            count =
-              filters.includes("not") && filters.includes("lt")
-                ? (counts.fixturesScored ?? 0)
-                : (counts.fixturesPast ?? 0);
+            /* Tiga kueri berbeda: berskor (`not`), terlalu tua (`is`),
+               dan semua yang lewat (tanpa keduanya). */
+            if (filters.includes("is")) {
+              count = counts.fixturesTooOld ?? 0;
+            } else if (filters.includes("not")) {
+              count = counts.fixturesScored ?? 0;
+            } else {
+              count = counts.fixturesPast ?? 0;
+            }
           }
           resolve({ count, error: null });
         },
@@ -126,7 +137,34 @@ test("menghitung fixture lewat tanpa skor sebagai penghalang settlement", async 
     supabase: fakeClient({ fixturesPast: 894, fixturesScored: 0 }),
   });
   assert.equal(summary.fixturesMissingScore, 894);
-  assert.ok(summary.notes.some((n) => n.includes("belum punya skor akhir")));
+  /* Dua catatan berbeda: yang masih bisa ditarik vs yang sudah terlalu tua.
+     Klien tiruan bawaan tidak membedakannya, sehingga keduanya bernilai 0 —
+     yang penting angkanya tidak diklaim sebagai sesuatu yang lain. */
+  assert.equal(typeof summary.fixturesRecoverable, "number");
+  assert.equal(typeof summary.fixturesUnrecoverable, "number");
+});
+
+test("memisahkan fixture yang masih bisa ditarik dari yang sudah terlalu tua", async () => {
+  /* Kondisi nyata 11 Nov 2026: 817 tanpa skor, 589 di antaranya terlalu tua. */
+  const summary = await buildSettlementSummary({
+    supabase: fakeClient({
+      fixturesPast: 894,
+      fixturesScored: 77,
+      fixturesTooOld: 589,
+    }),
+  });
+
+  assert.equal(summary.fixturesMissingScore, 817);
+  assert.equal(summary.fixturesUnrecoverable, 589);
+  assert.equal(summary.fixturesRecoverable, 228);
+  assert.ok(
+    summary.notes.some((n) => n.includes("masih bisa ditarik otomatis")),
+    "yang bisa diselamatkan harus disebut bisa diselamatkan",
+  );
+  assert.ok(
+    summary.notes.some((n) => n.includes("BUKAN kegagalan sistem")),
+    "yang permanen harus dinyatakan permanen, bukan dibiarkan tampak rusak",
+  );
 });
 
 test("menjumlahkan sebaran outcome dari baris ledger", async () => {
