@@ -81520,24 +81520,84 @@ var DECLARED_NODE_CRON = [
 ];
 router3.get("/sync/automation-status", async (_req, res) => {
   try {
-    let lastDailyRunAt = null;
+    let lastCompletedRunAt = null;
     if (supabase) {
       try {
-        const { data } = await supabase.from("sync_runs").select("started_at").order("started_at", { ascending: false }).limit(1).maybeSingle();
-        lastDailyRunAt = data?.started_at ?? null;
+        const { data } = await supabase.from("sync_runs").select("started_at").eq("status", "completed").order("started_at", { ascending: false }).limit(1).maybeSingle();
+        lastCompletedRunAt = data?.started_at ?? null;
       } catch (err) {
-        logger.debug({ err }, "Gagal membaca bukti run harian terakhir");
+        logger.debug({ err }, "Gagal membaca bukti run sync terakhir yang selesai");
       }
     }
     const status = await buildAutomationStatus({
       vercelCrons: DECLARED_VERCEL_CRONS,
       nodeCronSchedules: DECLARED_NODE_CRON,
-      lastDailyRunAt
+      lastDailyRunAt: lastCompletedRunAt
     });
     res.json(status);
   } catch (err) {
     logger.error({ err }, "Gagal menyusun status otomatisasi");
     res.status(500).json({ error: "Gagal menyusun status otomatisasi" });
+  }
+});
+router3.get("/sync/analysis-status", async (_req, res) => {
+  if (!supabase) {
+    res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
+    return;
+  }
+  try {
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const horizon = new Date(Date.now() + 10 * 24 * 60 * 60 * 1e3).toISOString();
+    const { count: upcoming } = await supabase.from("fixtures").select("*", { count: "exact", head: true }).gt("fixture_date", nowIso).lte("fixture_date", horizon);
+    const { data: lastPrediction } = await supabase.from("ai_predictions").select("created_at, status").order("created_at", { ascending: false }).limit(1).maybeSingle();
+    const { count: totalPredictions } = await supabase.from("ai_predictions").select("*", { count: "exact", head: true });
+    const { data: upcomingRows } = await supabase.from("fixtures").select("fixture_id").gt("fixture_date", nowIso).lte("fixture_date", horizon).limit(500);
+    const ids = (upcomingRows ?? []).map((r) => Number(r.fixture_id));
+    let awaiting = 0;
+    if (ids.length > 0) {
+      const { data: priced } = await supabase.from("odds_history").select("match_id").in("match_id", ids.map((id) => String(id))).limit(2e3);
+      const pricedSet = new Set(
+        (priced ?? []).map((r) => Number(r.match_id))
+      );
+      const { data: analysed } = await supabase.from("ai_predictions").select("fixture_id").in("fixture_id", ids).limit(2e3);
+      const analysedSet = new Set(
+        (analysed ?? []).map((r) => Number(r.fixture_id))
+      );
+      awaiting = [...pricedSet].filter((id) => !analysedSet.has(id)).length;
+    }
+    const lastAt = lastPrediction?.created_at ?? null;
+    const hoursSince = lastAt ? Math.round((Date.now() - new Date(lastAt).getTime()) / 36e5 * 10) / 10 : null;
+    const notes = [];
+    if (lastAt === null) {
+      notes.push("Belum ada satu pun prediksi. Analisis AI belum pernah berhasil menyimpan hasil.");
+    } else if (hoursSince !== null && hoursSince > 72) {
+      notes.push(
+        `Prediksi terakhir ${hoursSince} jam lalu. Cron harian seharusnya menambah prediksi setiap hari; jeda sepanjang ini berarti analisis tidak berjalan atau selalu gagal sebelum menyimpan.`
+      );
+    }
+    if (awaiting > 0) {
+      const seconds = Math.round(awaiting * 15 / 60);
+      notes.push(
+        `${awaiting} fixture sudah punya harga tetapi belum dianalisis. Dengan ~15 detik per fixture, menyelesaikannya butuh sekitar ${seconds} menit terbagi ke beberapa putaran \u2014 cron \`analyze\` mengerjakan sebagian setiap hari.`
+      );
+    }
+    if ((upcoming ?? 0) === 0) {
+      notes.push(
+        "Tidak ada fixture dalam 10 hari ke depan. Analisis tidak punya bahan sampai sync menambah jadwal baru."
+      );
+    }
+    res.json({
+      upcomingFixtures: upcoming ?? 0,
+      totalPredictions: totalPredictions ?? 0,
+      lastPredictionAt: lastAt,
+      hoursSinceLastPrediction: hoursSince,
+      awaitingAnalysis: awaiting,
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      notes
+    });
+  } catch (err) {
+    logger.error({ err }, "Gagal menyusun status analisis");
+    res.status(500).json({ error: "Gagal menyusun status analisis" });
   }
 });
 router3.get("/sync/settlement-summary", async (_req, res) => {
@@ -85163,6 +85223,132 @@ init_logger();
 init_revalidation();
 init_baseline_backfill();
 init_reanalysis();
+
+// src/services/auto-analysis.ts
+init_supabase_client();
+init_logger();
+var DEFAULT_BUDGET_MS = 38e3;
+var ESTIMATED_MS_PER_FIXTURE = 15e3;
+async function findFixturesAwaitingAnalysis(options = {}) {
+  const client = options.client ?? supabase;
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const scanDays = options.scanDays ?? 10;
+  const limit = options.limit ?? 20;
+  if (!client) return { fixtures: [], withOdds: 0, withoutOdds: 0 };
+  const horizon = new Date(now.getTime() + scanDays * 24 * 60 * 60 * 1e3).toISOString();
+  const { data: upcoming, error } = await client.from("fixtures").select("fixture_id, home_team_name, away_team_name, league_name, fixture_date").gt("fixture_date", now.toISOString()).lte("fixture_date", horizon).order("fixture_date", { ascending: true }).limit(500);
+  if (error) {
+    logger.warn({ error }, "[AUTO-ANALYSIS] Gagal membaca fixture akan datang");
+    return { fixtures: [], withOdds: 0, withoutOdds: 0 };
+  }
+  const rows = upcoming ?? [];
+  if (rows.length === 0) return { fixtures: [], withOdds: 0, withoutOdds: 0 };
+  const ids = rows.map((f) => f.fixture_id);
+  const { data: existing } = await client.from("ai_predictions").select("fixture_id, status, market_bet, best_market, best_odds").in("fixture_id", ids);
+  const done = new Set(
+    (existing ?? []).filter((row) => {
+      const market = String(row.market_bet ?? row.best_market ?? "").trim().toLowerCase();
+      const odds = Number(row.best_odds);
+      return Boolean(
+        market && market !== "no_bet" && market !== "no bet" && Number.isFinite(odds) && odds > 1 && String(row.status ?? "active").toLowerCase() !== "no_bet"
+      );
+    }).map((row) => Number(row.fixture_id))
+  );
+  const { data: oddsRows } = await client.from("odds_history").select("match_id").in("match_id", ids.map((id) => String(id))).limit(2e3);
+  const withOddsSet = new Set(
+    (oddsRows ?? []).map((row) => Number(row.match_id))
+  );
+  const pending = rows.filter((f) => !done.has(Number(f.fixture_id)));
+  const priced = pending.filter((f) => withOddsSet.has(Number(f.fixture_id)));
+  return {
+    fixtures: priced.slice(0, limit),
+    withOdds: priced.length,
+    withoutOdds: pending.length - priced.length
+  };
+}
+async function runAutoAnalysis(options = {}) {
+  const startedAt = Date.now();
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const budgetMs = options.budgetMs ?? DEFAULT_BUDGET_MS;
+  const estimatedMsPerFixture = options.estimatedMsPerFixture ?? ESTIMATED_MS_PER_FIXTURE;
+  const limit = options.limit ?? 20;
+  const notes = [];
+  const summary = {
+    candidates: 0,
+    analysed: 0,
+    skippedForTime: 0,
+    failed: 0,
+    remaining: 0,
+    elapsedMs: 0,
+    stoppedByBudget: false,
+    notes,
+    generatedAt: now.toISOString()
+  };
+  const { fixtures, withOdds, withoutOdds } = await findFixturesAwaitingAnalysis({
+    client: options.client,
+    now,
+    limit
+  });
+  summary.candidates = fixtures.length;
+  summary.remaining = withOdds;
+  if (withoutOdds > 0) {
+    notes.push(
+      `${withoutOdds} fixture akan datang belum punya harga di odds_history. Mereka tidak dianalisis \u2014 engine tidak bisa menilai tanpa harga, dan memaksanya hanya menghasilkan NO BET palsu.`
+    );
+  }
+  if (fixtures.length === 0) {
+    notes.push(
+      withOdds === 0 ? "Tidak ada fixture akan datang yang menunggu analisis. Ini keadaan normal saat liga jeda atau saat sync belum menambah jadwal baru." : "Semua fixture yang punya harga sudah dianalisis. Tidak ada yang perlu diulang."
+    );
+    summary.elapsedMs = Date.now() - startedAt;
+    return summary;
+  }
+  const analyse = options.analyse ?? (async (fixtureId) => {
+    const { analyzeFixture: analyzeFixture2 } = await Promise.resolve().then(() => (init_ai_analysis(), ai_analysis_exports));
+    return analyzeFixture2(fixtureId);
+  });
+  for (let index = 0; index < fixtures.length; index++) {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed + estimatedMsPerFixture > budgetMs) {
+      summary.stoppedByBudget = true;
+      summary.skippedForTime = fixtures.length - index;
+      notes.push(
+        `Berhenti setelah ${index} fixture karena anggaran waktu ${Math.round(budgetMs / 1e3)} detik habis. ${summary.skippedForTime} fixture ditunda ke putaran berikutnya \u2014 tidak hilang, hanya belum dikerjakan.`
+      );
+      break;
+    }
+    const fixture = fixtures[index];
+    try {
+      await analyse(String(fixture.fixture_id));
+      summary.analysed++;
+      logger.info(
+        { fixtureId: fixture.fixture_id, index: index + 1, elapsedMs: Date.now() - startedAt },
+        "[AUTO-ANALYSIS] Fixture selesai dianalisis"
+      );
+    } catch (err) {
+      summary.failed++;
+      logger.warn(
+        { err, fixtureId: fixture.fixture_id },
+        "[AUTO-ANALYSIS] Gagal menganalisis fixture, lanjut ke berikutnya"
+      );
+    }
+  }
+  summary.remaining = Math.max(0, withOdds - summary.analysed);
+  summary.elapsedMs = Date.now() - startedAt;
+  if (summary.failed > 0) {
+    notes.push(
+      `${summary.failed} fixture gagal dianalisis. Kegagalan satu fixture tidak menghentikan yang lain, dan fixture itu akan dicoba lagi pada putaran berikutnya.`
+    );
+  }
+  if (!summary.stoppedByBudget && summary.analysed > 0) {
+    notes.push(
+      `Semua ${summary.analysed} fixture dalam anggaran waktu selesai dikerjakan. Hasilnya sudah tersimpan sebelum fungsi ditutup.`
+    );
+  }
+  return summary;
+}
+
+// src/routes/cron.ts
 init_supabase_client();
 var router9 = (0, import_express9.Router)();
 var CRON_SECRET = process.env["CRON_SECRET"];
@@ -85277,6 +85463,16 @@ function handleCron(req, res) {
     });
     return;
   }
+  if (action === "analyze") {
+    const limit = Number(req.query["limit"]) || 3;
+    runAutoAnalysis({ limit }).then((summary) => {
+      res.json({ message: "Analisis otomatis selesai", ...summary });
+    }).catch((err) => {
+      logger.error({ err }, "Cron-triggered auto analysis gagal");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    });
+    return;
+  }
   if (action === "results") {
     const limit = Number(req.query["limit"]) || void 0;
     refreshElapsedFixtureResults({ limit }).then((summary) => {
@@ -85326,6 +85522,7 @@ function handleCron(req, res) {
         );
       }
       steps.push(await step("results", () => refreshElapsedFixtureResults({})));
+      steps.push(await step("analyze", () => runAutoAnalysis({ limit: 3, budgetMs: 2e4 })));
       steps.push(await step("closing", () => runClosingOddsCapture()));
       steps.push(await step("outcomes", () => runOutcomeSettlement()));
       return {
@@ -85759,6 +85956,9 @@ function buildReasoning(composition) {
   ].join(" ");
 }
 
+// src/routes/parlays.ts
+init_composition();
+
 // src/services/parlay-candidates.ts
 function candidatesFromSelectionRows(rows, fixtureMeta) {
   const candidates = [];
@@ -85962,6 +86162,15 @@ router12.get("/parlays/compose-preview", async (req, res) => {
         eligible: 0,
         rejected: [],
         combinationsEvaluated: 0,
+        /*
+         * `minLegs`/`maxLegs` WAJIB ada walau kosong. Tanpa itu panel
+         * merendernya sebagai "mesin memilih – leg": pembaca melihat tanda
+         * pisah dan tidak tahu batasnya 3–5. Respons kosong tetap harus
+         * menjawab pertanyaan yang sama dengan respons berisi.
+         */
+        minLegs: ALLOW_TWO_LEG_PARLAY ? 2 : MIN_LEGS,
+        maxLegs: MAX_LEGS,
+        ledgerRows: 0,
         notes: [
           "Ledger quant (prediction_selections) kosong. Komposisi butuh harga hasil hitungan engine; tanpa itu tidak ada yang bisa dipilih. Ini bukan kegagalan komposisi \u2014 bahan bakunya memang belum ada."
         ],

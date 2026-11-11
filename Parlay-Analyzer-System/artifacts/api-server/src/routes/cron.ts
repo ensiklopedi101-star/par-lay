@@ -6,6 +6,7 @@ import { runBaselineBackfill } from "../services/baseline-backfill";
 import { runRevalidationAndTriggeredReanalysis } from "../services/reanalysis";
 import { runClosingOddsCapture, runOutcomeSettlement } from "../services/closing-odds-capture";
 import { refreshElapsedFixtureResults } from "../services/fixture-results";
+import { runAutoAnalysis } from "../services/auto-analysis";
 import { supabase } from "../lib/supabase-client";
 
 const router: IRouter = Router();
@@ -33,6 +34,9 @@ function isAuthorized(req: any): boolean {
  *   sudah lewat (tanpa AI, tanpa evaluasi prediksi). Ini yang membuat rantai
  *   settlement punya bahan; sebelumnya hanya dijadwalkan `node-cron` yang
  *   tidak hidup di Vercel.
+ * GET /api/cron?token=<CRON_SECRET>&action=analyze -> analisis AI untuk fixture
+ *   akan datang yang belum dianalisis, dengan anggaran waktu. Aman dipanggil
+ *   berulang: yang sudah dianalisis tidak diulang.
  * GET /api/cron?token=<CRON_SECRET>&action=daily  -> SEMUA tugas harian dalam
  *   satu panggilan: sync tiap liga, results, closing, outcomes. Wajib di
  *   Vercel Hobby karena hanya tersedia dua slot cron.
@@ -181,6 +185,30 @@ function handleCron(req: any, res: any) {
     return;
   }
 
+  if (action === "analyze") {
+    /* Analisis AI dengan anggaran waktu.
+     *
+     * Ini yang selama ini tidak ada: prediksi hanya lahir kalau ada yang
+     * menekan tombol. Batch scanner di `/api/analyze/batch` tidak bisa dipakai
+     * cron karena ia menyelesaikan hingga 20 fixture tanpa satu pun
+     * pemeriksaan waktu — di Vercel fungsi diputus pada 60 detik dan sisanya
+     * hilang tanpa jejak.
+     *
+     * Bukti dari DB: maksimum 6 prediksi per hari, semuanya dalam rentang
+     * 4 menit, lalu berhenti. Itu pola eksekusi terpotong.
+     */
+    const limit = Number(req.query["limit"]) || 3;
+    runAutoAnalysis({ limit })
+      .then((summary) => {
+        res.json({ message: "Analisis otomatis selesai", ...summary });
+      })
+      .catch((err) => {
+        logger.error({ err }, "Cron-triggered auto analysis gagal");
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      });
+    return;
+  }
+
   if (action === "results") {
     /* Penarikan skor sengaja TIDAK memakai AI dan tidak mengevaluasi prediksi:
      * hanya mengisi `status_short` + `home_goals` + `away_goals`. Memisahkannya
@@ -255,10 +283,17 @@ function handleCron(req: any, res: any) {
       /* 2. Skor akhir — bahan mentah settlement. */
       steps.push(await step("results", () => refreshElapsedFixtureResults({})));
 
-      /* 3. Odds penutup — dasar hitung CLV. */
+      /* 3. Analisis AI — sumber utama isi sistem.
+       * Dijalankan SETELAH hasil dan skor ditarik, tetapi SEBELUM closing,
+       * karena analisis adalah bagian yang paling mungkin menghabiskan
+       * anggaran waktu. Kalau anggaran habis, yang tertunda adalah langkah
+       * murah (closing/outcomes), bukan yang mahal. */
+      steps.push(await step("analyze", () => runAutoAnalysis({ limit: 3, budgetMs: 20_000 })));
+
+      /* 4. Odds penutup — dasar hitung CLV. */
       steps.push(await step("closing", () => runClosingOddsCapture()));
 
-      /* 4. Outcome ledger quant. */
+      /* 5. Outcome ledger quant. */
       steps.push(await step("outcomes", () => runOutcomeSettlement()));
 
       return {

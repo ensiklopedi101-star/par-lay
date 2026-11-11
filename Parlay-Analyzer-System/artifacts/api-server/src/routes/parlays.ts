@@ -24,6 +24,7 @@ import {
   type ParlayCandidate,
 } from "../services/parlay-builder";
 import { composeAndSaveParlay } from "../services/parlay-composer";
+import { ALLOW_TWO_LEG_PARLAY, MAX_LEGS, MIN_LEGS } from "../lib/quant/composition";
 import {
   candidatesFromSelectionRows,
   type FixtureMeta,
@@ -346,6 +347,15 @@ router.get("/parlays/compose-preview", async (req, res) => {
         eligible: 0,
         rejected: [],
         combinationsEvaluated: 0,
+        /*
+         * `minLegs`/`maxLegs` WAJIB ada walau kosong. Tanpa itu panel
+         * merendernya sebagai "mesin memilih – leg": pembaca melihat tanda
+         * pisah dan tidak tahu batasnya 3–5. Respons kosong tetap harus
+         * menjawab pertanyaan yang sama dengan respons berisi.
+         */
+        minLegs: ALLOW_TWO_LEG_PARLAY ? 2 : MIN_LEGS,
+        maxLegs: MAX_LEGS,
+        ledgerRows: 0,
         notes: [
           "Ledger quant (prediction_selections) kosong. Komposisi butuh harga hasil " +
             "hitungan engine; tanpa itu tidak ada yang bisa dipilih. Ini bukan kegagalan " +
