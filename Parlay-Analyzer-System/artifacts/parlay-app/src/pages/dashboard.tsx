@@ -4,6 +4,7 @@ import {
   useGetConfig,
   useGetSyncStatus,
   useGetSettlementSummary,
+  useGetAutomationStatus,
   useListSupabaseParlays,
   useListSupabaseFixtures,
   useGetHealth,
@@ -29,6 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { SyncTransparencyPanel } from "@/components/sync-transparency-panel";
 import { SettlementTransparencyPanel } from "@/components/settlement-transparency-panel";
+import { AutomationStatusPanel } from "@/components/automation-status-panel";
 import { formatLeagueName } from "@/utils/format-league";
 import { useAdminPassword, clearStoredAdminPassword } from "@/hooks/use-admin-password";
 import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
@@ -57,6 +59,7 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
   const { data: syncStatus, isLoading: isSyncLoading } = useGetSyncStatus();
   const { data: settlementSummary, isLoading: isSettlementLoading } = useGetSettlementSummary();
+  const { data: automationStatus, isLoading: isAutomationLoading } = useGetAutomationStatus();
   const { data: config } = useGetConfig();
   const scanDays = config?.scanDays ?? 11;
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
@@ -462,6 +465,12 @@ export default function Dashboard() {
       <SyncTransparencyPanel status={syncStatus} isLoading={isSyncLoading} />
 
       <SettlementTransparencyPanel summary={settlementSummary} isLoading={isSettlementLoading} />
+
+      {/* Panel jadwal otomatis — menjawab "tugas mana yang tidak akan pernah
+          berjalan sendiri". Penarikan skor sudah ada kodenya, tetapi hanya
+          dijadwalkan node-cron yang mati di Vercel; tanpa panel ini kegagalan
+          itu tidak terlihat di layar mana pun. */}
+      <AutomationStatusPanel status={automationStatus} isLoading={isAutomationLoading} />
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="col-span-1 bg-card border-border">

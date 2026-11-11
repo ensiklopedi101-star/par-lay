@@ -452,6 +452,41 @@ export function useGetSettlementSummary() {
   });
 }
 
+/* ─── Status Otomatisasi ─── */
+export interface CronTrigger {
+  action: string;
+  schedule: string;
+  source: "vercel" | "node-cron";
+  runsPerDay: number;
+  covers: string[];
+}
+
+export interface AutomationGap {
+  action: string;
+  consequence: string;
+  unscheduled: boolean;
+  onlyOnDeadScheduler: boolean;
+}
+
+export interface AutomationStatus {
+  triggers: CronTrigger[];
+  gaps: AutomationGap[];
+  coveredByVercel: string[];
+  maxGapHours: number;
+  atHobbyLimit: boolean;
+  fixturesAwaitingScore: number;
+  generatedAt: string;
+  notes: string[];
+}
+
+export const getGetAutomationStatusQueryKey = () => ["sync/automation-status"];
+export function useGetAutomationStatus() {
+  return useQuery<AutomationStatus>({
+    queryKey: getGetAutomationStatusQueryKey(),
+    queryFn: () => apiGet<AutomationStatus>(`${API_BASE}/sync/automation-status`),
+  });
+}
+
 /* ─── Available Leagues ─── */
 export const getListAvailableLeaguesQueryKey = () => ["odds/available-leagues"];
 export function useListAvailableLeagues() {

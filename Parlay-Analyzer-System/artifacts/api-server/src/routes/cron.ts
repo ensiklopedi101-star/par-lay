@@ -5,6 +5,7 @@ import { runRevalidation } from "../services/revalidation";
 import { runBaselineBackfill } from "../services/baseline-backfill";
 import { runRevalidationAndTriggeredReanalysis } from "../services/reanalysis";
 import { runClosingOddsCapture, runOutcomeSettlement } from "../services/closing-odds-capture";
+import { refreshElapsedFixtureResults } from "../services/fixture-results";
 import { supabase } from "../lib/supabase-client";
 
 const router: IRouter = Router();
@@ -28,6 +29,13 @@ function isAuthorized(req: any): boolean {
  *   prediction_selections dari skor akhir. Tanpa ini, ledger tidak akan
  *   pernah punya hasil dan Fase 3 mustahil dievaluasi.
  *
+ * GET /api/cron?token=<CRON_SECRET>&action=results -> tarik skor akhir fixture yang
+ *   sudah lewat (tanpa AI, tanpa evaluasi prediksi). Ini yang membuat rantai
+ *   settlement punya bahan; sebelumnya hanya dijadwalkan `node-cron` yang
+ *   tidak hidup di Vercel.
+ * GET /api/cron?token=<CRON_SECRET>&action=daily  -> SEMUA tugas harian dalam
+ *   satu panggilan: sync tiap liga, results, closing, outcomes. Wajib di
+ *   Vercel Hobby karena hanya tersedia dua slot cron.
  * GET /api/cron?token=<CRON_SECRET>&action=keep-alive  -> lightweight ping, no odds API calls
  * GET /api/cron?token=<CRON_SECRET>&action=sync        -> trigger full odds sync
  * GET /api/cron?token=<CRON_SECRET>&action=revalidate  -> refresh active pre-kickoff prediction tags
@@ -168,6 +176,103 @@ function handleCron(req: any, res: any) {
       })
       .catch((err) => {
         logger.error({ err }, "Cron-triggered outcome settlement gagal");
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      });
+    return;
+  }
+
+  if (action === "results") {
+    /* Penarikan skor sengaja TIDAK memakai AI dan tidak mengevaluasi prediksi:
+     * hanya mengisi `status_short` + `home_goals` + `away_goals`. Memisahkannya
+     * dari `runSettlement()` membuat tugas ini cukup cepat untuk batas 60 detik
+     * Vercel, dan kegagalan Gemini tidak pernah menghalangi skor masuk. */
+    const limit = Number(req.query["limit"]) || undefined;
+    refreshElapsedFixtureResults({ limit })
+      .then((summary) => {
+        res.json({ message: "Penarikan hasil fixture selesai", ...summary });
+      })
+      .catch((err) => {
+        logger.error({ err }, "Cron-triggered fixture results refresh gagal");
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      });
+    return;
+  }
+
+  if (action === "daily") {
+    /*
+     * Satu slot cron untuk seluruh tugas harian.
+     *
+     * Vercel Hobby hanya mengizinkan dua cron per proyek, masing-masing paling
+     * sering sekali sehari. Rantai yang dibutuhkan sistem ini ada empat (sync,
+     * results, closing, outcomes), jadi keempatnya dijalankan berurutan dalam
+     * satu panggilan.
+     *
+     * Dijalankan menunggu (bukan background) agar hasilnya terlihat di respons
+     * cron dan di log — kegagalan senyap persis masalah yang sedang diperbaiki
+     * di sini. Setiap langkah dibungkus `try` sendiri: satu langkah gagal tidak
+     * boleh menggugurkan langkah berikutnya.
+     */
+    const runDaily = async () => {
+      const startedAt = Date.now();
+      const step = async <T>(name: string, fn: () => Promise<T>) => {
+        const t0 = Date.now();
+        try {
+          const result = await fn();
+          return { step: name, ok: true, ms: Date.now() - t0, result };
+        } catch (err) {
+          logger.error({ err, step: name }, "[CRON-DAILY] Langkah gagal");
+          return {
+            step: name,
+            ok: false,
+            ms: Date.now() - t0,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      };
+
+      const steps = [];
+      /* 1. Sync odds — satu liga per panggilan agar muat dalam batas waktu. */
+      const scanDays = await getConfiguredScanDays().catch(() => 10);
+      const leagueIdMap = await (async () => {
+        const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
+        return new Map((data ?? []).map((l: any) => [l.slug ?? l.name, l.id as number]));
+      })().catch(() => new Map<string, number>());
+
+      for (const league of DEFAULT_LEAGUES) {
+        steps.push(
+          await step(`sync:${league.slug}`, () =>
+            fetchAndSaveLeagueOdds(
+              league,
+              String(process.env["ODDS_API_KEY"]),
+              DEFAULT_BOOKMAKERS,
+              leagueIdMap as Map<string, number>,
+              { scanDays } as never,
+            ),
+          ),
+        );
+      }
+
+      /* 2. Skor akhir — bahan mentah settlement. */
+      steps.push(await step("results", () => refreshElapsedFixtureResults({})));
+
+      /* 3. Odds penutup — dasar hitung CLV. */
+      steps.push(await step("closing", () => runClosingOddsCapture()));
+
+      /* 4. Outcome ledger quant. */
+      steps.push(await step("outcomes", () => runOutcomeSettlement()));
+
+      return {
+        message: "Rangkaian tugas harian selesai",
+        totalMs: Date.now() - startedAt,
+        failedSteps: steps.filter((s) => !s.ok).map((s) => s.step),
+        steps,
+      };
+    };
+
+    runDaily()
+      .then((summary) => res.json(summary))
+      .catch((err) => {
+        logger.error({ err }, "Cron harian gagal total");
         res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
       });
     return;
