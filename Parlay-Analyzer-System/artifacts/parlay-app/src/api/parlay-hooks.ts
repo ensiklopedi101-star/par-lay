@@ -496,6 +496,46 @@ export function useGetAutomationStatus() {
   });
 }
 
+/* ─── Komposisi Parlay ─── */
+export interface ScoredCombination {
+  legs: Array<{
+    marketKey: string;
+    fixtureId: number;
+    league: string;
+    date?: string | null;
+    selection: { label: string; odds: number; evConservative: number; pFinal: number; family: string };
+  }>;
+  combinedOdds: number;
+  pIndependent: number;
+  pCorrelated: number;
+  pDecision: number;
+  evDecision: number;
+  evPessimistic: number;
+  breakEvenBias: number;
+  marginPaid: number | null;
+}
+
+export interface ParlayComposition {
+  best: ScoredCombination | null;
+  alternatives: ScoredCombination[];
+  eligible: number;
+  rejected: Array<{ marketKey: string; fixtureId: number; reason: string }>;
+  combinationsEvaluated: number;
+  minLegs: number;
+  maxLegs: number;
+  ledgerRows?: number;
+  generatedAt: string;
+  notes: string[];
+}
+
+export const getGetParlayCompositionQueryKey = () => ["parlays/compose-preview"];
+export function useGetParlayComposition() {
+  return useQuery<ParlayComposition>({
+    queryKey: getGetParlayCompositionQueryKey(),
+    queryFn: () => apiGet<ParlayComposition>(`${API_BASE}/parlays/compose-preview`),
+  });
+}
+
 /* ─── Available Leagues ─── */
 export const getListAvailableLeaguesQueryKey = () => ["odds/available-leagues"];
 export function useListAvailableLeagues() {

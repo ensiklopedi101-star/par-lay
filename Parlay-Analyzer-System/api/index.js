@@ -20059,7 +20059,7 @@ var require_dist = __commonJS({
       const { delimiter = DEFAULT_DELIMITER, end = true, sensitive = false, trailing = true } = options;
       const keys = [];
       let source = "";
-      let combinations = 0;
+      let combinations2 = 0;
       function process2(path2) {
         if (Array.isArray(path2)) {
           for (const p of path2)
@@ -20068,13 +20068,13 @@ var require_dist = __commonJS({
         }
         const data = typeof path2 === "object" ? path2 : parse2(path2, options);
         flatten(data.tokens, 0, [], (tokens) => {
-          if (combinations >= 256) {
+          if (combinations2 >= 256) {
             throw new PathError("Too many path combinations", data.originalPath);
           }
-          if (combinations > 0)
+          if (combinations2 > 0)
             source += "|";
           source += toRegExpSource(tokens, delimiter, keys, data.originalPath);
-          combinations++;
+          combinations2++;
         });
       }
       process2(path);
@@ -57625,9 +57625,15 @@ async function createMergedParlay(candidates, sourceParlayIds, options = {}) {
       continue;
     }
     const isUserSelection = candidate.source === "USER_SELECTION";
-    if (candidate.odds <= 1 || !isUserSelection && (candidate.confidence == null || candidate.confidence < 6.5) || !Number.isFinite(candidate.probability) || candidate.probability <= 0 || candidate.probability >= 1) {
-      rejected.push({ fixtureId, reason: "Odds, confidence, atau probabilitas tidak memenuhi batas minimum." });
+    if (candidate.odds <= 1 || !Number.isFinite(candidate.probability) || candidate.probability <= 0 || candidate.probability >= 1) {
+      rejected.push({ fixtureId, reason: "Odds atau probabilitas tidak memenuhi batas minimum." });
       continue;
+    }
+    if (!isUserSelection && (candidate.confidence == null || candidate.confidence < 6.5)) {
+      logger.debug(
+        { fixtureId, confidence: candidate.confidence },
+        "[PARLAY-MERGE] Confidence rendah \u2014 tidak lagi menjadi gerbang penolakan"
+      );
     }
     if (unique.size >= 7) {
       rejected.push({ fixtureId, reason: "Batas maksimum 7 leg tercapai." });
@@ -75566,6 +75572,357 @@ var require_multer = __commonJS({
   }
 });
 
+// src/lib/quant/parlay.ts
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = a + 1831565813 >>> 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function normInv(p) {
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+  const pl = 0.02425;
+  const q0 = Math.min(1 - 1e-12, Math.max(1e-12, p));
+  if (q0 < pl) {
+    const q2 = Math.sqrt(-2 * Math.log(q0));
+    return (((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
+  }
+  if (q0 > 1 - pl) {
+    const q2 = Math.sqrt(-2 * Math.log(1 - q0));
+    return -(((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
+  }
+  const q = q0 - 0.5;
+  const r = q * q;
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+function pairwiseCorrelation(a, b) {
+  let rho = 0.02;
+  if (a.league && a.league === b.league) rho += 0.03;
+  if (a.date && a.date === b.date) rho += 0.02;
+  const ta = a.marketFamily === "Totals" || a.marketFamily === "BTTS";
+  const tb = b.marketFamily === "Totals" || b.marketFamily === "BTTS";
+  if (ta && tb) rho += 0.05;
+  return Math.min(0.25, rho);
+}
+function cholesky(matrix) {
+  const n = matrix.length;
+  let scale = 1;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const L = Array.from({ length: n }, () => new Array(n).fill(0));
+    let ok = true;
+    for (let i = 0; i < n && ok; i++) {
+      for (let j = 0; j <= i; j++) {
+        const off = i === j ? matrix[i][j] : matrix[i][j] * scale;
+        let sum = off;
+        for (let k = 0; k < j; k++) sum -= L[i][k] * L[j][k];
+        if (i === j) {
+          if (sum <= 1e-10) {
+            ok = false;
+            break;
+          }
+          L[i][j] = Math.sqrt(sum);
+        } else L[i][j] = sum / L[j][j];
+      }
+    }
+    if (ok) return L;
+    scale *= 0.5;
+  }
+  return Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : 0));
+}
+function analyzeParlay(legs, opts = {}) {
+  if (legs.length < 1) throw new Error("Parlay butuh minimal 1 leg.");
+  const sims = opts.sims ?? 4e4;
+  const sigma = opts.sigma ?? 0.03;
+  const probs = legs.map((l) => Math.min(0.995, Math.max(5e-3, l.p)));
+  const combinedOdds = opts.offeredOdds ?? legs.reduce((acc, l) => acc * l.odds, 1);
+  const pIndependent = probs.reduce((acc, p) => acc * p, 1);
+  const n = legs.length;
+  const corr = Array.from(
+    { length: n },
+    (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : pairwiseCorrelation(legs[i], legs[j]))
+  );
+  const L = cholesky(corr);
+  const thresholds = probs.map((p) => normInv(p));
+  const rnd = mulberry32(opts.seed ?? 20260101);
+  const gauss = () => {
+    const u1 = Math.max(1e-12, rnd());
+    const u2 = rnd();
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  };
+  let hits = 0;
+  const z = new Array(n).fill(0);
+  for (let s = 0; s < sims; s++) {
+    for (let i = 0; i < n; i++) z[i] = gauss();
+    let all = true;
+    for (let i = 0; i < n && all; i++) {
+      let x = 0;
+      for (let j = 0; j <= i; j++) x += L[i][j] * z[j];
+      if (x >= thresholds[i]) all = false;
+    }
+    if (all) hits++;
+  }
+  const pCorrelated = hits / sims;
+  const simStdErr = Math.sqrt(pCorrelated * (1 - pCorrelated) / sims);
+  const pPessimistic = probs.reduce((acc, p) => acc * Math.max(1e-3, p - sigma), 1);
+  const g = (delta) => probs.reduce((acc, p) => acc * Math.max(0, p - delta), 1) * combinedOdds - 1;
+  let breakEvenBias = 0;
+  if (g(0) > 0) {
+    let lo = 0;
+    let hi = Math.min(...probs);
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (g(mid) > 0) lo = mid;
+      else hi = mid;
+    }
+    breakEvenBias = lo;
+  } else {
+    breakEvenBias = -1;
+  }
+  const allMarket = legs.every((l) => l.pMarket != null && l.pMarket > 0);
+  const marketProd = allMarket ? legs.reduce((acc, l) => acc * l.pMarket, 1) : null;
+  return {
+    legs: n,
+    combinedOdds,
+    pIndependent,
+    pCorrelated,
+    simStdErr,
+    evIndependent: pIndependent * combinedOdds - 1,
+    evCorrelated: pCorrelated * combinedOdds - 1,
+    pDecision: Math.min(pIndependent, pCorrelated),
+    evDecision: Math.min(pIndependent, pCorrelated) * combinedOdds - 1,
+    pPessimistic,
+    evPessimistic: pPessimistic * combinedOdds - 1,
+    fairOddsCorrelated: pCorrelated > 0 ? 1 / pCorrelated : Infinity,
+    marginPaid: marketProd != null ? 1 - combinedOdds * marketProd : null,
+    breakEvenBias,
+    correlationMatrix: corr
+  };
+}
+var init_parlay = __esm({
+  "src/lib/quant/parlay.ts"() {
+    "use strict";
+  }
+});
+
+// src/lib/quant/composition.ts
+var composition_exports = {};
+__export(composition_exports, {
+  ALLOW_TWO_LEG_PARLAY: () => ALLOW_TWO_LEG_PARLAY,
+  DEFAULT_MAX_CANDIDATES: () => DEFAULT_MAX_CANDIDATES,
+  MAX_LEGS: () => MAX_LEGS,
+  MIN_LEGS: () => MIN_LEGS,
+  buildParlayComposition: () => buildParlayComposition,
+  screenCandidates: () => screenCandidates,
+  toParlayLegRows: () => toParlayLegRows
+});
+function screenCandidates(candidates) {
+  const rejected = [];
+  const byFixture = /* @__PURE__ */ new Map();
+  for (const candidate of candidates) {
+    const { selection } = candidate;
+    if (!Number.isInteger(candidate.fixtureId)) {
+      rejected.push({ ...ident(candidate), reason: "fixtureId bukan bilangan bulat" });
+      continue;
+    }
+    if (!Number.isFinite(selection.odds) || selection.odds <= 1) {
+      rejected.push({ ...ident(candidate), reason: "odds tidak valid (\u2264 1)" });
+      continue;
+    }
+    if (!Number.isFinite(selection.pFinal) || selection.pFinal <= 0 || selection.pFinal >= 1) {
+      rejected.push({ ...ident(candidate), reason: "probabilitas model di luar (0,1)" });
+      continue;
+    }
+    if (!(selection.evConservative > 0)) {
+      rejected.push({
+        ...ident(candidate),
+        reason: `EV konservatif \u2264 0 (${(selection.evConservative * 100).toFixed(2)}%)`
+      });
+      continue;
+    }
+    const existing = byFixture.get(candidate.fixtureId);
+    if (existing) {
+      const keep = existing.selection.evConservative >= selection.evConservative ? existing : candidate;
+      const drop = keep === existing ? candidate : existing;
+      byFixture.set(candidate.fixtureId, keep);
+      rejected.push({
+        ...ident(drop),
+        reason: `pertandingan yang sama sudah diwakili ${keep.marketKey}; dua pasar satu laga saling bergantung dan satu hasil buruk membunuh keduanya`
+      });
+      continue;
+    }
+    byFixture.set(candidate.fixtureId, candidate);
+  }
+  return { eligible: Array.from(byFixture.values()), rejected };
+}
+function combinations(items, size) {
+  const result2 = [];
+  const current = [];
+  const walk = (start) => {
+    if (current.length === size) {
+      result2.push([...current]);
+      return;
+    }
+    for (let i = start; i <= items.length - (size - current.length); i++) {
+      current.push(items[i]);
+      walk(i + 1);
+      current.pop();
+    }
+  };
+  walk(0);
+  return result2;
+}
+function toParlayLeg(candidate) {
+  return {
+    p: candidate.selection.pFinal,
+    odds: candidate.selection.odds,
+    pMarket: candidate.selection.pMarket,
+    league: candidate.league,
+    marketFamily: candidate.selection.family,
+    date: candidate.date ?? void 0
+  };
+}
+function buildParlayComposition(candidates, options = {}) {
+  const notes = [];
+  const minLegs = Math.max(ALLOW_TWO_LEG_PARLAY ? 2 : MIN_LEGS, options.minLegs ?? MIN_LEGS);
+  const maxLegs = Math.min(MAX_LEGS, Math.max(minLegs, options.maxLegs ?? MAX_LEGS));
+  const topN = options.topN ?? 3;
+  const maxCandidates = Math.max(maxLegs, options.maxCandidates ?? DEFAULT_MAX_CANDIDATES);
+  const empty = {
+    best: null,
+    alternatives: [],
+    eligible: 0,
+    rejected: [],
+    combinationsEvaluated: 0,
+    minLegs,
+    maxLegs,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    notes: []
+  };
+  const { eligible, rejected } = screenCandidates(candidates);
+  const base = { ...empty, eligible: eligible.length, rejected };
+  if (eligible.length < minLegs) {
+    base.notes.push(
+      `Hanya ${eligible.length} leg layak (EV konservatif > 0), sedangkan parlay butuh minimal ${minLegs}. Tidak ada parlay yang disusun \u2014 memaksakan kombinasi dari leg di bawah standar lebih buruk daripada tidak bertaruh.`
+    );
+    return base;
+  }
+  const pool = [...eligible].sort((a, b) => b.selection.evConservative - a.selection.evConservative).slice(0, maxCandidates);
+  if (eligible.length > pool.length) {
+    notes.push(
+      `${eligible.length} leg layak, tetapi hanya ${pool.length} dengan EV konservatif tertinggi yang dievaluasi \u2014 pembatasan waktu, bukan penilaian bahwa sisanya buruk.`
+    );
+  }
+  const scored = [];
+  let evaluated = 0;
+  for (let size = minLegs; size <= Math.min(maxLegs, pool.length); size++) {
+    for (const combo of combinations(pool, size)) {
+      evaluated++;
+      const quick = analyzeParlay(combo.map(toParlayLeg), {
+        sims: 4e3,
+        seed: options.seed ?? 20260101
+      });
+      if (!(quick.evDecision > 0)) continue;
+      scored.push({
+        legs: combo,
+        combinedOdds: quick.combinedOdds,
+        pIndependent: quick.pIndependent,
+        pCorrelated: quick.pCorrelated,
+        pDecision: quick.pDecision,
+        evDecision: quick.evDecision,
+        evPessimistic: quick.evPessimistic,
+        breakEvenBias: quick.breakEvenBias,
+        marginPaid: quick.marginPaid
+      });
+    }
+  }
+  if (scored.length === 0) {
+    base.combinationsEvaluated = evaluated;
+    base.notes.push(
+      `Tidak ada kombinasi dengan EV positif setelah koreksi korelasi dari ${evaluated} kombinasi yang diuji. Ini hasil yang sah: lebih baik menolak daripada memaksa parlay.`
+    );
+    return base;
+  }
+  const ranked = [...scored].sort((a, b) => {
+    const diff = b.evDecision - a.evDecision;
+    if (Math.abs(diff) > 0.01) return diff;
+    return b.breakEvenBias - a.breakEvenBias;
+  });
+  const refined = ranked.slice(0, Math.max(topN, 5)).map((combo) => {
+    const full = analyzeParlay(combo.legs.map(toParlayLeg), {
+      sims: 4e4,
+      seed: options.seed ?? 20260101
+    });
+    return {
+      ...combo,
+      pIndependent: full.pIndependent,
+      pCorrelated: full.pCorrelated,
+      pDecision: full.pDecision,
+      evDecision: full.evDecision,
+      evPessimistic: full.evPessimistic,
+      breakEvenBias: full.breakEvenBias,
+      marginPaid: full.marginPaid
+    };
+  });
+  const best = refined[0];
+  notes.push(
+    "Prior korelasi masih heuristik (liga, tanggal, keluarga market), belum diestimasi dari residual ledger. Angka EV di sini konservatif, bukan jaminan."
+  );
+  notes.push(
+    `Setiap leg boleh overestimasi paling banyak ${(best.breakEvenBias * 100).toFixed(1)} poin sebelum parlay ini berubah menjadi EV nol.`
+  );
+  if (best.evPessimistic <= 0) {
+    notes.push(
+      "EV tetap negatif dalam skenario pesimis (setiap leg dikurangi satu sigma). Anggap ini taruhan berisiko tinggi, bukan nilai yang aman."
+    );
+  }
+  return {
+    ...base,
+    best,
+    alternatives: refined.slice(1, topN + 1),
+    combinationsEvaluated: evaluated,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    notes
+  };
+}
+function toParlayLegRows(combination, parlayId, options = {}) {
+  const createdAt = options.now ?? (/* @__PURE__ */ new Date()).toISOString();
+  return combination.legs.map((leg, index) => ({
+    parlay_id: parlayId,
+    prediction_id: options.predictionIdFor?.(leg.fixtureId) ?? null,
+    fixture_id: leg.fixtureId,
+    leg_order: index + 1,
+    market: leg.selection.label,
+    selection: leg.marketKey,
+    odds: leg.selection.odds,
+    probability: leg.selection.pFinal,
+    confidence: null,
+    result: null,
+    created_at: createdAt
+  }));
+}
+var MIN_LEGS, MAX_LEGS, DEFAULT_MAX_CANDIDATES, ALLOW_TWO_LEG_PARLAY, ident;
+var init_composition = __esm({
+  "src/lib/quant/composition.ts"() {
+    "use strict";
+    init_parlay();
+    MIN_LEGS = 3;
+    MAX_LEGS = 5;
+    DEFAULT_MAX_CANDIDATES = 30;
+    ALLOW_TWO_LEG_PARLAY = true;
+    ident = (candidate) => ({
+      marketKey: candidate.marketKey,
+      fixtureId: candidate.fixtureId
+    });
+  }
+});
+
 // src/serverless.ts
 var serverless_exports = {};
 __export(serverless_exports, {
@@ -85308,6 +85665,144 @@ init_reanalysis();
 init_odds_history();
 init_settlement();
 init_parlay_builder();
+
+// src/services/parlay-composer.ts
+init_supabase_client();
+init_logger();
+init_composition();
+var COMPOSER_GENERATED_BY = "QUANT_COMPOSER";
+async function composeAndSaveParlay(candidates, options = {}) {
+  const client = options.client ?? supabase;
+  const composition = buildParlayComposition(candidates, {
+    minLegs: options.minLegs,
+    maxLegs: options.maxLegs,
+    maxCandidates: options.maxCandidates,
+    seed: options.seed
+  });
+  if (!composition.best) {
+    return {
+      composition,
+      parlayId: null,
+      saved: false,
+      note: composition.notes[0] ?? "Tidak ada kombinasi yang memenuhi syarat."
+    };
+  }
+  if (!client) {
+    return {
+      composition,
+      parlayId: null,
+      saved: false,
+      note: "Supabase tidak tersedia \u2014 kombinasi disusun tetapi tidak disimpan."
+    };
+  }
+  const best = composition.best;
+  const leagues = new Set(best.legs.map((leg) => leg.league).filter(Boolean));
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const { data: parlay, error: parlayError } = await client.from("parlays").insert({
+    parlay_name: options.name ?? `Parlay Kuantitatif \u2014 ${(/* @__PURE__ */ new Date()).toLocaleDateString("id-ID")}`,
+    legs_count: best.legs.length,
+    combined_odds: best.combinedOdds,
+    win_probability: best.pDecision,
+    expected_value: best.evDecision,
+    avg_confidence: null,
+    status: "active",
+    generated_by: COMPOSER_GENERATED_BY,
+    leagues_count: leagues.size,
+    countries_count: leagues.size,
+    reasoning: buildReasoning(composition),
+    created_at: now,
+    updated_at: now
+  }).select("id").single();
+  if (parlayError || !parlay?.id) {
+    logger.error({ error: parlayError }, "[COMPOSER] Gagal menyimpan parlay hasil komposisi");
+    return {
+      composition,
+      parlayId: null,
+      saved: false,
+      note: `Penyimpanan parlay gagal: ${parlayError?.message ?? "id tidak dikembalikan"}`
+    };
+  }
+  const parlayId = String(parlay.id);
+  const rows = toParlayLegRows(best, parlayId, { now });
+  const { error: legsError } = await client.from("parlay_legs").insert(rows);
+  if (legsError) {
+    await client.from("parlays").delete().eq("id", parlayId);
+    logger.error({ error: legsError, parlayId }, "[COMPOSER] Gagal menyimpan leg, parlay dibatalkan");
+    return {
+      composition,
+      parlayId: null,
+      saved: false,
+      note: `Penyimpanan leg gagal, parlay dibatalkan: ${legsError.message}`
+    };
+  }
+  logger.info(
+    {
+      parlayId,
+      legs: best.legs.length,
+      combinedOdds: best.combinedOdds,
+      evDecision: best.evDecision,
+      combinationsEvaluated: composition.combinationsEvaluated
+    },
+    "[COMPOSER] Parlay hasil komposisi tersimpan"
+  );
+  return { composition, parlayId, saved: true, note: null };
+}
+function buildReasoning(composition) {
+  const best = composition.best;
+  const legs = best.legs.map((leg) => `${leg.selection.label} (${leg.league}, EV ${(leg.selection.evConservative * 100).toFixed(1)}%)`).join("; ");
+  return [
+    `${best.legs.length} leg dipilih dari ${composition.eligible} kandidat layak (${composition.combinationsEvaluated} kombinasi diuji).`,
+    `Leg: ${legs}.`,
+    `Odds gabungan ${best.combinedOdds.toFixed(2)}, peluang menang ${(best.pDecision * 100).toFixed(1)}%, EV ${(best.evDecision * 100).toFixed(1)}%.`,
+    `Toleransi overestimasi ${(best.breakEvenBias * 100).toFixed(1)} poin per leg.`,
+    "Prior korelasi masih heuristik; angka ini konservatif, bukan jaminan."
+  ].join(" ");
+}
+
+// src/services/parlay-candidates.ts
+function candidatesFromSelectionRows(rows, fixtureMeta) {
+  const candidates = [];
+  for (const row of rows) {
+    const fixtureId = Number(row.fixture_id);
+    if (!Number.isInteger(fixtureId)) continue;
+    const meta = fixtureMeta.get(fixtureId);
+    if (!meta) continue;
+    const passing = row.ev_conservative > 0;
+    const selection = {
+      key: row.market_key,
+      label: row.market_key.replace(/_/g, " "),
+      family: row.family,
+      odds: row.odds,
+      line: row.line,
+      pFinal: row.p_final,
+      pMarket: row.p_market_fair,
+      pModelOnly: row.p_model_only ?? row.p_final,
+      /* Distribusi hasil tidak disimpan di ledger; hanya baris yang lolos
+       * (EV konservatif > 0) yang dibentuk ulang, dan komposisi memakai
+       * `pFinal` bukan `outcome`. Nol di semua komponen adalah pengisi
+       * netral, bukan klaim tentang hasil. */
+      outcome: { win: row.p_final, halfWin: 0, push: 0, halfLoss: 0, loss: 1 - row.p_final },
+      ev: row.ev,
+      evConservative: row.ev_conservative,
+      sigma: 0,
+      stakePct: 0,
+      minOdds: 0,
+      passes: passing,
+      rejectReasons: passing ? [] : ["EV konservatif \u2264 0"]
+    };
+    if (!passing) continue;
+    candidates.push({
+      marketKey: row.market_key,
+      fixtureId,
+      league: meta.league,
+      date: meta.date ?? null,
+      selection
+    });
+  }
+  return candidates;
+}
+
+// src/routes/parlays.ts
 var router12 = (0, import_express12.Router)();
 var READINESS_MAX_AGE_MINUTES = 3 * 60;
 function asIds(value) {
@@ -85448,6 +85943,90 @@ function sameMarketLine(actual, requested) {
   }
   return String(actual ?? "").trim().toLowerCase() === requested.trim().toLowerCase();
 }
+router12.get("/parlays/compose-preview", async (req, res) => {
+  try {
+    if (!supabase) {
+      res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
+      return;
+    }
+    const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").gt("ev_conservative", 0).order("ev_conservative", { ascending: false }).limit(200);
+    if (error) {
+      res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
+      return;
+    }
+    const selectionRows = rows ?? [];
+    if (selectionRows.length === 0) {
+      res.json({
+        best: null,
+        alternatives: [],
+        eligible: 0,
+        rejected: [],
+        combinationsEvaluated: 0,
+        notes: [
+          "Ledger quant (prediction_selections) kosong. Komposisi butuh harga hasil hitungan engine; tanpa itu tidak ada yang bisa dipilih. Ini bukan kegagalan komposisi \u2014 bahan bakunya memang belum ada."
+        ],
+        generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      return;
+    }
+    const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
+    const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date").in("fixture_id", fixtureIds);
+    const meta = /* @__PURE__ */ new Map();
+    for (const f of fixtures ?? []) {
+      meta.set(Number(f.fixture_id), {
+        fixtureId: Number(f.fixture_id),
+        league: f.league_name ?? "unknown",
+        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null
+      });
+    }
+    const candidates = candidatesFromSelectionRows(selectionRows, meta);
+    const { buildParlayComposition: buildParlayComposition2 } = await Promise.resolve().then(() => (init_composition(), composition_exports));
+    const limit = Number(req.query["maxCandidates"]) || void 0;
+    const composition = buildParlayComposition2(candidates, { maxCandidates: limit });
+    res.json({ ...composition, ledgerRows: selectionRows.length });
+  } catch (err) {
+    logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
+    res.status(500).json({ error: "Gagal menyusun pratinjau komposisi parlay" });
+  }
+});
+router12.post("/parlays/compose", requireAdmin, async (req, res) => {
+  try {
+    if (!supabase) {
+      res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
+      return;
+    }
+    const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").gt("ev_conservative", 0).order("ev_conservative", { ascending: false }).limit(200);
+    if (error) {
+      res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
+      return;
+    }
+    const selectionRows = rows ?? [];
+    const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
+    const { data: fixtures } = fixtureIds.length ? await supabase.from("fixtures").select("fixture_id, league_name, fixture_date").in("fixture_id", fixtureIds) : { data: [] };
+    const meta = /* @__PURE__ */ new Map();
+    for (const f of fixtures ?? []) {
+      meta.set(Number(f.fixture_id), {
+        fixtureId: Number(f.fixture_id),
+        league: f.league_name ?? "unknown",
+        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null
+      });
+    }
+    const result2 = await composeAndSaveParlay(
+      candidatesFromSelectionRows(selectionRows, meta),
+      { maxCandidates: Number(req.body?.maxCandidates) || void 0 }
+    );
+    res.json({
+      message: result2.saved ? "Parlay hasil komposisi tersimpan" : "Komposisi selesai, tidak ada yang disimpan",
+      parlayId: result2.parlayId,
+      saved: result2.saved,
+      note: result2.note,
+      composition: result2.composition
+    });
+  } catch (err) {
+    logger.error({ err }, "Gagal menyusun dan menyimpan parlay komposisi");
+    res.status(500).json({ error: "Gagal menyusun dan menyimpan parlay komposisi" });
+  }
+});
 router12.get("/parlays/predictions", async (_req, res) => {
   try {
     const now = (/* @__PURE__ */ new Date()).toISOString();

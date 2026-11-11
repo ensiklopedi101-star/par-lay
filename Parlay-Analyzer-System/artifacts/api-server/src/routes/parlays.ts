@@ -23,6 +23,12 @@ import {
   createMergedParlay,
   type ParlayCandidate,
 } from "../services/parlay-builder";
+import { composeAndSaveParlay } from "../services/parlay-composer";
+import {
+  candidatesFromSelectionRows,
+  type FixtureMeta,
+  type SelectionRow,
+} from "../services/parlay-candidates";
 
 const router: IRouter = Router();
 // A successful provider refresh is considered usable for three hours. A
@@ -303,6 +309,148 @@ function sameMarketLine(actual: unknown, requested: string): boolean {
 
 /* Individual AI signals for manual parlay construction. This intentionally
    stays separate from the active-parlay history endpoint. */
+/**
+ * GET /parlays/compose-preview — susun parlay dari ledger TANPA menyimpan.
+ *
+ * Menjawab pertanyaan yang selama ini tidak bisa dijawab: dari puluhan market
+ * yang sudah dinilai engine, kombinasi mana yang terbaik setelah koreksi
+ * korelasi? Aman dipanggil berapa pun karena hanya membaca.
+ *
+ * Bila ledger kosong, jawabannya apa adanya — bukan parlay kosong yang tampak
+ * seperti hasil.
+ */
+router.get("/parlays/compose-preview", async (req, res) => {
+  try {
+    if (!supabase) {
+      res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
+      return;
+    }
+
+    const { data: rows, error } = await supabase
+      .from("prediction_selections")
+      .select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative")
+      .gt("ev_conservative", 0)
+      .order("ev_conservative", { ascending: false })
+      .limit(200);
+
+    if (error) {
+      res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
+      return;
+    }
+
+    const selectionRows = (rows ?? []) as SelectionRow[];
+    if (selectionRows.length === 0) {
+      res.json({
+        best: null,
+        alternatives: [],
+        eligible: 0,
+        rejected: [],
+        combinationsEvaluated: 0,
+        notes: [
+          "Ledger quant (prediction_selections) kosong. Komposisi butuh harga hasil " +
+            "hitungan engine; tanpa itu tidak ada yang bisa dipilih. Ini bukan kegagalan " +
+            "komposisi — bahan bakunya memang belum ada.",
+        ],
+        generatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    /* Metadata fixture diperlukan untuk korelasi (liga + tanggal). Tanpa itu
+     * dua leg dari pertandingan berbeda di hari sama tidak bisa dibedakan. */
+    const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
+    const { data: fixtures } = await supabase
+      .from("fixtures")
+      .select("fixture_id, league_name, fixture_date")
+      .in("fixture_id", fixtureIds);
+
+    const meta = new Map<number, FixtureMeta>();
+    for (const f of (fixtures ?? []) as Array<{ fixture_id: number; league_name: string | null; fixture_date: string | null }>) {
+      meta.set(Number(f.fixture_id), {
+        fixtureId: Number(f.fixture_id),
+        league: f.league_name ?? "unknown",
+        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
+      });
+    }
+
+    const candidates = candidatesFromSelectionRows(selectionRows, meta);
+
+    /* `buildParlayComposition` diimpor malas agar rute ini tidak menambah
+     * beban muat pada jalur yang tidak memakainya. */
+    const { buildParlayComposition } = await import("../lib/quant/composition");
+    const limit = Number(req.query["maxCandidates"]) || undefined;
+    const composition = buildParlayComposition(candidates, { maxCandidates: limit });
+
+    res.json({ ...composition, ledgerRows: selectionRows.length });
+  } catch (err) {
+    logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
+    res.status(500).json({ error: "Gagal menyusun pratinjau komposisi parlay" });
+  }
+});
+
+/**
+ * POST /parlays/compose — susun DAN simpan (butuh admin).
+ *
+ * Berbeda dari `/parlays/merge`: rute itu menerima leg yang sudah dipilih,
+ * rute ini MEMILIH leg-nya sendiri dari ledger dan menyimpan hasilnya dengan
+ * `generated_by = QUANT_COMPOSER` agar bisa dibedakan saat evaluasi.
+ */
+router.post("/parlays/compose", requireAdmin, async (req, res) => {
+  try {
+    if (!supabase) {
+      res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
+      return;
+    }
+
+    const { data: rows, error } = await supabase
+      .from("prediction_selections")
+      .select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative")
+      .gt("ev_conservative", 0)
+      .order("ev_conservative", { ascending: false })
+      .limit(200);
+
+    if (error) {
+      res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
+      return;
+    }
+
+    const selectionRows = (rows ?? []) as SelectionRow[];
+    const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
+    const { data: fixtures } = fixtureIds.length
+      ? await supabase
+          .from("fixtures")
+          .select("fixture_id, league_name, fixture_date")
+          .in("fixture_id", fixtureIds)
+      : { data: [] };
+
+    const meta = new Map<number, FixtureMeta>();
+    for (const f of (fixtures ?? []) as Array<{ fixture_id: number; league_name: string | null; fixture_date: string | null }>) {
+      meta.set(Number(f.fixture_id), {
+        fixtureId: Number(f.fixture_id),
+        league: f.league_name ?? "unknown",
+        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
+      });
+    }
+
+    const result = await composeAndSaveParlay(
+      candidatesFromSelectionRows(selectionRows, meta),
+      { maxCandidates: Number(req.body?.maxCandidates) || undefined },
+    );
+    res.json({
+      message: result.saved
+        ? "Parlay hasil komposisi tersimpan"
+        : "Komposisi selesai, tidak ada yang disimpan",
+      parlayId: result.parlayId,
+      saved: result.saved,
+      note: result.note,
+      composition: result.composition,
+    });
+  } catch (err) {
+    logger.error({ err }, "Gagal menyusun dan menyimpan parlay komposisi");
+    res.status(500).json({ error: "Gagal menyusun dan menyimpan parlay komposisi" });
+  }
+});
+
 router.get("/parlays/predictions", async (_req, res) => {
   try {
     const now = new Date().toISOString();
