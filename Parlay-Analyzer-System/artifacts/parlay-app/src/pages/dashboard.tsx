@@ -5,6 +5,7 @@ import {
   useGetSyncStatus,
   useGetSettlementSummary,
   useGetAutomationStatus,
+  useGetParlayComposition,
   useListSupabaseParlays,
   useListSupabaseFixtures,
   useGetHealth,
@@ -30,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { SyncTransparencyPanel } from "@/components/sync-transparency-panel";
 import { SettlementTransparencyPanel } from "@/components/settlement-transparency-panel";
+import { ParlayCompositionPanel } from "@/components/parlay-composition-panel";
 import { AutomationStatusPanel } from "@/components/automation-status-panel";
 import { formatLeagueName } from "@/utils/format-league";
 import { useAdminPassword, clearStoredAdminPassword } from "@/hooks/use-admin-password";
@@ -60,6 +62,7 @@ export default function Dashboard() {
   const { data: syncStatus, isLoading: isSyncLoading } = useGetSyncStatus();
   const { data: settlementSummary, isLoading: isSettlementLoading } = useGetSettlementSummary();
   const { data: automationStatus, isLoading: isAutomationLoading } = useGetAutomationStatus();
+  const { data: parlayComposition, isLoading: isCompositionLoading } = useGetParlayComposition();
   const { data: config } = useGetConfig();
   const scanDays = config?.scanDays ?? 11;
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
@@ -465,6 +468,12 @@ export default function Dashboard() {
       <SyncTransparencyPanel status={syncStatus} isLoading={isSyncLoading} />
 
       <SettlementTransparencyPanel summary={settlementSummary} isLoading={isSettlementLoading} />
+
+      {/* Panel komposisi parlay — mesin yang MEMILIH 3–5 leg dari puluhan
+          kandidat, bukan menggabungkan leg yang dikirim manusia. Menampilkan
+          prosesnya (kandidat, kombinasi diuji, korelasi) supaya hasilnya bisa
+          diperiksa, bukan dipercaya begitu saja. */}
+      <ParlayCompositionPanel composition={parlayComposition} isLoading={isCompositionLoading} />
 
       {/* Panel jadwal otomatis — menjawab "tugas mana yang tidak akan pernah
           berjalan sendiri". Penarikan skor sudah ada kodenya, tetapi hanya

@@ -93,15 +93,37 @@ export async function createMergedParlay(
       continue;
     }
     const isUserSelection = candidate.source === "USER_SELECTION";
+    /*
+     * Gerbang `confidence < 6.5` DIHAPUS (Nov 2026), sama seperti di
+     * `ai-analysis.ts` dan `learning-policy.ts`.
+     *
+     * Confidence adalah angka self-report model bahasa, bukan hasil hitung.
+     * Ia sempat menjadi gerbang di tiga tempat sekaligus, sehingga leg dengan
+     * `evConservative` kuat tetap ditolak hanya karena model menulis "6.0".
+     * Nilai keputusan yang sebenarnya adalah EV — dan untuk parlay, modul
+     * `lib/quant/composition.ts` yang menyaring leg lewat `evConservative > 0`
+     * plus simulasi korelasi.
+     *
+     * Di sini tinggal pemeriksaan yang bisa dibuktikan: odds masuk akal dan
+     * probabilitasnya berada di (0,1).
+     */
     if (
       candidate.odds <= 1
-      || (!isUserSelection && (candidate.confidence == null || candidate.confidence < 6.5))
       || !Number.isFinite(candidate.probability)
       || candidate.probability <= 0
       || candidate.probability >= 1
     ) {
-      rejected.push({ fixtureId, reason: "Odds, confidence, atau probabilitas tidak memenuhi batas minimum." });
+      rejected.push({ fixtureId, reason: "Odds atau probabilitas tidak memenuhi batas minimum." });
       continue;
+    }
+
+    /* Konteks untuk leg pilihan pengguna: catat bila confidence rendah, tetapi
+     * JANGAN menolak hanya karena itu. */
+    if (!isUserSelection && (candidate.confidence == null || candidate.confidence < 6.5)) {
+      logger.debug(
+        { fixtureId, confidence: candidate.confidence },
+        "[PARLAY-MERGE] Confidence rendah — tidak lagi menjadi gerbang penolakan",
+      );
     }
     if (unique.size >= 7) {
       rejected.push({ fixtureId, reason: "Batas maksimum 7 leg tercapai." });
