@@ -5,6 +5,124 @@ import { isSyncRunning } from "../services/odds-fetcher";
 import { requireAdmin } from "../middlewares/admin";
 import cron from "node-cron";
 import { reloadOddsSchedule } from "../scheduler";
+import { buildSettlementSummary } from "../services/settlement-summary";
+
+/**
+ * ─── Transparansi sync ────────────────────────────────────────────────────
+ * `sync_runs` sudah menyimpan seluruh statistik satu proses sync, tetapi
+ * dashboard hanya menampilkan waktu dan status. Struktur di bawah ini
+ * menormalkan baris DB menjadi bentuk yang aman dikirim ke klien, sekaligus
+ * menghitung durasi dan throughput agar bisa ditampilkan apa adanya.
+ */
+
+/** Batas run dianggap basi. Sync per-liga normal selesai < 2 menit. */
+const STALE_RUN_SECONDS = 10 * 60;
+
+/** Berapa run terakhir yang dikirim ke dashboard. */
+const SYNC_HISTORY_LIMIT = 12;
+
+const SYNC_RUN_COLUMNS = [
+  "id",
+  "started_at",
+  "finished_at",
+  "status",
+  "leagues",
+  "events_fetched",
+  "events_inserted",
+  "odds_fetched",
+  "errors",
+  "rate_limited_seconds",
+  "error_message",
+  "created_at",
+].join(", ");
+
+export interface SyncRunSummary {
+  id: number | null;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  /** Durasi milidetik; `null` bila run belum selesai. */
+  durationMs: number | null;
+  leagues: string[];
+  leagueCount: number;
+  eventsFetched: number;
+  eventsInserted: number;
+  oddsFetched: number;
+  errors: number;
+  rateLimitedSeconds: number;
+  errorMessage: string | null;
+  /** Persentase event yang tersimpan dari yang ditarik; `null` bila tidak ada. */
+  insertRatio: number | null;
+  /**
+   * Penjelasan bila tidak ada satu pun event tersimpan meski ada yang ditarik.
+   *
+   * Angka `eventsFetched: 811, eventsInserted: 0` terlihat seperti kegagalan
+   * total, padahal hampir selalu berarti "semua event di luar jendela".
+   * Tanpa penjelasan ini, dashboard hanya menampilkan nol tanpa sebab — dan
+   * itulah yang membuat proses sync terasa tidak transparan.
+   */
+  zeroInsertReason: string | null;
+}
+
+function num(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function toSyncRunSummary(input: unknown): SyncRunSummary {
+  const row = (input ?? {}) as Record<string, unknown>;
+  const startedAt = (row["started_at"] as string | null) ?? (row["created_at"] as string) ?? new Date().toISOString();
+  const finishedAt = (row["finished_at"] as string | null) ?? null;
+  const startMs = new Date(startedAt).getTime();
+  const endMs = finishedAt ? new Date(finishedAt).getTime() : NaN;
+  const durationMs =
+    Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : null;
+
+  const eventsFetched = num(row["events_fetched"]);
+  const eventsInserted = num(row["events_inserted"]);
+  const leagues = Array.isArray(row["leagues"]) ? (row["leagues"] as string[]) : [];
+
+  return {
+    id: row["id"] != null ? num(row["id"]) : null,
+    status: (row["status"] as string) ?? "unknown",
+    startedAt,
+    finishedAt,
+    durationMs,
+    leagues,
+    leagueCount: leagues.length,
+    eventsFetched,
+    eventsInserted,
+    oddsFetched: num(row["odds_fetched"]),
+    errors: num(row["errors"]),
+    rateLimitedSeconds: num(row["rate_limited_seconds"]),
+    errorMessage: (row["error_message"] as string | null) ?? null,
+    insertRatio: eventsFetched > 0 ? eventsInserted / eventsFetched : null,
+    zeroInsertReason: explainZeroInsert(eventsFetched, eventsInserted),
+  };
+}
+
+/**
+ * Terangkan kenapa `eventsFetched` bisa besar sementara `eventsInserted` nol.
+ *
+ * Alurnya di `fetchAndSaveLeagueOdds`:
+ *   1. provider mengembalikan SEMUA event satu liga  → `eventsFetched`
+ *   2. event disaring ke jendela `scan_days` (default 10 hari ke depan)
+ *   3. event yang sudah tersinkron dibuang
+ *   4. sisa event diambil odds-nya satu per satu    → `saved` / `inserted`
+ *
+ * Jadi nol bukan berarti gagal: bisa berarti tidak ada satu pun event yang
+ * jatuh di jendela, atau semuanya sudah tersinkron sebelumnya. Keduanya
+ * normal dan tidak butuh tindakan — beda halnya dengan error atau rate limit.
+ */
+function explainZeroInsert(fetched: number, inserted: number): string | null {
+  if (fetched <= 0 || inserted > 0) return null;
+  return (
+    "Tidak ada event baru yang masuk jendela pemindaian. Provider mengembalikan " +
+    `${fetched} event, tetapi semuanya jatuh di luar jendela (atau sudah tersinkron ` +
+    "sebelumnya). Ini normal saat liga sedang jeda atau jadwal belum dirilis — " +
+    "bukan kegagalan. Perbesar scan_days bila ingin jendela lebih jauh."
+  );
+}
 
 export const LEAGUES_CATALOG = [
   { slug: "england-premier-league",      name: "Premier League",         country: "Inggris" },
@@ -228,16 +346,57 @@ router.post("/sync/reanalyze", requireAdmin, async (req, res) => {
   }
 });
 
+/**
+ * GET /sync/settlement-summary — transparansi proses settlement.
+ *
+ * Menjawab pertanyaan "kenapa hasil settlement belum muncul": berapa yang
+ * sudah selesai, berapa menunggu skor, berapa yang gagal karena data tidak
+ * lengkap. Hanya membaca; tidak memakai kuota penyedia odds.
+ */
+router.get("/sync/settlement-summary", async (_req, res) => {
+  try {
+    const summary = await buildSettlementSummary();
+    res.json(summary);
+  } catch (err) {
+    logger.error({ err }, "Gagal membangun ringkasan settlement");
+    res.status(500).json({
+      error: "Gagal membangun ringkasan settlement",
+      detail: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 router.get("/sync/status", async (_req, res) => {
+  /* `supabase` bernilai null bila SUPABASE_URL / service-role key tidak diset
+   * (mis. saat dijalankan tanpa env, atau env salah nama di platform).
+   * Tanpa penjagaan ini rute melempar TypeError dan berakhir 500 tanpa
+   * menjelaskan apa pun. Lebih baik 503 dengan sebab yang bisa dibaca. */
+  if (!supabase) {
+    res.status(503).json({
+      error: "Supabase tidak terkonfigurasi",
+      detail:
+        "SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY harus tersedia agar status sync bisa dibaca.",
+      configured: false,
+    });
+    return;
+  }
+
   try {
     const { data: schedulerConfig } = await supabase
       .from("scheduler_config")
-      .select("leagues")
+      .select("leagues, scan_days")
       .limit(1)
       .maybeSingle();
     const configuredLeagues = Array.isArray(schedulerConfig?.leagues)
       ? schedulerConfig.leagues
       : [];
+    /* Jendela pemindaian ikut dikirim: tanpa ini, angka "0 tersimpan"
+     * tidak bisa ditindaklanjuti karena pengguna tidak tahu seberapa jauh
+     * sistem mencari fixture. */
+    const scanDays =
+      typeof schedulerConfig?.scan_days === "number" && schedulerConfig.scan_days >= 1
+        ? schedulerConfig.scan_days
+        : 10;
 
     const { count: totalCount, error: countErr } = await supabase
       .from("fixtures")
@@ -260,23 +419,37 @@ router.get("/sync/status", async (_req, res) => {
       leagueMap.set(row.league_name, (leagueMap.get(row.league_name) ?? 0) + 1);
     }
 
-    // Prefer dedicated sync_runs table for accurate last sync time
+    /* ─── Transparansi sync ────────────────────────────────────────────────
+     * Sebelumnya endpoint ini hanya mengambil `finished_at` dan `status`,
+     * sehingga seluruh isi `sync_runs` (berapa event ditarik, berapa
+     * tersimpan, berapa error, kena rate limit berapa detik) terbuang.
+     * Akibatnya dashboard hanya bisa menampilkan "Last Sync" dan "Idle" —
+     * tidak ada cara mengetahui proses sync benar-benar terjadi.
+     *
+     * Sekarang seluruh kolom diambil, ditambah riwayat beberapa run terakhir
+     * agar tren (mis. run yang selalu error) bisa dilihat.
+     */
     let lastSyncAt: string | null = null;
     let lastSyncStatus: string | null = null;
+    let lastSyncRun: SyncRunSummary | null = null;
+    let recentSyncRuns: SyncRunSummary[] = [];
+
     try {
-      const { data: lastSync } = await supabase
+      const { data: runs } = await supabase
         .from("sync_runs")
-        .select("finished_at, status")
+        .select(SYNC_RUN_COLUMNS)
         .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (lastSync) {
-        lastSyncAt = (lastSync.finished_at as string) ?? null;
-        lastSyncStatus = (lastSync.status as string) ?? null;
+        .limit(SYNC_HISTORY_LIMIT);
+
+      if (Array.isArray(runs) && runs.length > 0) {
+        recentSyncRuns = runs.map(toSyncRunSummary);
+        lastSyncRun = recentSyncRuns[0] ?? null;
+        lastSyncAt = lastSyncRun.finishedAt ?? lastSyncRun.startedAt;
+        lastSyncStatus = lastSyncRun.status;
       }
     } catch (err) {
-      // sync_runs table may not exist yet; fallback to fixtures.updated_at
-      logger.debug({ err }, "sync_runs table not available, falling back to fixtures.updated_at");
+      /* Tabel sync_runs mungkin belum ada; jatuh ke fixtures.updated_at. */
+      logger.debug({ err }, "sync_runs tidak tersedia, memakai fixtures.updated_at");
       const { data: fallback } = await supabase
         .from("fixtures")
         .select("updated_at")
@@ -285,6 +458,16 @@ router.get("/sync/status", async (_req, res) => {
         .maybeSingle();
       lastSyncAt = fallback?.updated_at ?? null;
     }
+
+    /* Run yang masih berjalan diambil terpisah: kalau sebuah run berstatus
+     * `running`, created_at run itu adalah yang terbaru sehingga sudah
+     * tertangkap di atas. Tetapi bila proses mati di tengah jalan (mis.
+     * fungsi Vercel kehabisan waktu 60 detik), statusnya tetap `running`
+     * selamanya. Karena itu umur run dihitung agar bisa ditandai basi. */
+    const runningRun = recentSyncRuns.find((r) => r.status === "running") ?? null;
+    const runningAgeSeconds = runningRun
+      ? Math.max(0, Math.round((Date.now() - new Date(runningRun.startedAt).getTime()) / 1000))
+      : null;
 
     res.json({
       totalEvents: totalCount ?? 0,
@@ -297,6 +480,17 @@ router.get("/sync/status", async (_req, res) => {
         leagueSlug,
         eventCount,
       })),
+
+      /* ─── Detail transparansi (baru) ─── */
+      lastSyncRun,
+      recentSyncRuns,
+      scanDays,
+      runningAgeSeconds,
+      /* `true` bila ada run berstatus `running` yang umurnya melewati ambang —
+       * tanda prosesnya mati, bukan sedang berjalan. */
+      staleRunning: runningAgeSeconds != null && runningAgeSeconds > STALE_RUN_SECONDS,
+      staleThresholdSeconds: STALE_RUN_SECONDS,
+      historyLimit: SYNC_HISTORY_LIMIT,
     });
   } catch (err) {
     logger.error({ err }, "Failed to get sync status");

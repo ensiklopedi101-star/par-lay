@@ -3,6 +3,7 @@ import { addDays, formatISO, startOfDay } from "date-fns";
 import {
   useGetConfig,
   useGetSyncStatus,
+  useGetSettlementSummary,
   useListSupabaseParlays,
   useListSupabaseFixtures,
   useGetHealth,
@@ -26,6 +27,8 @@ import {
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { SyncTransparencyPanel } from "@/components/sync-transparency-panel";
+import { SettlementTransparencyPanel } from "@/components/settlement-transparency-panel";
 import { formatLeagueName } from "@/utils/format-league";
 import { useAdminPassword, clearStoredAdminPassword } from "@/hooks/use-admin-password";
 import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
@@ -53,6 +56,7 @@ function HealthBadge({ status }: { status: string }) {
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const { data: syncStatus, isLoading: isSyncLoading } = useGetSyncStatus();
+  const { data: settlementSummary, isLoading: isSettlementLoading } = useGetSettlementSummary();
   const { data: config } = useGetConfig();
   const scanDays = config?.scanDays ?? 11;
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
@@ -451,6 +455,13 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Panel transparansi sync — menjawab pertanyaan "apakah sync benar-benar
+          terjadi, apa yang ditarik, dan apa yang gagal". Datanya dari
+          `sync_runs` yang sebelumnya tidak pernah diambil. */}
+      <SyncTransparencyPanel status={syncStatus} isLoading={isSyncLoading} />
+
+      <SettlementTransparencyPanel summary={settlementSummary} isLoading={isSettlementLoading} />
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="col-span-1 bg-card border-border">
