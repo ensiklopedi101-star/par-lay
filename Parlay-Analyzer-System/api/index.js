@@ -50768,6 +50768,10 @@ var init_odds_market = __esm({
 function isSyncRunning() {
   return syncRunning;
 }
+function getSyncTimeBudgetMs() {
+  const raw = Number(process.env["SYNC_TIME_BUDGET_MS"]);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_SYNC_TIME_BUDGET_MS;
+}
 function getOddsRefreshState() {
   return { ...lastOddsRefreshState, fixtureIds: [...lastOddsRefreshState.fixtureIds] };
 }
@@ -50809,6 +50813,21 @@ async function getConfiguredMarkets() {
   } catch (err) {
     logger.warn({ err }, "RADAR: Failed to load markets \u2014 using all supported markets");
     return [...DEFAULT_MARKETS];
+  }
+}
+function normalizeConfiguredBookmakers(values) {
+  if (!Array.isArray(values)) return DEFAULT_BOOKMAKERS;
+  const names = values.filter((value) => typeof value === "string" || typeof value === "number").map((value) => String(value).trim()).filter((value) => value.length > 0);
+  return names.length > 0 ? names.join(",") : DEFAULT_BOOKMAKERS;
+}
+async function getConfiguredBookmakers() {
+  try {
+    const { data, error } = await supabase.from("scheduler_config").select("bookmakers").limit(1).maybeSingle();
+    if (error) throw error;
+    return normalizeConfiguredBookmakers(data?.bookmakers);
+  } catch (err) {
+    logger.warn({ err }, "RADAR: Failed to load bookmakers \u2014 using default list");
+    return DEFAULT_BOOKMAKERS;
   }
 }
 function redactApiKey(url) {
@@ -51320,6 +51339,13 @@ async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, o
       "Events found"
     );
     for (const event of toFetch) {
+      if (options.deadlineAt != null && Date.now() >= options.deadlineAt) {
+        logger.warn(
+          { league: league.slug, eventId: event.id, deadlineAt: options.deadlineAt },
+          "RADAR: Deadline reached mid-league \u2014 stopping event fetch"
+        );
+        break;
+      }
       try {
         await new Promise((r) => setTimeout(r, 300));
         const withOdds = await fetchEventOdds(event.id, apiKey, bookmakers);
@@ -51358,7 +51384,7 @@ async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, o
     ...rateLimitedSeconds > 0 && { rateLimitedSeconds }
   };
 }
-async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers = DEFAULT_BOOKMAKERS, scanDays) {
+async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, scanDays) {
   if (syncRunning) {
     logger.warn("Sync already running \u2014 skipping");
     return;
@@ -51370,9 +51396,14 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers = DE
     return;
   }
   syncRunning = true;
+  const effectiveBookmakers = bookmakers?.trim() ? bookmakers.trim() : await getConfiguredBookmakers();
+  const deadlineAt = Date.now() + getSyncTimeBudgetMs();
   const upcomingWindowDays = normalizeScanDays(scanDays ?? await getConfiguredScanDays());
   const markets = await getConfiguredMarkets();
-  logger.info({ leagueCount: leagues.length, markets }, "RADAR: Starting odds sync \u2014 checking active leagues");
+  logger.info(
+    { leagueCount: leagues.length, markets, effectiveBookmakers, deadlineAt },
+    "RADAR: Starting odds sync \u2014 checking active leagues"
+  );
   let activeSlugs = /* @__PURE__ */ new Set();
   for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
     try {
@@ -51395,6 +51426,11 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers = DE
         if (attempt >= MAX_RATE_LIMIT_RETRIES) {
           syncRunning = false;
           logger.warn("RADAR: Active league fetch permanently skipped for this sync run");
+          return;
+        }
+        if (Date.now() + waitSeconds * 1e3 >= deadlineAt) {
+          syncRunning = false;
+          logger.warn("RADAR: Rate-limit backoff would exceed the time budget \u2014 sync skipped this cycle");
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1e3));
@@ -51435,96 +51471,120 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers = DE
     logger.warn({ err }, "RADAR: Failed to load league ID map \u2014 using empty map");
     leagueIdMap = /* @__PURE__ */ new Map();
   }
-  let remainingSlots = MAX_EVENTS_PER_SYNC;
-  for (const league of leaguesToSync) {
-    if (remainingSlots <= 0) {
-      logger.info({ maxEvents: MAX_EVENTS_PER_SYNC }, "RADAR: Reached per-sync event cap \u2014 pausing until next cycle");
-      status = "partial";
-      break;
-    }
-    let leagueSaved = 0;
-    let leagueOddsFetched = 0;
-    let leagueErrors = 0;
-    let leagueEventsFetched = 0;
-    let leagueRateLimitedSeconds = 0;
-    let leagueCompleted = false;
-    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-      logger.info({ league: league.slug, remainingSlots, attempt: attempt + 1 }, "RADAR: Processing league");
-      let result2;
-      try {
-        result2 = await fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, {
-          maxEvents: remainingSlots,
-          upcomingWindowDays,
-          markets
-        });
-      } catch (err) {
-        status = "failed";
-        errorMessage2 = err instanceof Error ? err.message : "Unknown error";
-        logger.error({ err, league: league.slug }, "RADAR: Sync failed");
-        break;
-      }
-      if (attempt === 0) leagueEventsFetched = result2.eventsFetched;
-      leagueSaved += result2.saved;
-      leagueOddsFetched += result2.oddsFetched;
-      leagueErrors += result2.errors;
-      if (!result2.rateLimitedSeconds) {
-        leagueCompleted = true;
-        break;
-      }
-      leagueRateLimitedSeconds = result2.rateLimitedSeconds;
-      rateLimitedSeconds = Math.max(rateLimitedSeconds, leagueRateLimitedSeconds);
-      if (attempt >= MAX_RATE_LIMIT_RETRIES) {
+  try {
+    let remainingSlots = MAX_EVENTS_PER_SYNC;
+    for (const league of leaguesToSync) {
+      if (remainingSlots <= 0) {
+        logger.info({ maxEvents: MAX_EVENTS_PER_SYNC }, "RADAR: Reached per-sync event cap \u2014 pausing until next cycle");
         status = "partial";
-        permanentlySkippedLeagues.push(league.slug);
-        logger.warn(
-          { league: league.slug, retryAfterSeconds: leagueRateLimitedSeconds },
-          "RADAR: League permanently skipped after rate-limit retries"
-        );
         break;
       }
-      if (!retriedLeagues.includes(league.slug)) retriedLeagues.push(league.slug);
-      const waitSeconds = Math.min(
-        Math.max(1, leagueRateLimitedSeconds),
-        MAX_RATE_LIMIT_BACKOFF_SECONDS
-      );
-      logger.warn(
-        { league: league.slug, attempt: attempt + 1, retryAfterSeconds: leagueRateLimitedSeconds, waitSeconds },
-        "RADAR: Backing off before retrying league"
-      );
-      await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1e3));
+      if (Date.now() >= deadlineAt) {
+        logger.warn({ league: league.slug, deadlineAt }, "RADAR: Time budget exhausted \u2014 stopping sync before Vercel cutoff");
+        status = "partial";
+        if (errorMessage2.length > 0) errorMessage2 += "; ";
+        errorMessage2 += `Batas waktu tercapai \u2014 sisa liga dijadwalkan ulang (${league.slug} dkk)`;
+        break;
+      }
+      let leagueSaved = 0;
+      let leagueOddsFetched = 0;
+      let leagueErrors = 0;
+      let leagueEventsFetched = 0;
+      let leagueRateLimitedSeconds = 0;
+      let leagueCompleted = false;
+      for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+        logger.info({ league: league.slug, remainingSlots, attempt: attempt + 1 }, "RADAR: Processing league");
+        let result2;
+        try {
+          result2 = await fetchAndSaveLeagueOdds(league, apiKey, effectiveBookmakers, leagueIdMap, {
+            maxEvents: remainingSlots,
+            upcomingWindowDays,
+            markets,
+            deadlineAt
+          });
+        } catch (err) {
+          status = "failed";
+          errorMessage2 = err instanceof Error ? err.message : "Unknown error";
+          logger.error({ err, league: league.slug }, "RADAR: Sync failed");
+          break;
+        }
+        if (attempt === 0) leagueEventsFetched = result2.eventsFetched;
+        leagueSaved += result2.saved;
+        leagueOddsFetched += result2.oddsFetched;
+        leagueErrors += result2.errors;
+        if (!result2.rateLimitedSeconds) {
+          leagueCompleted = true;
+          break;
+        }
+        leagueRateLimitedSeconds = result2.rateLimitedSeconds;
+        rateLimitedSeconds = Math.max(rateLimitedSeconds, leagueRateLimitedSeconds);
+        if (attempt >= MAX_RATE_LIMIT_RETRIES) {
+          status = "partial";
+          permanentlySkippedLeagues.push(league.slug);
+          logger.warn(
+            { league: league.slug, retryAfterSeconds: leagueRateLimitedSeconds },
+            "RADAR: League permanently skipped after rate-limit retries"
+          );
+          break;
+        }
+        if (!retriedLeagues.includes(league.slug)) retriedLeagues.push(league.slug);
+        const waitSeconds = Math.min(
+          Math.max(1, leagueRateLimitedSeconds),
+          MAX_RATE_LIMIT_BACKOFF_SECONDS
+        );
+        logger.warn(
+          { league: league.slug, attempt: attempt + 1, retryAfterSeconds: leagueRateLimitedSeconds, waitSeconds },
+          "RADAR: Backing off before retrying league"
+        );
+        if (Date.now() + waitSeconds * 1e3 >= deadlineAt) {
+          status = "partial";
+          if (errorMessage2.length > 0) errorMessage2 += "; ";
+          errorMessage2 += `Backoff rate-limit melewati batas waktu \u2014 ${league.slug} ditunda`;
+          logger.warn({ league: league.slug, waitSeconds }, "RADAR: Backoff would exceed time budget \u2014 deferring league");
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1e3));
+      }
+      totalEventsFetched += leagueEventsFetched;
+      totalEventsInserted += leagueSaved;
+      totalOddsFetched += leagueOddsFetched;
+      totalErrors += leagueErrors;
+      remainingSlots -= leagueSaved;
+      await updateSyncRunStats(syncRunId, {
+        events_fetched: totalEventsFetched,
+        events_inserted: totalEventsInserted,
+        odds_fetched: totalOddsFetched,
+        errors: totalErrors
+      });
+      if (!leagueCompleted && status === "failed") break;
+      await new Promise((r) => setTimeout(r, 500));
     }
-    totalEventsFetched += leagueEventsFetched;
-    totalEventsInserted += leagueSaved;
-    totalOddsFetched += leagueOddsFetched;
-    totalErrors += leagueErrors;
-    remainingSlots -= leagueSaved;
-    await updateSyncRunStats(syncRunId, {
+    if (permanentlySkippedLeagues.length > 0) {
+      const rateLimitNote = `Rate-limit retried leagues: ${retriedLeagues.join(", ") || "none"}; permanently skipped: ${permanentlySkippedLeagues.join(", ")}`;
+      errorMessage2 = errorMessage2.length > 0 ? `${errorMessage2}; ${rateLimitNote}` : rateLimitNote;
+    } else if (retriedLeagues.length > 0) {
+      const rateLimitNote = `Rate-limit retried leagues: ${retriedLeagues.join(", ")}; all retries recovered`;
+      errorMessage2 = errorMessage2.length > 0 ? `${errorMessage2}; ${rateLimitNote}` : rateLimitNote;
+    }
+  } catch (err) {
+    status = "failed";
+    errorMessage2 = err instanceof Error ? err.message : String(err);
+    logger.error({ err }, "RADAR: Sync failed unexpectedly");
+  } finally {
+    await finishSyncRun(syncRunId, status, {
       events_fetched: totalEventsFetched,
       events_inserted: totalEventsInserted,
       odds_fetched: totalOddsFetched,
-      errors: totalErrors
+      errors: totalErrors,
+      rate_limited_seconds: rateLimitedSeconds,
+      error_message: errorMessage2
     });
-    if (!leagueCompleted && status === "failed") break;
-    await new Promise((r) => setTimeout(r, 500));
+    syncRunning = false;
+    logger.info(
+      { status, totalEventsFetched, totalEventsInserted, totalOddsFetched, totalErrors },
+      "RADAR: All leagues odds sync complete"
+    );
   }
-  if (permanentlySkippedLeagues.length > 0) {
-    errorMessage2 = `Rate-limit retried leagues: ${retriedLeagues.join(", ") || "none"}; permanently skipped: ${permanentlySkippedLeagues.join(", ")}`;
-  } else if (retriedLeagues.length > 0) {
-    errorMessage2 = `Rate-limit retried leagues: ${retriedLeagues.join(", ")}; all retries recovered`;
-  }
-  await finishSyncRun(syncRunId, status, {
-    events_fetched: totalEventsFetched,
-    events_inserted: totalEventsInserted,
-    odds_fetched: totalOddsFetched,
-    errors: totalErrors,
-    rate_limited_seconds: rateLimitedSeconds,
-    error_message: errorMessage2
-  });
-  syncRunning = false;
-  logger.info(
-    { status, totalEventsFetched, totalEventsInserted, totalOddsFetched, totalErrors },
-    "RADAR: All leagues odds sync complete"
-  );
 }
 async function refreshOddsForFixtures(fixtureIds) {
   const uniqueIds = Array.from(new Set(fixtureIds.filter((id) => Number.isFinite(id)))).slice(0, 20);
@@ -51546,6 +51606,7 @@ async function refreshOddsForFixtures(fixtureIds) {
     const bDate = new Date(String(fixtureById.get(b)?.fixture_date ?? "")).getTime();
     return (Number.isFinite(aDate) ? aDate : Number.POSITIVE_INFINITY) - (Number.isFinite(bDate) ? bDate : Number.POSITIVE_INFINITY);
   });
+  const refreshBookmakers = await getConfiguredBookmakers();
   for (const fixtureId of orderedFixtureIds) {
     const fixture = fixtureById.get(fixtureId);
     if (!fixture) {
@@ -51554,7 +51615,7 @@ async function refreshOddsForFixtures(fixtureIds) {
       continue;
     }
     try {
-      const event = await fetchEventOdds(fixtureId, apiKey, DEFAULT_BOOKMAKERS);
+      const event = await fetchEventOdds(fixtureId, apiKey, refreshBookmakers);
       const savedRows = await saveEventAndOdds(event, String(fixture.league_name ?? ""), leagueIdMap);
       if (savedRows === 0) {
         summary.missingOdds++;
@@ -51588,7 +51649,7 @@ async function refreshOddsForFixtures(fixtureIds) {
   logger.info(summary, "[ODDS-READINESS] Fixture odds refresh complete");
   return summary;
 }
-var BASE_URL, SUPABASE_PAGE_SIZE, syncRunning, MAX_EVENTS_PER_SYNC, UPCOMING_WINDOW_DAYS, DEFAULT_BOOKMAKERS, DEFAULT_MARKETS, ODDS_REFRESH_HOURS, ACTIVE_LEAGUE_CACHE_MS, MAX_RATE_LIMIT_RETRIES, MAX_RATE_LIMIT_BACKOFF_SECONDS, activeLeagueCache, lastOddsRefreshState, DEFAULT_LEAGUES, RateLimitError;
+var BASE_URL, SUPABASE_PAGE_SIZE, syncRunning, MAX_EVENTS_PER_SYNC, UPCOMING_WINDOW_DAYS, DEFAULT_BOOKMAKERS, DEFAULT_SYNC_TIME_BUDGET_MS, DEFAULT_MARKETS, ODDS_REFRESH_HOURS, ACTIVE_LEAGUE_CACHE_MS, MAX_RATE_LIMIT_RETRIES, MAX_RATE_LIMIT_BACKOFF_SECONDS, activeLeagueCache, lastOddsRefreshState, DEFAULT_LEAGUES, RateLimitError;
 var init_odds_fetcher = __esm({
   "src/services/odds-fetcher.ts"() {
     "use strict";
@@ -51600,7 +51661,8 @@ var init_odds_fetcher = __esm({
     syncRunning = false;
     MAX_EVENTS_PER_SYNC = 40;
     UPCOMING_WINDOW_DAYS = 10;
-    DEFAULT_BOOKMAKERS = "Bet365";
+    DEFAULT_BOOKMAKERS = "1xbet,M88";
+    DEFAULT_SYNC_TIME_BUDGET_MS = 45e3;
     DEFAULT_MARKETS = ["ML", "Totals", "AH", "HT", "BTTS"];
     ODDS_REFRESH_HOURS = 6;
     ACTIVE_LEAGUE_CACHE_MS = 6 * 60 * 60 * 1e3;
@@ -80838,8 +80900,7 @@ async function loadConfigAndSync() {
         if (matched.length > 0) leagues = matched;
       }
       if (Array.isArray(cfg.bookmakers) && cfg.bookmakers.length > 0) {
-        const freeBookmakers = cfg.bookmakers.map((name) => String(name).trim().toLowerCase()).filter((name) => name === "bet365");
-        bookmakers = freeBookmakers.length > 0 ? "Bet365" : DEFAULT_BOOKMAKERS;
+        bookmakers = normalizeConfiguredBookmakers(cfg.bookmakers);
       }
       scanDays = Number.isInteger(Number(cfg.scan_days)) && Number(cfg.scan_days) >= 1 && Number(cfg.scan_days) <= 90 ? Number(cfg.scan_days) : void 0;
     }
@@ -81368,7 +81429,7 @@ async function getOrCreateConfig() {
   const { data: created, error: insertErr } = await supabase.from("scheduler_config").insert({
     // Slug must match LEAGUES_CATALOG / DEFAULT_LEAGUES ("italy-serie-a").
     leagues: ["italy-serie-a"],
-    bookmakers: ["Bet365"],
+    bookmakers: ["1xbet", "M88"],
     markets: ["ML", "Totals", "AH", "HT", "BTTS"],
     cron_expression: "0 */6 * * *"
   }).select().single();
@@ -85381,6 +85442,7 @@ function handleCron(req, res) {
       }
       (async () => {
         const scanDays = await getConfiguredScanDays();
+        const bookmakers = await getConfiguredBookmakers();
         const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
         const leagueIdMap = new Map(
           (data ?? []).map((l) => [
@@ -85391,9 +85453,9 @@ function handleCron(req, res) {
         return fetchAndSaveLeagueOdds(
           league,
           String(process.env["ODDS_API_KEY"]),
-          DEFAULT_BOOKMAKERS,
+          bookmakers,
           leagueIdMap,
-          { scanDays }
+          { upcomingWindowDays: scanDays }
         );
       })().then((result2) => {
         res.json({
@@ -85503,6 +85565,7 @@ function handleCron(req, res) {
       };
       const steps = [];
       const scanDays = await getConfiguredScanDays().catch(() => 10);
+      const bookmakers = await getConfiguredBookmakers();
       const leagueIdMap = await (async () => {
         const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
         return new Map((data ?? []).map((l) => [l.slug ?? l.name, l.id]));
@@ -85514,9 +85577,9 @@ function handleCron(req, res) {
             () => fetchAndSaveLeagueOdds(
               league,
               String(process.env["ODDS_API_KEY"]),
-              DEFAULT_BOOKMAKERS,
+              bookmakers,
               leagueIdMap,
-              { scanDays }
+              { upcomingWindowDays: scanDays }
             )
           )
         );

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { fetchAndSaveAllLeagues, fetchAndSaveLeagueOdds, DEFAULT_LEAGUES, DEFAULT_BOOKMAKERS, getConfiguredScanDays } from "../services/odds-fetcher";
+import { fetchAndSaveAllLeagues, fetchAndSaveLeagueOdds, DEFAULT_LEAGUES, getConfiguredScanDays, getConfiguredBookmakers } from "../services/odds-fetcher";
 import { logger } from "../lib/logger";
 import { runRevalidation } from "../services/revalidation";
 import { runBaselineBackfill } from "../services/baseline-backfill";
@@ -85,6 +85,7 @@ function handleCron(req: any, res: any) {
 
       (async () => {
         const scanDays = await getConfiguredScanDays();
+        const bookmakers = await getConfiguredBookmakers();
         const { data } = await supabase
           .from("leagues")
           .select("id, name, slug")
@@ -98,9 +99,9 @@ function handleCron(req: any, res: any) {
         return fetchAndSaveLeagueOdds(
           league,
           String(process.env["ODDS_API_KEY"]),
-          DEFAULT_BOOKMAKERS,
+          bookmakers,
           leagueIdMap as Map<string, number>,
-          { scanDays } as never,
+          { upcomingWindowDays: scanDays },
         );
       })()
         .then((result) => {
@@ -261,6 +262,7 @@ function handleCron(req: any, res: any) {
       const steps = [];
       /* 1. Sync odds — satu liga per panggilan agar muat dalam batas waktu. */
       const scanDays = await getConfiguredScanDays().catch(() => 10);
+      const bookmakers = await getConfiguredBookmakers();
       const leagueIdMap = await (async () => {
         const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
         return new Map((data ?? []).map((l: any) => [l.slug ?? l.name, l.id as number]));
@@ -272,9 +274,9 @@ function handleCron(req: any, res: any) {
             fetchAndSaveLeagueOdds(
               league,
               String(process.env["ODDS_API_KEY"]),
-              DEFAULT_BOOKMAKERS,
+              bookmakers,
               leagueIdMap as Map<string, number>,
-              { scanDays } as never,
+              { upcomingWindowDays: scanDays },
             ),
           ),
         );

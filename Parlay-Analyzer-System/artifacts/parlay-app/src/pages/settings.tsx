@@ -399,7 +399,7 @@ export default function SettingsPage() {
                 label="Bookmakers"
                 items={bookmakers}
                 onChange={setBookmakers}
-                 placeholder="Bet365"
+                 placeholder="1xbet, M88"
                 testId="bookmakers"
               />
 

@@ -16,9 +16,17 @@ export function isSyncRunning(): boolean { return syncRunning; }
 
 const MAX_EVENTS_PER_SYNC = 40;
 const UPCOMING_WINDOW_DAYS = 10;
-// The current free Odds-API plan accepts Bet365 as a recreational bookmaker.
-// Sbobet may be selectable on the account but requires a paid plan.
-export const DEFAULT_BOOKMAKERS = "Bet365";
+// Pilihan buku sesuai paket free odds-api.io (2026-11): 1xbet + M88.
+// Bet365 kini berbayar sehingga permintaan yang menyebutnya ditolak API.
+export const DEFAULT_BOOKMAKERS = "1xbet,M88";
+// Batas waktu satu siklus sync. Vercel Hobby memotong fungsi pada 60 detik;
+// berhenti jauh sebelum batas supaya finishSyncRun sempat menutup baris
+// sync_runs — baris yang tertinggal "running" itulah yang tampil "Berjalan".
+const DEFAULT_SYNC_TIME_BUDGET_MS = 45_000;
+export function getSyncTimeBudgetMs(): number {
+  const raw = Number(process.env["SYNC_TIME_BUDGET_MS"]);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_SYNC_TIME_BUDGET_MS;
+}
 export const DEFAULT_MARKETS: SupportedOddsMarket[] = ["ML", "Totals", "AH", "HT", "BTTS"];
 const ODDS_REFRESH_HOURS = 6;
 const ACTIVE_LEAGUE_CACHE_MS = 6 * 60 * 60 * 1000;
@@ -105,6 +113,35 @@ export async function getConfiguredMarkets(): Promise<SupportedOddsMarket[]> {
   } catch (err) {
     logger.warn({ err }, "RADAR: Failed to load markets — using all supported markets");
     return [...DEFAULT_MARKETS];
+  }
+}
+
+/**
+ * Gabungkan daftar bookmaker dari scheduler_config menjadi parameter koma
+ * yang dimengerti endpoint /v3/odds (mis. "1xbet,M88"). Konfigurasi kosong
+ * atau rusak jatuh ke DEFAULT_BOOKMAKERS — bukan ke Bet365 yang sudah berbayar.
+ */
+export function normalizeConfiguredBookmakers(values: unknown): string {
+  if (!Array.isArray(values)) return DEFAULT_BOOKMAKERS;
+  const names = values
+    .filter((value): value is string | number => typeof value === "string" || typeof value === "number")
+    .map((value) => String(value).trim())
+    .filter((value) => value.length > 0);
+  return names.length > 0 ? names.join(",") : DEFAULT_BOOKMAKERS;
+}
+
+export async function getConfiguredBookmakers(): Promise<string> {
+  try {
+    const { data, error } = await supabase
+      .from("scheduler_config")
+      .select("bookmakers")
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return normalizeConfiguredBookmakers(data?.bookmakers);
+  } catch (err) {
+    logger.warn({ err }, "RADAR: Failed to load bookmakers — using default list");
+    return DEFAULT_BOOKMAKERS;
   }
 }
 
@@ -882,7 +919,7 @@ export async function fetchAndSaveLeagueOdds(
   apiKey: string,
   bookmakers: string,
   leagueIdMap: Map<string, number>,
-  options: { maxEvents?: number; upcomingWindowDays?: number; markets?: SupportedOddsMarket[] } = {},
+  options: { maxEvents?: number; upcomingWindowDays?: number; markets?: SupportedOddsMarket[]; deadlineAt?: number } = {},
 ): Promise<{
   league: string;
   saved: number;
@@ -932,6 +969,15 @@ export async function fetchAndSaveLeagueOdds(
     );
 
     for (const event of toFetch) {
+      // Berhenti sebelum panggilan baru bila batas waktu tercapai — sisa
+      // event menyusul di siklus berikutnya, baris sync_runs tetap tertutup.
+      if (options.deadlineAt != null && Date.now() >= options.deadlineAt) {
+        logger.warn(
+          { league: league.slug, eventId: event.id, deadlineAt: options.deadlineAt },
+          "RADAR: Deadline reached mid-league — stopping event fetch",
+        );
+        break;
+      }
       try {
         await new Promise((r) => setTimeout(r, 300));
         const withOdds = await fetchEventOdds(event.id, apiKey, bookmakers);
@@ -975,7 +1021,7 @@ export async function fetchAndSaveLeagueOdds(
 
 export async function fetchAndSaveAllLeagues(
   leagues: LeagueConfig[] = DEFAULT_LEAGUES,
-  bookmakers = DEFAULT_BOOKMAKERS,
+  bookmakers?: string,
   scanDays?: number,
 ): Promise<void> {
   if (syncRunning) {
@@ -990,9 +1036,19 @@ export async function fetchAndSaveAllLeagues(
   }
 
   syncRunning = true;
+  // Daftar bookmaker: argumen eksplisit > scheduler_config > default.
+  const effectiveBookmakers = bookmakers?.trim()
+    ? bookmakers.trim()
+    : await getConfiguredBookmakers();
+  // Semua pekerjaan berhenti sebelum titik ini supaya finishSyncRun tetap
+  // sempat berjalan di dalam batas 60 detik fungsi Vercel.
+  const deadlineAt = Date.now() + getSyncTimeBudgetMs();
   const upcomingWindowDays = normalizeScanDays(scanDays ?? await getConfiguredScanDays());
   const markets = await getConfiguredMarkets();
-  logger.info({ leagueCount: leagues.length, markets }, "RADAR: Starting odds sync — checking active leagues");
+  logger.info(
+    { leagueCount: leagues.length, markets, effectiveBookmakers, deadlineAt },
+    "RADAR: Starting odds sync — checking active leagues",
+  );
 
   let activeSlugs: Set<string> = new Set();
   for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
@@ -1016,6 +1072,12 @@ export async function fetchAndSaveAllLeagues(
         if (attempt >= MAX_RATE_LIMIT_RETRIES) {
           syncRunning = false;
           logger.warn("RADAR: Active league fetch permanently skipped for this sync run");
+          return;
+        }
+        // Jangan tidur melewati batas waktu — Vercel mematikan proses di 60 detik.
+        if (Date.now() + waitSeconds * 1000 >= deadlineAt) {
+          syncRunning = false;
+          logger.warn("RADAR: Rate-limit backoff would exceed the time budget — sync skipped this cycle");
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
@@ -1068,110 +1130,135 @@ export async function fetchAndSaveAllLeagues(
     leagueIdMap = new Map();
   }
 
-  let remainingSlots = MAX_EVENTS_PER_SYNC;
-  for (const league of leaguesToSync) {
-    if (remainingSlots <= 0) {
-      logger.info({ maxEvents: MAX_EVENTS_PER_SYNC }, "RADAR: Reached per-sync event cap — pausing until next cycle");
-      status = "partial";
-      break;
-    }
-
-    let leagueSaved = 0;
-    let leagueOddsFetched = 0;
-    let leagueErrors = 0;
-    let leagueEventsFetched = 0;
-    let leagueRateLimitedSeconds = 0;
-    let leagueCompleted = false;
-
-    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-      logger.info({ league: league.slug, remainingSlots, attempt: attempt + 1 }, "RADAR: Processing league");
-      let result;
-      try {
-        result = await fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, {
-          maxEvents: remainingSlots,
-          upcomingWindowDays,
-          markets,
-        });
-      } catch (err) {
-        status = "failed";
-        errorMessage = err instanceof Error ? err.message : "Unknown error";
-        logger.error({ err, league: league.slug }, "RADAR: Sync failed");
-        break;
-      }
-
-      if (attempt === 0) leagueEventsFetched = result.eventsFetched;
-      leagueSaved += result.saved;
-      leagueOddsFetched += result.oddsFetched;
-      leagueErrors += result.errors;
-
-      if (!result.rateLimitedSeconds) {
-        leagueCompleted = true;
-        break;
-      }
-
-      leagueRateLimitedSeconds = result.rateLimitedSeconds;
-      rateLimitedSeconds = Math.max(rateLimitedSeconds, leagueRateLimitedSeconds);
-      if (attempt >= MAX_RATE_LIMIT_RETRIES) {
+  // finishSyncRun wajib berjalan di semua jalur — baris sync_runs yang
+  // tertinggal "running" itulah yang tampil "Berjalan" selamanya di panel.
+  try {
+    let remainingSlots = MAX_EVENTS_PER_SYNC;
+    for (const league of leaguesToSync) {
+      if (remainingSlots <= 0) {
+        logger.info({ maxEvents: MAX_EVENTS_PER_SYNC }, "RADAR: Reached per-sync event cap — pausing until next cycle");
         status = "partial";
-        permanentlySkippedLeagues.push(league.slug);
-        logger.warn(
-          { league: league.slug, retryAfterSeconds: leagueRateLimitedSeconds },
-          "RADAR: League permanently skipped after rate-limit retries",
-        );
+        break;
+      }
+      if (Date.now() >= deadlineAt) {
+        logger.warn({ league: league.slug, deadlineAt }, "RADAR: Time budget exhausted — stopping sync before Vercel cutoff");
+        status = "partial";
+        if (errorMessage.length > 0) errorMessage += "; ";
+        errorMessage += `Batas waktu tercapai — sisa liga dijadwalkan ulang (${league.slug} dkk)`;
         break;
       }
 
-      if (!retriedLeagues.includes(league.slug)) retriedLeagues.push(league.slug);
-      const waitSeconds = Math.min(
-        Math.max(1, leagueRateLimitedSeconds),
-        MAX_RATE_LIMIT_BACKOFF_SECONDS,
-      );
-      logger.warn(
-        { league: league.slug, attempt: attempt + 1, retryAfterSeconds: leagueRateLimitedSeconds, waitSeconds },
-        "RADAR: Backing off before retrying league",
-      );
-      await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+      let leagueSaved = 0;
+      let leagueOddsFetched = 0;
+      let leagueErrors = 0;
+      let leagueEventsFetched = 0;
+      let leagueRateLimitedSeconds = 0;
+      let leagueCompleted = false;
+
+      for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+        logger.info({ league: league.slug, remainingSlots, attempt: attempt + 1 }, "RADAR: Processing league");
+        let result;
+        try {
+          result = await fetchAndSaveLeagueOdds(league, apiKey, effectiveBookmakers, leagueIdMap, {
+            maxEvents: remainingSlots,
+            upcomingWindowDays,
+            markets,
+            deadlineAt,
+          });
+        } catch (err) {
+          status = "failed";
+          errorMessage = err instanceof Error ? err.message : "Unknown error";
+          logger.error({ err, league: league.slug }, "RADAR: Sync failed");
+          break;
+        }
+
+        if (attempt === 0) leagueEventsFetched = result.eventsFetched;
+        leagueSaved += result.saved;
+        leagueOddsFetched += result.oddsFetched;
+        leagueErrors += result.errors;
+
+        if (!result.rateLimitedSeconds) {
+          leagueCompleted = true;
+          break;
+        }
+
+        leagueRateLimitedSeconds = result.rateLimitedSeconds;
+        rateLimitedSeconds = Math.max(rateLimitedSeconds, leagueRateLimitedSeconds);
+        if (attempt >= MAX_RATE_LIMIT_RETRIES) {
+          status = "partial";
+          permanentlySkippedLeagues.push(league.slug);
+          logger.warn(
+            { league: league.slug, retryAfterSeconds: leagueRateLimitedSeconds },
+            "RADAR: League permanently skipped after rate-limit retries",
+          );
+          break;
+        }
+
+        if (!retriedLeagues.includes(league.slug)) retriedLeagues.push(league.slug);
+        const waitSeconds = Math.min(
+          Math.max(1, leagueRateLimitedSeconds),
+          MAX_RATE_LIMIT_BACKOFF_SECONDS,
+        );
+        logger.warn(
+          { league: league.slug, attempt: attempt + 1, retryAfterSeconds: leagueRateLimitedSeconds, waitSeconds },
+          "RADAR: Backing off before retrying league",
+        );
+        if (Date.now() + waitSeconds * 1000 >= deadlineAt) {
+          status = "partial";
+          if (errorMessage.length > 0) errorMessage += "; ";
+          errorMessage += `Backoff rate-limit melewati batas waktu — ${league.slug} ditunda`;
+          logger.warn({ league: league.slug, waitSeconds }, "RADAR: Backoff would exceed time budget — deferring league");
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+      }
+
+      totalEventsFetched += leagueEventsFetched;
+      totalEventsInserted += leagueSaved;
+      totalOddsFetched += leagueOddsFetched;
+      totalErrors += leagueErrors;
+      remainingSlots -= leagueSaved;
+
+      // One absolute stats update per league, rather than a read/update during
+      // and after every league.
+      await updateSyncRunStats(syncRunId, {
+        events_fetched: totalEventsFetched,
+        events_inserted: totalEventsInserted,
+        odds_fetched: totalOddsFetched,
+        errors: totalErrors,
+      });
+
+      if (!leagueCompleted && status === "failed") break;
+      await new Promise((r) => setTimeout(r, 500));
     }
 
-    totalEventsFetched += leagueEventsFetched;
-    totalEventsInserted += leagueSaved;
-    totalOddsFetched += leagueOddsFetched;
-    totalErrors += leagueErrors;
-    remainingSlots -= leagueSaved;
-
-    // One absolute stats update per league, rather than a read/update during
-    // and after every league.
-    await updateSyncRunStats(syncRunId, {
+    if (permanentlySkippedLeagues.length > 0) {
+      const rateLimitNote = `Rate-limit retried leagues: ${retriedLeagues.join(", ") || "none"}; permanently skipped: ${permanentlySkippedLeagues.join(", ")}`;
+      errorMessage = errorMessage.length > 0 ? `${errorMessage}; ${rateLimitNote}` : rateLimitNote;
+    } else if (retriedLeagues.length > 0) {
+      const rateLimitNote = `Rate-limit retried leagues: ${retriedLeagues.join(", ")}; all retries recovered`;
+      errorMessage = errorMessage.length > 0 ? `${errorMessage}; ${rateLimitNote}` : rateLimitNote;
+    }
+  } catch (err) {
+    status = "failed";
+    errorMessage = err instanceof Error ? err.message : String(err);
+    logger.error({ err }, "RADAR: Sync failed unexpectedly");
+  } finally {
+    await finishSyncRun(syncRunId, status, {
       events_fetched: totalEventsFetched,
       events_inserted: totalEventsInserted,
       odds_fetched: totalOddsFetched,
       errors: totalErrors,
+      rate_limited_seconds: rateLimitedSeconds,
+      error_message: errorMessage,
     });
 
-    if (!leagueCompleted && status === "failed") break;
-    await new Promise((r) => setTimeout(r, 500));
+    syncRunning = false;
+    logger.info(
+      { status, totalEventsFetched, totalEventsInserted, totalOddsFetched, totalErrors },
+      "RADAR: All leagues odds sync complete",
+    );
   }
-
-  if (permanentlySkippedLeagues.length > 0) {
-    errorMessage = `Rate-limit retried leagues: ${retriedLeagues.join(", ") || "none"}; permanently skipped: ${permanentlySkippedLeagues.join(", ")}`;
-  } else if (retriedLeagues.length > 0) {
-    errorMessage = `Rate-limit retried leagues: ${retriedLeagues.join(", ")}; all retries recovered`;
-  }
-
-  await finishSyncRun(syncRunId, status, {
-    events_fetched: totalEventsFetched,
-    events_inserted: totalEventsInserted,
-    odds_fetched: totalOddsFetched,
-    errors: totalErrors,
-    rate_limited_seconds: rateLimitedSeconds,
-    error_message: errorMessage,
-  });
-
-  syncRunning = false;
-  logger.info(
-    { status, totalEventsFetched, totalEventsInserted, totalOddsFetched, totalErrors },
-    "RADAR: All leagues odds sync complete",
-  );
 }
 
 /**
@@ -1230,6 +1317,8 @@ export async function refreshOddsForFixtures(fixtureIds: number[]): Promise<{
     return (Number.isFinite(aDate) ? aDate : Number.POSITIVE_INFINITY)
       - (Number.isFinite(bDate) ? bDate : Number.POSITIVE_INFINITY);
   });
+  // Satu pembacaan config untuk seluruh batch refresh — bukan per fixture.
+  const refreshBookmakers = await getConfiguredBookmakers();
 
   for (const fixtureId of orderedFixtureIds) {
     const fixture = fixtureById.get(fixtureId);
@@ -1239,7 +1328,7 @@ export async function refreshOddsForFixtures(fixtureIds: number[]): Promise<{
       continue;
     }
     try {
-      const event = await fetchEventOdds(fixtureId, apiKey, DEFAULT_BOOKMAKERS);
+      const event = await fetchEventOdds(fixtureId, apiKey, refreshBookmakers);
       const savedRows = await saveEventAndOdds(event, String(fixture.league_name ?? ""), leagueIdMap);
       if (savedRows === 0) {
         summary.missingOdds++;
