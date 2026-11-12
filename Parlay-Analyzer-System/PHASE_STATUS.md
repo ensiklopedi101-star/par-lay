@@ -6,6 +6,30 @@ Definisi fase diambil dari `football-betting-system-review (1)/src/lib/audit-dat
 
 ---
 
+## Pembaruan 2026-11-12 — penghalang Fase 1 ternyata bukan mesin quant
+
+PR #12 (bookmaker 1xbet/M88) **berhasil**: `odds_history` berisi 203 baris
+`1xbet` dan 15 baris `M88`, `errors = 0`. Tetapi verifikasi pasca-merge
+menemukan **automasi tidak pernah berjalan sama sekali**:
+
+| Temuan | Bukti |
+| --- | --- |
+| Cron Vercel selalu 401 | hanya menerima `?token=`/`x-cron-secret`; Vercel mengirim `Authorization: Bearer` |
+| Workflow GitHub tidak terdaftar | file berada di subfolder → `gh workflow list` kosong, API 404 |
+| Cron harian dipotong sebelum analisis | `maxDuration: 60` vs 7 liga disapu lebih dulu |
+| Sync "fire-and-forget" | run 568 tertinggal `running` dengan `events_fetched = 0` |
+
+Karena itu `prediction_selections = 0` bukan kegagalan Fase 1, melainkan tidak
+adanya pemanggil. Perbaikan, bukti, dan langkah verifikasi ada di
+**`AUTOMATION_RECOVERY.md`**. Ringkasnya: auth Bearer, workflow dipindah ke
+akar repo, urutan daily baru (analisis dijamin dapat waktu), sync ditunggu, dan
+penyapu run basi.
+
+Setelah PR ini di-merge dan secrets GitHub diisi, uji kelulusan Fase 1 tetap
+sama: **`prediction_selections` > 0** setelah satu analisis nyata.
+
+---
+
 ## Ringkasan
 
 | Fase | Isi | Status | Bukti |

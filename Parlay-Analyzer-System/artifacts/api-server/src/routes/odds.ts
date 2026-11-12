@@ -91,11 +91,33 @@ async function loadOddsStatusFallback(
 }
 
 /** Admin-only: trigger manual sync odds dari semua liga aktif. */
-router.post("/sync/trigger", requireAdmin, (req, res) => {
-  res.json({ message: "Odds sync started in background" });
-  fetchAndSaveAllLeagues().catch((err) =>
-    logger.error({ err }, "Manual odds sync failed"),
-  );
+/**
+ * POST /sync/trigger — tombol "Sync" di panel.
+ *
+ * Dijalankan **menunggu**, bukan di latar belakang. Di Vercel, respons yang
+ * sudah terkirim membuat instance boleh dibekukan; pekerjaan latar belakang
+ * lalu mati di tengah jalan dan meninggalkan `sync_runs` berstatus `running`
+ * (bukti: run 568 pada 2026-11-12). Anggaran internal sync 45 detik, jadi
+ * menunggu masih di bawah `maxDuration: 60`.
+ *
+ * Konsekuensi untuk UI: tombol Sync bisa berputar sampai ±45 detik. Itu
+ * disengaja — lebih baik pengguna melihat hasil nyata daripada menerima
+ * "dimulai" yang tidak pernah selesai.
+ */
+router.post("/sync/trigger", requireAdmin, async (_req, res) => {
+  try {
+    const outcome = await fetchAndSaveAllLeagues();
+    res.json({
+      message:
+        outcome.status === "skipped"
+          ? `Sync dilewati (${outcome.reason ?? "tanpa alasan"})`
+          : "Odds sync selesai",
+      outcome,
+    });
+  } catch (err) {
+    logger.error({ err }, "Manual odds sync failed");
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 router.get("/odds/events", async (req, res) => {

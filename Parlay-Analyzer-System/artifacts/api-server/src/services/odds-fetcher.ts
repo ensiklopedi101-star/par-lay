@@ -1019,20 +1019,60 @@ export async function fetchAndSaveLeagueOdds(
   };
 }
 
+/**
+ * Hasil satu putaran `fetchAndSaveAllLeagues`.
+ *
+ * Dulu fungsi ini `Promise<void>`, sehingga pemanggil HTTP tidak punya cara
+ * mengetahui apa yang terjadi dan harus menjawab lebih dulu ("fire-and-forget").
+ * Di serverless pola itu berbahaya: setelah respons dikirim, instance boleh
+ * dibekukan, dan baris `sync_runs` tertinggal `running`. Dengan mengembalikan
+ * ringkasan, pemanggil bisa **menunggu** pekerjaan selesai lalu menjawabnya.
+ */
+export interface AllLeaguesSyncOutcome {
+  status: "completed" | "partial" | "failed" | "skipped";
+  /** Alasan dilewati; tidak ada bila `status` bukan `skipped`. */
+  reason?: "already-running" | "no-api-key" | "no-active-leagues" | "rate-limited";
+  leagues: string[];
+  eventsFetched: number;
+  eventsInserted: number;
+  oddsFetched: number;
+  errors: number;
+  rateLimitedSeconds: number;
+  errorMessage: string;
+  durationMs: number;
+}
+
 export async function fetchAndSaveAllLeagues(
   leagues: LeagueConfig[] = DEFAULT_LEAGUES,
   bookmakers?: string,
   scanDays?: number,
-): Promise<void> {
+): Promise<AllLeaguesSyncOutcome> {
+  const startedAt = Date.now();
+  const skipped = (
+    reason: NonNullable<AllLeaguesSyncOutcome["reason"]>,
+    errorMessage = "",
+  ): AllLeaguesSyncOutcome => ({
+    status: "skipped",
+    reason,
+    leagues: leagues.map((l) => l.slug),
+    eventsFetched: 0,
+    eventsInserted: 0,
+    oddsFetched: 0,
+    errors: 0,
+    rateLimitedSeconds: 0,
+    errorMessage,
+    durationMs: Date.now() - startedAt,
+  });
+
   if (syncRunning) {
     logger.warn("Sync already running — skipping");
-    return;
+    return skipped("already-running");
   }
   const apiKey = process.env["ODDS_API_KEY"];
   logger.info({ apiKeyPresent: !!apiKey }, "RADAR: ODDS_API_KEY check");
   if (!apiKey) {
     logger.error("ODDS_API_KEY is not set — skipping odds fetch");
-    return;
+    return skipped("no-api-key");
   }
 
   syncRunning = true;
@@ -1072,13 +1112,13 @@ export async function fetchAndSaveAllLeagues(
         if (attempt >= MAX_RATE_LIMIT_RETRIES) {
           syncRunning = false;
           logger.warn("RADAR: Active league fetch permanently skipped for this sync run");
-          return;
+          return skipped("rate-limited", "Daftar liga aktif gagal diambil karena rate limit");
         }
         // Jangan tidur melewati batas waktu — Vercel mematikan proses di 60 detik.
         if (Date.now() + waitSeconds * 1000 >= deadlineAt) {
           syncRunning = false;
           logger.warn("RADAR: Rate-limit backoff would exceed the time budget — sync skipped this cycle");
-          return;
+          return skipped("rate-limited", "Backoff rate limit melewati anggaran waktu");
         }
         await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
       }
@@ -1097,7 +1137,7 @@ export async function fetchAndSaveAllLeagues(
   if (leaguesToSync.length === 0) {
     syncRunning = false;
     logger.info("RADAR: No active leagues to sync right now — will retry next cycle");
-    return;
+    return skipped("no-active-leagues");
   }
 
   // Start tracking this sync run
@@ -1259,6 +1299,18 @@ export async function fetchAndSaveAllLeagues(
       "RADAR: All leagues odds sync complete",
     );
   }
+
+  return {
+    status,
+    leagues: leaguesToSync.map((l) => l.slug),
+    eventsFetched: totalEventsFetched,
+    eventsInserted: totalEventsInserted,
+    oddsFetched: totalOddsFetched,
+    errors: totalErrors,
+    rateLimitedSeconds,
+    errorMessage,
+    durationMs: Date.now() - startedAt,
+  };
 }
 
 /**

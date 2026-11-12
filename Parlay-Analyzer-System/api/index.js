@@ -51385,15 +51385,28 @@ async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, o
   };
 }
 async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, scanDays) {
+  const startedAt = Date.now();
+  const skipped = (reason, errorMessage3 = "") => ({
+    status: "skipped",
+    reason,
+    leagues: leagues.map((l) => l.slug),
+    eventsFetched: 0,
+    eventsInserted: 0,
+    oddsFetched: 0,
+    errors: 0,
+    rateLimitedSeconds: 0,
+    errorMessage: errorMessage3,
+    durationMs: Date.now() - startedAt
+  });
   if (syncRunning) {
     logger.warn("Sync already running \u2014 skipping");
-    return;
+    return skipped("already-running");
   }
   const apiKey = process.env["ODDS_API_KEY"];
   logger.info({ apiKeyPresent: !!apiKey }, "RADAR: ODDS_API_KEY check");
   if (!apiKey) {
     logger.error("ODDS_API_KEY is not set \u2014 skipping odds fetch");
-    return;
+    return skipped("no-api-key");
   }
   syncRunning = true;
   const effectiveBookmakers = bookmakers?.trim() ? bookmakers.trim() : await getConfiguredBookmakers();
@@ -51426,12 +51439,12 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
         if (attempt >= MAX_RATE_LIMIT_RETRIES) {
           syncRunning = false;
           logger.warn("RADAR: Active league fetch permanently skipped for this sync run");
-          return;
+          return skipped("rate-limited", "Daftar liga aktif gagal diambil karena rate limit");
         }
         if (Date.now() + waitSeconds * 1e3 >= deadlineAt) {
           syncRunning = false;
           logger.warn("RADAR: Rate-limit backoff would exceed the time budget \u2014 sync skipped this cycle");
-          return;
+          return skipped("rate-limited", "Backoff rate limit melewati anggaran waktu");
         }
         await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1e3));
       }
@@ -51446,7 +51459,7 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
   if (leaguesToSync.length === 0) {
     syncRunning = false;
     logger.info("RADAR: No active leagues to sync right now \u2014 will retry next cycle");
-    return;
+    return skipped("no-active-leagues");
   }
   const syncRunId = await startSyncRun(leaguesToSync.map((l) => l.slug));
   let totalEventsFetched = 0;
@@ -51585,6 +51598,17 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
       "RADAR: All leagues odds sync complete"
     );
   }
+  return {
+    status,
+    leagues: leaguesToSync.map((l) => l.slug),
+    eventsFetched: totalEventsFetched,
+    eventsInserted: totalEventsInserted,
+    oddsFetched: totalOddsFetched,
+    errors: totalErrors,
+    rateLimitedSeconds,
+    errorMessage: errorMessage2,
+    durationMs: Date.now() - startedAt
+  };
 }
 async function refreshOddsForFixtures(fixtureIds) {
   const uniqueIds = Array.from(new Set(fixtureIds.filter((id) => Number.isFinite(id)))).slice(0, 20);
@@ -80275,11 +80299,17 @@ async function loadOddsStatusFallback(fixtureIds, oddsByFixture, movementByFixtu
     movementByFixture.set(fixtureId, (movementByFixture.get(fixtureId) ?? 0) + count - 1);
   }
 }
-router2.post("/sync/trigger", requireAdmin, (req, res) => {
-  res.json({ message: "Odds sync started in background" });
-  fetchAndSaveAllLeagues().catch(
-    (err) => logger.error({ err }, "Manual odds sync failed")
-  );
+router2.post("/sync/trigger", requireAdmin, async (_req, res) => {
+  try {
+    const outcome = await fetchAndSaveAllLeagues();
+    res.json({
+      message: outcome.status === "skipped" ? `Sync dilewati (${outcome.reason ?? "tanpa alasan"})` : "Odds sync selesai",
+      outcome
+    });
+  } catch (err) {
+    logger.error({ err }, "Manual odds sync failed");
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 router2.get("/odds/events", async (req, res) => {
   try {
@@ -81343,8 +81373,43 @@ async function buildAutomationStatus(input) {
   };
 }
 
+// src/services/sync-runs.ts
+init_supabase_client();
+init_logger();
+var STALE_SYNC_RUN_SECONDS = 10 * 60;
+var STALE_RUN_CLOSE_MESSAGE = "Ditutup otomatis: proses sync berhenti sebelum selesai (fungsi serverless dipotong/dibekukan), jadi tidak ada hasil yang bisa dilaporkan. Bukan tanda sync masih berjalan.";
+function normalizeMaxAgeSeconds(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : STALE_SYNC_RUN_SECONDS;
+}
+function staleSyncRunCutoffIso(now = /* @__PURE__ */ new Date(), maxAgeSeconds = STALE_SYNC_RUN_SECONDS) {
+  return new Date(now.getTime() - normalizeMaxAgeSeconds(maxAgeSeconds) * 1e3).toISOString();
+}
+async function closeStaleSyncRuns(options = {}) {
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const cutoff = staleSyncRunCutoffIso(now, options.maxAgeSeconds);
+  if (!supabase) {
+    return { closed: 0, ids: [], cutoff };
+  }
+  try {
+    const { data, error } = await supabase.from("sync_runs").update({
+      status: "failed",
+      finished_at: now.toISOString(),
+      error_message: STALE_RUN_CLOSE_MESSAGE
+    }).eq("status", "running").lt("started_at", cutoff).select("id");
+    if (error) throw error;
+    const ids = (data ?? []).map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+    if (ids.length > 0) {
+      logger.warn({ ids, cutoff }, "sync_runs: run basi ditutup otomatis sebagai failed");
+    }
+    return { closed: ids.length, ids, cutoff };
+  } catch (err) {
+    logger.warn({ err, cutoff }, "sync_runs: gagal menutup run basi");
+    return { closed: 0, ids: [], cutoff };
+  }
+}
+
 // src/routes/config.ts
-var STALE_RUN_SECONDS = 10 * 60;
+var STALE_RUN_SECONDS = STALE_SYNC_RUN_SECONDS;
 var SYNC_HISTORY_LIMIT = 12;
 var SYNC_RUN_COLUMNS = [
   "id",
@@ -85411,15 +85476,78 @@ async function runAutoAnalysis(options = {}) {
 
 // src/routes/cron.ts
 init_supabase_client();
+
+// src/lib/cron-auth.ts
+function firstString(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const found = value.find((item) => typeof item === "string");
+    return typeof found === "string" ? found : null;
+  }
+  return null;
+}
+function bearerToken(authorization) {
+  if (!authorization) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(authorization.trim());
+  return match?.[1]?.trim() ?? null;
+}
+function isCronAuthorized(input) {
+  if (!input.secret) return false;
+  if (firstString(input.headerSecret) === input.secret) return true;
+  if (firstString(input.queryToken) === input.secret) return true;
+  if (bearerToken(firstString(input.authorization)) === input.secret) return true;
+  return false;
+}
+
+// src/lib/cron-params.ts
+var MAX_EVENTS_PER_LEAGUE_CALL = 40;
+function parseMaxEvents(raw) {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string" || value.trim() === "") return void 0;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
+    return void 0;
+  }
+  return Math.min(parsed, MAX_EVENTS_PER_LEAGUE_CALL);
+}
+
+// src/services/daily-plan.ts
+function leaguesForDailySync(leagues, now = /* @__PURE__ */ new Date(), count = 2) {
+  if (leagues.length === 0) return [];
+  const wanted = Math.max(0, Math.min(Math.trunc(count) || 0, leagues.length));
+  if (wanted === 0) return [];
+  const dayIndex = Math.floor(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 864e5
+  );
+  const start = (dayIndex % leagues.length + leagues.length) % leagues.length;
+  return Array.from({ length: wanted }, (_, offset) => leagues[(start + offset) % leagues.length]);
+}
+function remainingMs(deadlineAt, now = Date.now()) {
+  return Math.max(0, deadlineAt - now);
+}
+function stepBudgetMs(deadlineAt, maxMs, reserveMs, now = Date.now()) {
+  return Math.max(0, Math.min(maxMs, remainingMs(deadlineAt, now) - reserveMs));
+}
+
+// src/routes/cron.ts
 var router9 = (0, import_express9.Router)();
 var CRON_SECRET = process.env["CRON_SECRET"];
+var VERCEL_FUNCTION_LIMIT_MS = 6e4;
+var DAILY_TIME_BUDGET_MS = 45e3;
+var DAILY_SYNC_MAX_MS = 12e3;
+var DAILY_ANALYZE_MAX_MS = 18e3;
+var DAILY_ANALYZE_MIN_MS = 3e3;
+var DAILY_RESERVE_AFTER_ANALYZE_MS = 6e3;
+var DAILY_SYNC_MAX_EVENTS = 10;
 function isAuthorized(req) {
-  if (!CRON_SECRET) return false;
-  const header = req.headers["x-cron-secret"] ?? req.headers["X-Cron-Secret"];
-  const query = req.query["token"];
-  return header === CRON_SECRET || query === CRON_SECRET;
+  return isCronAuthorized({
+    secret: CRON_SECRET,
+    headerSecret: req.headers["x-cron-secret"] ?? req.headers["X-Cron-Secret"],
+    authorization: req.headers["authorization"],
+    queryToken: req.query["token"]
+  });
 }
-function handleCron(req, res) {
+async function handleCron(req, res) {
   if (!CRON_SECRET) {
     res.status(503).json({ error: "CRON_SECRET not configured" });
     return;
@@ -85431,6 +85559,7 @@ function handleCron(req, res) {
   const action = req.query["action"] ?? "keep-alive";
   if (action === "sync") {
     const requestedLeague = typeof req.query["league"] === "string" ? req.query["league"] : null;
+    const maxEvents = parseMaxEvents(req.query["max"]);
     if (requestedLeague) {
       const league = DEFAULT_LEAGUES.find((l) => l.slug === requestedLeague);
       if (!league) {
@@ -85455,11 +85584,12 @@ function handleCron(req, res) {
           String(process.env["ODDS_API_KEY"]),
           bookmakers,
           leagueIdMap,
-          { upcomingWindowDays: scanDays }
+          { upcomingWindowDays: scanDays, ...maxEvents == null ? {} : { maxEvents } }
         );
       })().then((result2) => {
         res.json({
           message: `Sync liga ${requestedLeague} selesai`,
+          maxEvents: maxEvents ?? null,
           result: result2,
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
         });
@@ -85470,15 +85600,19 @@ function handleCron(req, res) {
       return;
     }
     const leagues = DEFAULT_LEAGUES.map((l) => l.slug);
-    res.json({
-      message: "Cron sync started in background",
-      leagues,
-      hint: "Untuk Vercel, panggil ?action=sync&league=<slug> satu per satu agar tidak kena timeout 60 detik.",
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    fetchAndSaveAllLeagues().catch(
-      (err) => logger.error({ err }, "Cron-triggered odds sync failed")
-    );
+    try {
+      const outcome = await fetchAndSaveAllLeagues();
+      res.json({
+        message: outcome.status === "skipped" ? `Sync dilewati (${outcome.reason ?? "tanpa alasan"})` : "Sync selesai",
+        leagues,
+        outcome,
+        hint: "Untuk pemanggil berbatas waktu ketat, pakai ?action=sync&league=<slug>&max=<n> satu per satu.",
+        timestamp: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    } catch (err) {
+      logger.error({ err }, "Cron-triggered odds sync failed");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
     return;
   }
   if (action === "revalidate") {
@@ -85548,6 +85682,7 @@ function handleCron(req, res) {
   if (action === "daily") {
     const runDaily = async () => {
       const startedAt = Date.now();
+      const deadlineAt = startedAt + DAILY_TIME_BUDGET_MS;
       const step = async (name, fn) => {
         const t0 = Date.now();
         try {
@@ -85563,42 +85698,86 @@ function handleCron(req, res) {
           };
         }
       };
+      const skippedStep = (name, reason) => ({
+        step: name,
+        ok: false,
+        skipped: true,
+        ms: 0,
+        error: `Dilewati: ${reason}`
+      });
       const steps = [];
-      const scanDays = await getConfiguredScanDays().catch(() => 10);
-      const bookmakers = await getConfiguredBookmakers();
-      const leagueIdMap = await (async () => {
-        const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
-        return new Map((data ?? []).map((l) => [l.slug ?? l.name, l.id]));
-      })().catch(() => /* @__PURE__ */ new Map());
-      for (const league of DEFAULT_LEAGUES) {
+      steps.push(await step("reap", () => closeStaleSyncRuns()));
+      const syncLeague = leaguesForDailySync(DEFAULT_LEAGUES, /* @__PURE__ */ new Date(), 1)[0];
+      const syncDeadline = Math.min(
+        startedAt + DAILY_SYNC_MAX_MS,
+        deadlineAt - DAILY_ANALYZE_MIN_MS - DAILY_RESERVE_AFTER_ANALYZE_MS
+      );
+      if (!process.env["ODDS_API_KEY"]) {
+        steps.push(skippedStep("sync", "ODDS_API_KEY tidak diset"));
+      } else if (!syncLeague) {
+        steps.push(skippedStep("sync", "tidak ada liga untuk disinkronkan"));
+      } else if (syncDeadline - Date.now() < 1500) {
+        steps.push(skippedStep("sync", "sisa waktu tidak cukup"));
+      } else {
+        const scanDays = await getConfiguredScanDays().catch(() => 10);
+        const bookmakers = await getConfiguredBookmakers();
+        const leagueIdMap = await (async () => {
+          const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
+          return new Map((data ?? []).map((l) => [l.slug ?? l.name, l.id]));
+        })().catch(() => /* @__PURE__ */ new Map());
         steps.push(
           await step(
-            `sync:${league.slug}`,
+            `sync:${syncLeague.slug}`,
             () => fetchAndSaveLeagueOdds(
-              league,
+              syncLeague,
               String(process.env["ODDS_API_KEY"]),
               bookmakers,
               leagueIdMap,
-              { upcomingWindowDays: scanDays }
+              {
+                upcomingWindowDays: scanDays,
+                maxEvents: DAILY_SYNC_MAX_EVENTS,
+                deadlineAt: syncDeadline
+              }
             )
           )
         );
       }
-      steps.push(await step("results", () => refreshElapsedFixtureResults({})));
-      steps.push(await step("analyze", () => runAutoAnalysis({ limit: 3, budgetMs: 2e4 })));
+      const analyzeBudget = stepBudgetMs(
+        deadlineAt,
+        DAILY_ANALYZE_MAX_MS,
+        DAILY_RESERVE_AFTER_ANALYZE_MS
+      );
+      if (analyzeBudget >= DAILY_ANALYZE_MIN_MS) {
+        steps.push(
+          await step("analyze", () => runAutoAnalysis({ limit: 3, budgetMs: analyzeBudget }))
+        );
+      } else {
+        steps.push(skippedStep("analyze", "sisa anggaran waktu < 3 detik"));
+      }
+      if (remainingMs(deadlineAt) > 1e4) {
+        steps.push(await step("results", () => refreshElapsedFixtureResults({})));
+      } else {
+        steps.push(skippedStep("results", "sisa anggaran waktu < 10 detik"));
+      }
       steps.push(await step("closing", () => runClosingOddsCapture()));
       steps.push(await step("outcomes", () => runOutcomeSettlement()));
       return {
         message: "Rangkaian tugas harian selesai",
         totalMs: Date.now() - startedAt,
-        failedSteps: steps.filter((s) => !s.ok).map((s) => s.step),
+        budgetMs: DAILY_TIME_BUDGET_MS,
+        functionLimitMs: VERCEL_FUNCTION_LIMIT_MS,
+        failedSteps: steps.filter((s) => !s.ok && !s.skipped).map((s) => s.step),
+        skippedSteps: steps.filter((s) => s.skipped).map((s) => s.step),
         steps
       };
     };
-    runDaily().then((summary) => res.json(summary)).catch((err) => {
+    try {
+      const summary = await runDaily();
+      res.json(summary);
+    } catch (err) {
       logger.error({ err }, "Cron harian gagal total");
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    });
+    }
     return;
   }
   if (action === "reanalyze") {
@@ -85609,9 +85788,12 @@ function handleCron(req, res) {
     runBaselineBackfill({ dryRun: false }).then(() => runRevalidationAndTriggeredReanalysis({ maxPerRun: 5 })).catch((err) => logger.error({ err }, "Cron-triggered AI re-analysis failed"));
     return;
   }
+  const reaped = await closeStaleSyncRuns();
   res.json({
     ok: true,
     action: "keep-alive",
+    staleRunsClosed: reaped.closed,
+    staleRunIds: reaped.ids,
     timestamp: (/* @__PURE__ */ new Date()).toISOString()
   });
 }

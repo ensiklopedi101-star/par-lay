@@ -7,6 +7,7 @@ import cron from "node-cron";
 import { reloadOddsSchedule } from "../scheduler";
 import { buildSettlementSummary } from "../services/settlement-summary";
 import { buildAutomationStatus } from "../services/automation-status";
+import { STALE_SYNC_RUN_SECONDS } from "../services/sync-runs";
 
 /**
  * ─── Transparansi sync ────────────────────────────────────────────────────
@@ -16,8 +17,12 @@ import { buildAutomationStatus } from "../services/automation-status";
  * menghitung durasi dan throughput agar bisa ditampilkan apa adanya.
  */
 
-/** Batas run dianggap basi. Sync per-liga normal selesai < 2 menit. */
-const STALE_RUN_SECONDS = 10 * 60;
+/**
+ * Batas run dianggap basi. Sync per-liga normal selesai < 2 menit.
+ * Nilainya dibagi dengan penutup run otomatis (`services/sync-runs.ts`) agar
+ * panel dan penyapu tidak pernah memakai ambang yang berbeda.
+ */
+const STALE_RUN_SECONDS = STALE_SYNC_RUN_SECONDS;
 
 /** Berapa run terakhir yang dikirim ke dashboard. */
 const SYNC_HISTORY_LIMIT = 12;

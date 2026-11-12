@@ -8,16 +8,40 @@ import { runClosingOddsCapture, runOutcomeSettlement } from "../services/closing
 import { refreshElapsedFixtureResults } from "../services/fixture-results";
 import { runAutoAnalysis } from "../services/auto-analysis";
 import { supabase } from "../lib/supabase-client";
+import { isCronAuthorized } from "../lib/cron-auth";
+import { parseMaxEvents } from "../lib/cron-params";
+import { closeStaleSyncRuns } from "../services/sync-runs";
+import { leaguesForDailySync, remainingMs, stepBudgetMs } from "../services/daily-plan";
 
 const router: IRouter = Router();
 
 const CRON_SECRET = process.env["CRON_SECRET"];
 
+/** Batas waktu nyata fungsi Vercel: `vercel.json` → `maxDuration: 60`. */
+const VERCEL_FUNCTION_LIMIT_MS = 60_000;
+/**
+ * Anggaran daily sengaja di bawah batas fungsi. Sisa ±15 detik dipakai untuk
+ * cold start, latensi jaringan, dan penulisan respons.
+ */
+const DAILY_TIME_BUDGET_MS = 45_000;
+/** Anggaran maksimal untuk satu liga pada sync harian. */
+const DAILY_SYNC_MAX_MS = 12_000;
+/** Anggaran maksimal analisis AI. */
+const DAILY_ANALYZE_MAX_MS = 18_000;
+/** Analisis tidak dijalankan bila anggarannya di bawah ini. */
+const DAILY_ANALYZE_MIN_MS = 3_000;
+/** Waktu yang disisakan untuk closing/outcomes setelah analisis. */
+const DAILY_RESERVE_AFTER_ANALYZE_MS = 6_000;
+/** Jumlah event per liga pada sync harian (hemat kuota). */
+const DAILY_SYNC_MAX_EVENTS = 10;
+
 function isAuthorized(req: any): boolean {
-  if (!CRON_SECRET) return false;
-  const header = req.headers["x-cron-secret"] ?? req.headers["X-Cron-Secret"];
-  const query = req.query["token"];
-  return header === CRON_SECRET || query === CRON_SECRET;
+  return isCronAuthorized({
+    secret: CRON_SECRET,
+    headerSecret: req.headers["x-cron-secret"] ?? req.headers["X-Cron-Secret"],
+    authorization: req.headers["authorization"],
+    queryToken: req.query["token"],
+  });
 }
 
 /**
@@ -48,7 +72,7 @@ function isAuthorized(req: any): boolean {
  * Keep-alive is recommended for 30-minute pings to keep a Replit workspace alive
  * without burning the Odds-API free-plan quota.
  */
-function handleCron(req: any, res: any) {
+async function handleCron(req: any, res: any) {
   if (!CRON_SECRET) {
     res.status(503).json({ error: "CRON_SECRET not configured" });
     return;
@@ -72,6 +96,9 @@ function handleCron(req: any, res: any) {
      * yang sama bila pemicunya menggilir semua liga.
      */
     const requestedLeague = typeof req.query["league"] === "string" ? req.query["league"] : null;
+    /* `?max=` membatasi jumlah event per liga agar matriks GitHub Actions
+     * (7 liga paralel) tidak menghabiskan kuota 100 permintaan/jam. */
+    const maxEvents = parseMaxEvents(req.query["max"]);
 
     if (requestedLeague) {
       const league = DEFAULT_LEAGUES.find((l) => l.slug === requestedLeague);
@@ -101,12 +128,13 @@ function handleCron(req: any, res: any) {
           String(process.env["ODDS_API_KEY"]),
           bookmakers,
           leagueIdMap as Map<string, number>,
-          { upcomingWindowDays: scanDays },
+          { upcomingWindowDays: scanDays, ...(maxEvents == null ? {} : { maxEvents }) },
         );
       })()
         .then((result) => {
           res.json({
             message: `Sync liga ${requestedLeague} selesai`,
+            maxEvents: maxEvents ?? null,
             result,
             timestamp: new Date().toISOString(),
           });
@@ -119,15 +147,33 @@ function handleCron(req: any, res: any) {
     }
 
     const leagues = DEFAULT_LEAGUES.map((l) => l.slug);
-    res.json({
-      message: "Cron sync started in background",
-      leagues,
-      hint: "Untuk Vercel, panggil ?action=sync&league=<slug> satu per satu agar tidak kena timeout 60 detik.",
-      timestamp: new Date().toISOString(),
-    });
-    fetchAndSaveAllLeagues().catch((err) =>
-      logger.error({ err }, "Cron-triggered odds sync failed"),
-    );
+
+    /*
+     * DITUNGGU, bukan "fire-and-forget".
+     *
+     * Versi sebelumnya menjawab `{message: "started in background"}` lebih dulu
+     * lalu melanjutkan sync. Di serverless, setelah respons dikirim instance
+     * boleh dibekukan; akibatnya `sync_runs` tertinggal `running` (bukti: run
+     * 568) dan pekerjaannya tidak pernah selesai. `fetchAndSaveAllLeagues`
+     * sudah punya anggaran 45 detik dan menutup run di `finally`, jadi
+     * menunggunya aman di bawah `maxDuration: 60`.
+     */
+    try {
+      const outcome = await fetchAndSaveAllLeagues();
+      res.json({
+        message:
+          outcome.status === "skipped"
+            ? `Sync dilewati (${outcome.reason ?? "tanpa alasan"})`
+            : "Sync selesai",
+        leagues,
+        outcome,
+        hint: "Untuk pemanggil berbatas waktu ketat, pakai ?action=sync&league=<slug>&max=<n> satu per satu.",
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      logger.error({ err }, "Cron-triggered odds sync failed");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
     return;
   }
 
@@ -231,19 +277,37 @@ function handleCron(req: any, res: any) {
     /*
      * Satu slot cron untuk seluruh tugas harian.
      *
-     * Vercel Hobby hanya mengizinkan dua cron per proyek, masing-masing paling
-     * sering sekali sehari. Rantai yang dibutuhkan sistem ini ada empat (sync,
-     * results, closing, outcomes), jadi keempatnya dijalankan berurutan dalam
-     * satu panggilan.
+     * Vercel Hobby hanya mengizinkan cron sekali sehari, jadi beberapa tugas
+     * harus berbagi satu panggilan. Yang sering dilupakan: fungsi ini dibatasi
+     * **60 detik** (`vercel.json` → `maxDuration`). Versi lama menjalankan sync
+     * tujuh liga lebih dulu; tujuh liga tidak mungkin selesai dalam 60 detik,
+     * sehingga fungsi dipotong sebelum `analyze` — dan `prediction_selections`
+     * tetap nol selamanya.
      *
-     * Dijalankan menunggu (bukan background) agar hasilnya terlihat di respons
-     * cron dan di log — kegagalan senyap persis masalah yang sedang diperbaiki
-     * di sini. Setiap langkah dibungkus `try` sendiri: satu langkah gagal tidak
-     * boleh menggugurkan langkah berikutnya.
+     * Urutan sekarang berdasarkan nilai per detik:
+     *   1. `reap`     — tutup run zombie (murah, mencegah status bohong)
+     *   2. `sync`     — SATU liga bergiliran, maksimal 10 event, ≤12 detik
+     *   3. `analyze`  — inti sistem, anggaran dijamin lebih dulu
+     *   4. `results`  — skor akhir untuk settlement
+     *   5. `closing` + `outcomes` — hanya DB, murah
+     *
+     * Setiap langkah mencatat `skipped` bila anggaran habis, sehingga respons
+     * cron membedakan "gagal" dari "tidak dijalankan karena waktu".
      */
     const runDaily = async () => {
       const startedAt = Date.now();
-      const step = async <T>(name: string, fn: () => Promise<T>) => {
+      const deadlineAt = startedAt + DAILY_TIME_BUDGET_MS;
+
+      interface StepResult {
+        step: string;
+        ok: boolean;
+        skipped?: boolean;
+        ms: number;
+        result?: unknown;
+        error?: string;
+      }
+
+      const step = async <T>(name: string, fn: () => Promise<T>): Promise<StepResult> => {
         const t0 = Date.now();
         try {
           const result = await fn();
@@ -259,59 +323,111 @@ function handleCron(req: any, res: any) {
         }
       };
 
-      const steps = [];
-      /* 1. Sync odds — satu liga per panggilan agar muat dalam batas waktu. */
-      const scanDays = await getConfiguredScanDays().catch(() => 10);
-      const bookmakers = await getConfiguredBookmakers();
-      const leagueIdMap = await (async () => {
-        const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
-        return new Map((data ?? []).map((l: any) => [l.slug ?? l.name, l.id as number]));
-      })().catch(() => new Map<string, number>());
+      const skippedStep = (name: string, reason: string): StepResult => ({
+        step: name,
+        ok: false,
+        skipped: true,
+        ms: 0,
+        error: `Dilewati: ${reason}`,
+      });
 
-      for (const league of DEFAULT_LEAGUES) {
+      const steps: StepResult[] = [];
+
+      /* 0. Tutup run yang menggantung. Murah, dan mencegah panel menampilkan
+       * "Berjalan" untuk proses yang sudah mati. */
+      steps.push(await step("reap", () => closeStaleSyncRuns()));
+
+      /* 1. Sync satu liga, bergiliran tiap hari, dibatasi ketat.
+       *
+       * Sync penuh tujuh liga TIDAK muat dalam 60 detik. Versi lama menaruhnya
+       * paling depan, sehingga fungsi dipotong sebelum langkah lain berjalan.
+       * Satu liga x 10 event cukup sebagai jaring pengaman bila pemicu GitHub
+       * Actions tidak aktif, tanpa menghabiskan kuota 100 permintaan/jam. */
+      const syncLeague = leaguesForDailySync(DEFAULT_LEAGUES, new Date(), 1)[0];
+      const syncDeadline = Math.min(
+        startedAt + DAILY_SYNC_MAX_MS,
+        deadlineAt - DAILY_ANALYZE_MIN_MS - DAILY_RESERVE_AFTER_ANALYZE_MS,
+      );
+
+      if (!process.env["ODDS_API_KEY"]) {
+        steps.push(skippedStep("sync", "ODDS_API_KEY tidak diset"));
+      } else if (!syncLeague) {
+        steps.push(skippedStep("sync", "tidak ada liga untuk disinkronkan"));
+      } else if (syncDeadline - Date.now() < 1_500) {
+        steps.push(skippedStep("sync", "sisa waktu tidak cukup"));
+      } else {
+        const scanDays = await getConfiguredScanDays().catch(() => 10);
+        const bookmakers = await getConfiguredBookmakers();
+        const leagueIdMap = await (async () => {
+          const { data } = await supabase
+            .from("leagues")
+            .select("id, name, slug")
+            .eq("is_active", true);
+          return new Map((data ?? []).map((l: any) => [l.slug ?? l.name, l.id as number]));
+        })().catch(() => new Map<string, number>());
+
         steps.push(
-          await step(`sync:${league.slug}`, () =>
+          await step(`sync:${syncLeague.slug}`, () =>
             fetchAndSaveLeagueOdds(
-              league,
+              syncLeague,
               String(process.env["ODDS_API_KEY"]),
               bookmakers,
               leagueIdMap as Map<string, number>,
-              { upcomingWindowDays: scanDays },
+              {
+                upcomingWindowDays: scanDays,
+                maxEvents: DAILY_SYNC_MAX_EVENTS,
+                deadlineAt: syncDeadline,
+              },
             ),
           ),
         );
       }
 
-      /* 2. Skor akhir — bahan mentah settlement. */
-      steps.push(await step("results", () => refreshElapsedFixtureResults({})));
+      /* 2. Analisis AI — inti sistem dan satu-satunya pengisi
+       * `prediction_selections`. Dijalankan sebelum skor/closing supaya tetap
+       * kebagian waktu; langkah murah menyusul. */
+      const analyzeBudget = stepBudgetMs(
+        deadlineAt,
+        DAILY_ANALYZE_MAX_MS,
+        DAILY_RESERVE_AFTER_ANALYZE_MS,
+      );
+      if (analyzeBudget >= DAILY_ANALYZE_MIN_MS) {
+        steps.push(
+          await step("analyze", () => runAutoAnalysis({ limit: 3, budgetMs: analyzeBudget })),
+        );
+      } else {
+        steps.push(skippedStep("analyze", "sisa anggaran waktu < 3 detik"));
+      }
 
-      /* 3. Analisis AI — sumber utama isi sistem.
-       * Dijalankan SETELAH hasil dan skor ditarik, tetapi SEBELUM closing,
-       * karena analisis adalah bagian yang paling mungkin menghabiskan
-       * anggaran waktu. Kalau anggaran habis, yang tertunda adalah langkah
-       * murah (closing/outcomes), bukan yang mahal. */
-      steps.push(await step("analyze", () => runAutoAnalysis({ limit: 3, budgetMs: 20_000 })));
+      /* 3. Skor akhir — bahan mentah settlement. Dilewati bila waktu habis. */
+      if (remainingMs(deadlineAt) > 10_000) {
+        steps.push(await step("results", () => refreshElapsedFixtureResults({})));
+      } else {
+        steps.push(skippedStep("results", "sisa anggaran waktu < 10 detik"));
+      }
 
-      /* 4. Odds penutup — dasar hitung CLV. */
+      /* 4. Odds penutup & outcome ledger: hanya baca/tulis DB, murah. */
       steps.push(await step("closing", () => runClosingOddsCapture()));
-
-      /* 5. Outcome ledger quant. */
       steps.push(await step("outcomes", () => runOutcomeSettlement()));
 
       return {
         message: "Rangkaian tugas harian selesai",
         totalMs: Date.now() - startedAt,
-        failedSteps: steps.filter((s) => !s.ok).map((s) => s.step),
+        budgetMs: DAILY_TIME_BUDGET_MS,
+        functionLimitMs: VERCEL_FUNCTION_LIMIT_MS,
+        failedSteps: steps.filter((s) => !s.ok && !s.skipped).map((s) => s.step),
+        skippedSteps: steps.filter((s) => s.skipped).map((s) => s.step),
         steps,
       };
     };
 
-    runDaily()
-      .then((summary) => res.json(summary))
-      .catch((err) => {
-        logger.error({ err }, "Cron harian gagal total");
-        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-      });
+    try {
+      const summary = await runDaily();
+      res.json(summary);
+    } catch (err) {
+      logger.error({ err }, "Cron harian gagal total");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
     return;
   }
 
@@ -326,9 +442,21 @@ function handleCron(req: any, res: any) {
     return;
   }
 
+  /*
+   * Keep-alive juga menjadi "penyapu" run yang menggantung.
+   *
+   * Ping ringan ini ideal untuk tugas pemeliharaan: tidak memanggil Odds-API,
+   * tidak membakar kuota, dan biasanya dijadwalkan tiap 30 menit — cukup rapat
+   * dibanding ambang basi 10 menit. Dengan begitu panel tidak pernah lebih dari
+   * ~30 menit menampilkan "Berjalan" untuk proses yang sudah mati.
+   */
+  const reaped = await closeStaleSyncRuns();
+
   res.json({
     ok: true,
     action: "keep-alive",
+    staleRunsClosed: reaped.closed,
+    staleRunIds: reaped.ids,
     timestamp: new Date().toISOString(),
   });
 }
