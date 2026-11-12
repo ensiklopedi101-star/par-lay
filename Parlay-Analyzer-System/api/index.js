@@ -50743,6 +50743,68 @@ var init_logger = __esm({
   }
 });
 
+// src/lib/http.ts
+function resolveRequestTimeoutMs(raw, fallback = DEFAULT_HTTP_TIMEOUT_MS) {
+  const parsed = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < MIN_TIMEOUT_MS || parsed > MAX_TIMEOUT_MS) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+async function fetchWithTimeout(url, init = {}, timeoutMs = DEFAULT_HTTP_TIMEOUT_MS) {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    const name = err?.name;
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new HttpTimeoutError(timeoutMs);
+    }
+    throw err;
+  }
+}
+var DEFAULT_HTTP_TIMEOUT_MS, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS, HttpTimeoutError;
+var init_http = __esm({
+  "src/lib/http.ts"() {
+    "use strict";
+    DEFAULT_HTTP_TIMEOUT_MS = 2e4;
+    MIN_TIMEOUT_MS = 1e3;
+    MAX_TIMEOUT_MS = 6e4;
+    HttpTimeoutError = class extends Error {
+      constructor(timeoutMs) {
+        super(
+          `Permintaan HTTP melebihi ${Math.round(timeoutMs / 1e3)} detik \u2014 dihentikan agar sync tidak menggantung.`
+        );
+        this.timeoutMs = timeoutMs;
+        this.name = "HttpTimeoutError";
+      }
+    };
+  }
+});
+
+// src/lib/sync-plan.ts
+function chunkItems(items, size = ODDS_MULTI_BATCH_SIZE) {
+  const width = Number.isFinite(size) && size > 0 ? Math.floor(size) : ODDS_MULTI_BATCH_SIZE;
+  const chunks = [];
+  for (let i = 0; i < items.length; i += width) {
+    chunks.push(items.slice(i, i + width));
+  }
+  return chunks;
+}
+function isScheduleCandidate(dateIso, now = /* @__PURE__ */ new Date(), graceHours = SCHEDULE_GRACE_HOURS) {
+  const kickoff = new Date(dateIso).getTime();
+  if (!Number.isFinite(kickoff)) return false;
+  const grace = Number.isFinite(graceHours) && graceHours >= 0 ? graceHours : SCHEDULE_GRACE_HOURS;
+  return kickoff >= now.getTime() - grace * 60 * 60 * 1e3;
+}
+var ODDS_MULTI_BATCH_SIZE, SCHEDULE_GRACE_HOURS;
+var init_sync_plan = __esm({
+  "src/lib/sync-plan.ts"() {
+    "use strict";
+    ODDS_MULTI_BATCH_SIZE = 10;
+    SCHEDULE_GRACE_HOURS = 6;
+  }
+});
+
 // src/lib/odds-market.ts
 function normalizeMarketToken(value) {
   return String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_").replace(/[()\/]/g, "_").replace(/_+/g, "_");
@@ -50758,9 +50820,24 @@ function classifyOddsMarket(value) {
   if (baseToken === "ml" || baseToken === "h2h" || baseToken === "1x2" || baseToken.includes("match_winner") || baseToken.includes("match_result")) return "ML";
   return null;
 }
+function providerMarketNames(markets) {
+  const names = /* @__PURE__ */ new Set();
+  for (const market of markets) {
+    for (const name of PROVIDER_MARKET_NAMES[market] ?? []) names.add(name);
+  }
+  return Array.from(names);
+}
+var PROVIDER_MARKET_NAMES;
 var init_odds_market = __esm({
   "src/lib/odds-market.ts"() {
     "use strict";
+    PROVIDER_MARKET_NAMES = {
+      ML: ["ML"],
+      AH: ["Spread"],
+      Totals: ["Totals"],
+      BTTS: ["Both Teams To Score"],
+      HT: []
+    };
   }
 });
 
@@ -50881,7 +50958,7 @@ function parseRetryAfter(body, headerValue) {
 }
 async function apiGet(url, label) {
   logger.info({ url: redactApiKey(url), label }, "RADAR: HTTP request to Odds-API");
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url, {}, resolveRequestTimeoutMs(process.env["ODDS_API_TIMEOUT_MS"]));
   logger.info({ status: res.status, statusText: res.statusText, label, ok: res.ok }, "RADAR: HTTP response from Odds-API");
   if (res.status === 429) {
     const body = await res.text().catch(() => "");
@@ -50918,23 +50995,46 @@ async function fetchActiveLeagueSlugs(apiKey) {
   }
 }
 async function fetchLeagueEvents(leagueSlug, apiKey) {
-  const params = new URLSearchParams({
-    apiKey,
-    sport: "football",
-    league: leagueSlug,
-    status: "pending"
-  });
-  const url = `${BASE_URL}/events?${params}`;
-  logger.info({ url: redactApiKey(url), leagueSlug }, "RADAR: Fetching league events from Odds-API");
-  const data = await apiGet(
-    url,
-    `events:${leagueSlug}`
+  const cached = leagueEventsCache.get(leagueSlug);
+  if (cached && Date.now() - cached.at < LEAGUE_EVENTS_CACHE_MS) {
+    return cached.events;
+  }
+  const collected = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (let page = 0; page < EVENTS_MAX_PAGES; page++) {
+    const params = new URLSearchParams({
+      apiKey,
+      sport: "football",
+      league: leagueSlug,
+      status: "pending",
+      limit: String(EVENTS_PAGE_SIZE),
+      skip: String(page * EVENTS_PAGE_SIZE)
+    });
+    const url = `${BASE_URL}/events?${params}`;
+    logger.info(
+      { url: redactApiKey(url), leagueSlug, page },
+      "RADAR: Fetching league events from Odds-API"
+    );
+    const data = await apiGet(url, `events:${leagueSlug}:${page}`);
+    const batch = Array.isArray(data) ? data : [data];
+    for (const event of batch) {
+      if (seen.has(event.id)) continue;
+      seen.add(event.id);
+      collected.push(event);
+    }
+    if (batch.length < EVENTS_PAGE_SIZE) break;
+  }
+  leagueEventsCache.set(leagueSlug, { events: collected, at: Date.now() });
+  logger.info(
+    { leagueSlug, events: collected.length, pages: Math.max(1, Math.ceil(collected.length / EVENTS_PAGE_SIZE)) },
+    "RADAR: League events collected"
   );
-  logger.info({ rawData: data, isArray: Array.isArray(data), dataLength: Array.isArray(data) ? data.length : 1 }, "RADAR: Response from Odds-API events");
-  return Array.isArray(data) ? data : [data];
+  return collected;
 }
-async function fetchEventOdds(eventId, apiKey, bookmakers) {
+async function fetchEventOdds(eventId, apiKey, bookmakers, requestedMarkets = DEFAULT_MARKETS) {
   const params = new URLSearchParams({ apiKey, eventId: String(eventId), bookmakers });
+  const marketNames = providerMarketNames(requestedMarkets);
+  if (marketNames.length > 0) params.set("markets", marketNames.join(","));
   const url = `${BASE_URL}/odds?${params}`;
   logger.info({ url: redactApiKey(url), eventId, bookmakers }, "RADAR: Fetching event odds from Odds-API");
   const result2 = await apiGet(url, `odds:${eventId}`);
@@ -51273,8 +51373,11 @@ async function saveEventAndOdds(event, leagueSlug, leagueIdMap, requestedMarkets
 async function getAlreadySyncedEventIds(eventIds, requestedBookmakers, requestedMarkets = DEFAULT_MARKETS) {
   if (eventIds.length === 0) return /* @__PURE__ */ new Set();
   const data = [];
+  const freshCutoffIso = new Date(
+    Date.now() - ODDS_REFRESH_HOURS * 60 * 60 * 1e3
+  ).toISOString();
   for (let from = 0; ; from += SUPABASE_PAGE_SIZE) {
-    const { data: page, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, captured_at").in("match_id", eventIds.map((id) => String(id))).order("match_id", { ascending: true }).order("bookmaker", { ascending: true }).order("market_type", { ascending: true }).order("captured_at", { ascending: true }).range(from, from + SUPABASE_PAGE_SIZE - 1);
+    const { data: page, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, captured_at").in("match_id", eventIds.map((id) => String(id))).gte("captured_at", freshCutoffIso).order("match_id", { ascending: true }).order("bookmaker", { ascending: true }).order("market_type", { ascending: true }).order("captured_at", { ascending: true }).range(from, from + SUPABASE_PAGE_SIZE - 1);
     if (error) {
       logger.error({ error }, "Failed to fetch already synced odds");
       return /* @__PURE__ */ new Set();
@@ -51306,12 +51409,93 @@ async function getAlreadySyncedEventIds(eventIds, requestedBookmakers, requested
     )
   );
 }
+async function ensureScheduleSaved(events, leagueSlug, leagueIdMap) {
+  if (events.length === 0) return 0;
+  const last = scheduleSavedAt.get(leagueSlug) ?? 0;
+  if (Date.now() - last < LEAGUE_EVENTS_CACHE_MS) return 0;
+  const upserted = await saveScheduleFixtures(events, leagueSlug, leagueIdMap);
+  scheduleSavedAt.set(leagueSlug, Date.now());
+  return upserted;
+}
+async function saveScheduleFixtures(events, leagueSlug, leagueIdMap) {
+  const leagueId = leagueIdMap.get(leagueSlug);
+  if (!leagueId || events.length === 0) return 0;
+  const now = /* @__PURE__ */ new Date();
+  const payloads = events.filter((event) => isScheduleCandidate(event.date, now, 0)).map((event) => ({
+    fixture_id: event.id,
+    league_id: leagueId,
+    league_name: leagueSlug,
+    home_team_name: event.home,
+    away_team_name: event.away,
+    fixture_date: event.date,
+    status_short: event.status,
+    status_long: event.status,
+    season: new Date(event.date).getUTCFullYear(),
+    last_updated: now.toISOString()
+  }));
+  if (payloads.length === 0) return 0;
+  let upserted = 0;
+  for (const chunk of chunkItems(payloads, 500)) {
+    const { error } = await supabase.from("fixtures").upsert(chunk, { onConflict: "fixture_id" });
+    if (error) {
+      logger.error(
+        { error, league: leagueSlug, count: chunk.length },
+        "RADAR: Jadwal fixtures gagal disimpan"
+      );
+      continue;
+    }
+    upserted += chunk.length;
+  }
+  logger.info(
+    { league: leagueSlug, candidates: payloads.length, upserted },
+    "RADAR: Jadwal fixtures disimpan lebih dulu"
+  );
+  return upserted;
+}
+async function fetchEventsOddsMulti(eventIds, apiKey, bookmakers, requestedMarkets = DEFAULT_MARKETS) {
+  const ids = eventIds.slice(0, ODDS_MULTI_BATCH_SIZE);
+  if (ids.length === 0) return /* @__PURE__ */ new Map();
+  const params = new URLSearchParams({
+    apiKey,
+    eventIds: ids.join(","),
+    bookmakers
+  });
+  const marketNames = providerMarketNames(requestedMarkets);
+  if (marketNames.length > 0) params.set("markets", marketNames.join(","));
+  const url = `${BASE_URL}/odds/multi?${params}`;
+  logger.info({ eventCount: ids.length, bookmakers }, "RADAR: Fetching batch odds");
+  const data = await apiGet(url, `odds-multi:${ids.length}`);
+  const raw = data;
+  let list;
+  if (Array.isArray(raw)) {
+    list = raw;
+  } else if (raw && Array.isArray(raw.data)) {
+    list = raw.data;
+  } else if (raw && Array.isArray(raw.events)) {
+    list = raw.events;
+  } else if (raw && typeof raw === "object" && "id" in raw) {
+    list = [raw];
+  } else {
+    throw new Error("Bentuk respons /odds/multi tidak dikenali");
+  }
+  const byId = /* @__PURE__ */ new Map();
+  for (const event of list) {
+    const id = Number(event?.id);
+    if (Number.isFinite(id)) byId.set(id, event);
+  }
+  if (list.length > 0 && byId.size === 0) {
+    throw new Error("Respons /odds/multi tidak memuat id event yang diminta");
+  }
+  return byId;
+}
 async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, options = {}) {
   const { maxEvents, upcomingWindowDays = UPCOMING_WINDOW_DAYS } = options;
+  const requestedMarkets = options.markets ?? DEFAULT_MARKETS;
   let saved = 0;
   let errors = 0;
   let eventsFetched = 0;
   let oddsFetched = 0;
+  let fixturesUpserted = 0;
   let rateLimitedSeconds = 0;
   try {
     logger.info({ league: league.slug, bookmakers }, "RADAR: Fetching events for league");
@@ -51319,7 +51503,12 @@ async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, o
     eventsFetched = events.length;
     if (events.length === 0) {
       logger.info({ league: league.slug }, "No pending events \u2014 skipping");
-      return { league: league.slug, saved: 0, skipped: true, errors: 0, eventsFetched: 0, oddsFetched: 0 };
+      return { league: league.slug, saved: 0, skipped: true, errors: 0, eventsFetched: 0, oddsFetched: 0, fixturesUpserted: 0 };
+    }
+    try {
+      fixturesUpserted = await ensureScheduleSaved(events, league.slug, leagueIdMap);
+    } catch (err) {
+      logger.error({ err, league: league.slug }, "RADAR: Gagal menyimpan jadwal fixtures");
     }
     const now = Date.now();
     const windowEnd = now + upcomingWindowDays * 24 * 60 * 60 * 1e3;
@@ -51338,31 +51527,59 @@ async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, o
       { league: league.slug, total: events.length, alreadySynced: alreadySynced.size, toFetch: toFetch.length },
       "Events found"
     );
-    for (const event of toFetch) {
-      if (options.deadlineAt != null && Date.now() >= options.deadlineAt) {
+    const deadlineReached = () => options.deadlineAt != null && Date.now() >= options.deadlineAt;
+    let stop = false;
+    for (const batch of chunkItems(toFetch, ODDS_MULTI_BATCH_SIZE)) {
+      if (stop) break;
+      if (deadlineReached()) {
         logger.warn(
-          { league: league.slug, eventId: event.id, deadlineAt: options.deadlineAt },
+          { league: league.slug, deadlineAt: options.deadlineAt },
           "RADAR: Deadline reached mid-league \u2014 stopping event fetch"
         );
         break;
       }
+      let oddsById = null;
       try {
-        await new Promise((r) => setTimeout(r, 300));
-        const withOdds = await fetchEventOdds(event.id, apiKey, bookmakers);
-        const savedRows = await saveEventAndOdds(withOdds, league.slug, leagueIdMap, options.markets);
-        if (savedRows > 0) {
-          saved++;
-          oddsFetched++;
-        }
+        oddsById = await fetchEventsOddsMulti(batch.map((e) => e.id), apiKey, bookmakers, requestedMarkets);
       } catch (err) {
         if (err instanceof RateLimitError) {
           rateLimitedSeconds = err.retryAfterSeconds;
-          logger.warn({ retryAfter: rateLimitedSeconds, saved }, "Rate limited \u2014 returning partial league result for retry");
+          logger.warn({ retryAfter: rateLimitedSeconds, saved }, "Rate limited on batch odds \u2014 returning partial league result");
           break;
         }
-        errors++;
-        logger.error({ err, eventId: event.id }, "Failed to fetch/save odds for event");
+        logger.warn(
+          { err, league: league.slug, count: batch.length },
+          "RADAR: Batch odds gagal \u2014 fallback satu per satu"
+        );
       }
+      for (const event of batch) {
+        if (deadlineReached()) break;
+        try {
+          let withOdds = oddsById?.get(event.id);
+          if (!withOdds) {
+            if (oddsById) {
+              continue;
+            }
+            await new Promise((r) => setTimeout(r, 300));
+            withOdds = await fetchEventOdds(event.id, apiKey, bookmakers, requestedMarkets);
+          }
+          const savedRows = await saveEventAndOdds(withOdds, league.slug, leagueIdMap, requestedMarkets);
+          if (savedRows > 0) {
+            saved++;
+            oddsFetched++;
+          }
+        } catch (err) {
+          if (err instanceof RateLimitError) {
+            rateLimitedSeconds = err.retryAfterSeconds;
+            logger.warn({ retryAfter: rateLimitedSeconds, saved }, "Rate limited \u2014 returning partial league result for retry");
+            stop = true;
+            break;
+          }
+          errors++;
+          logger.error({ err, eventId: event.id }, "Failed to fetch/save odds for event");
+        }
+      }
+      if (!stop) await new Promise((r) => setTimeout(r, 300));
     }
   } catch (err) {
     if (err instanceof RateLimitError) {
@@ -51381,19 +51598,33 @@ async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, o
     errors,
     eventsFetched,
     oddsFetched,
+    fixturesUpserted,
     ...rateLimitedSeconds > 0 && { rateLimitedSeconds }
   };
 }
 async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, scanDays) {
+  const startedAt = Date.now();
+  const skipped = (reason, errorMessage3 = "") => ({
+    status: "skipped",
+    reason,
+    leagues: leagues.map((l) => l.slug),
+    eventsFetched: 0,
+    eventsInserted: 0,
+    oddsFetched: 0,
+    errors: 0,
+    rateLimitedSeconds: 0,
+    errorMessage: errorMessage3,
+    durationMs: Date.now() - startedAt
+  });
   if (syncRunning) {
     logger.warn("Sync already running \u2014 skipping");
-    return;
+    return skipped("already-running");
   }
   const apiKey = process.env["ODDS_API_KEY"];
   logger.info({ apiKeyPresent: !!apiKey }, "RADAR: ODDS_API_KEY check");
   if (!apiKey) {
     logger.error("ODDS_API_KEY is not set \u2014 skipping odds fetch");
-    return;
+    return skipped("no-api-key");
   }
   syncRunning = true;
   const effectiveBookmakers = bookmakers?.trim() ? bookmakers.trim() : await getConfiguredBookmakers();
@@ -51426,12 +51657,12 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
         if (attempt >= MAX_RATE_LIMIT_RETRIES) {
           syncRunning = false;
           logger.warn("RADAR: Active league fetch permanently skipped for this sync run");
-          return;
+          return skipped("rate-limited", "Daftar liga aktif gagal diambil karena rate limit");
         }
         if (Date.now() + waitSeconds * 1e3 >= deadlineAt) {
           syncRunning = false;
           logger.warn("RADAR: Rate-limit backoff would exceed the time budget \u2014 sync skipped this cycle");
-          return;
+          return skipped("rate-limited", "Backoff rate limit melewati anggaran waktu");
         }
         await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1e3));
       }
@@ -51446,13 +51677,14 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
   if (leaguesToSync.length === 0) {
     syncRunning = false;
     logger.info("RADAR: No active leagues to sync right now \u2014 will retry next cycle");
-    return;
+    return skipped("no-active-leagues");
   }
   const syncRunId = await startSyncRun(leaguesToSync.map((l) => l.slug));
   let totalEventsFetched = 0;
   let totalEventsInserted = 0;
   let totalOddsFetched = 0;
   let totalErrors = 0;
+  let totalFixturesUpserted = 0;
   let rateLimitedSeconds = 0;
   let status = "completed";
   let errorMessage2 = "";
@@ -51472,6 +51704,29 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
     leagueIdMap = /* @__PURE__ */ new Map();
   }
   try {
+    for (const league of leaguesToSync) {
+      if (Date.now() >= deadlineAt) {
+        logger.warn({ league: league.slug }, "RADAR: Anggaran habis sebelum jadwal liga ini \u2014 jadwal menyusul");
+        break;
+      }
+      try {
+        const events = await fetchLeagueEvents(league.slug, apiKey);
+        const upserted = await ensureScheduleSaved(events, league.slug, leagueIdMap);
+        totalFixturesUpserted += upserted;
+        logger.info(
+          { league: league.slug, events: events.length, fixturesUpserted: upserted },
+          "RADAR: Jadwal liga diproses"
+        );
+      } catch (err) {
+        if (err instanceof RateLimitError) {
+          rateLimitedSeconds = Math.max(rateLimitedSeconds, err.retryAfterSeconds);
+          logger.warn({ retryAfter: err.retryAfterSeconds }, "RADAR: Rate limited saat mengambil jadwal \u2014 sisa liga dilewati");
+          break;
+        }
+        totalErrors++;
+        logger.error({ err, league: league.slug }, "RADAR: Gagal mengambil jadwal liga");
+      }
+    }
     let remainingSlots = MAX_EVENTS_PER_SYNC;
     for (const league of leaguesToSync) {
       if (remainingSlots <= 0) {
@@ -51585,6 +51840,18 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
       "RADAR: All leagues odds sync complete"
     );
   }
+  return {
+    status,
+    leagues: leaguesToSync.map((l) => l.slug),
+    eventsFetched: totalEventsFetched,
+    eventsInserted: totalEventsInserted,
+    oddsFetched: totalOddsFetched,
+    errors: totalErrors,
+    fixturesUpserted: totalFixturesUpserted,
+    rateLimitedSeconds,
+    errorMessage: errorMessage2,
+    durationMs: Date.now() - startedAt
+  };
 }
 async function refreshOddsForFixtures(fixtureIds) {
   const uniqueIds = Array.from(new Set(fixtureIds.filter((id) => Number.isFinite(id)))).slice(0, 20);
@@ -51649,18 +51916,23 @@ async function refreshOddsForFixtures(fixtureIds) {
   logger.info(summary, "[ODDS-READINESS] Fixture odds refresh complete");
   return summary;
 }
-var BASE_URL, SUPABASE_PAGE_SIZE, syncRunning, MAX_EVENTS_PER_SYNC, UPCOMING_WINDOW_DAYS, DEFAULT_BOOKMAKERS, DEFAULT_SYNC_TIME_BUDGET_MS, DEFAULT_MARKETS, ODDS_REFRESH_HOURS, ACTIVE_LEAGUE_CACHE_MS, MAX_RATE_LIMIT_RETRIES, MAX_RATE_LIMIT_BACKOFF_SECONDS, activeLeagueCache, lastOddsRefreshState, DEFAULT_LEAGUES, RateLimitError;
+var BASE_URL, SUPABASE_PAGE_SIZE, syncRunning, MAX_EVENTS_PER_SYNC, UPCOMING_WINDOW_DAYS, EVENTS_PAGE_SIZE, EVENTS_MAX_PAGES, DEFAULT_BOOKMAKERS, DEFAULT_SYNC_TIME_BUDGET_MS, DEFAULT_MARKETS, ODDS_REFRESH_HOURS, ACTIVE_LEAGUE_CACHE_MS, MAX_RATE_LIMIT_RETRIES, MAX_RATE_LIMIT_BACKOFF_SECONDS, activeLeagueCache, lastOddsRefreshState, DEFAULT_LEAGUES, RateLimitError, leagueEventsCache, scheduleSavedAt, LEAGUE_EVENTS_CACHE_MS;
 var init_odds_fetcher = __esm({
   "src/services/odds-fetcher.ts"() {
     "use strict";
     init_logger();
     init_supabase_client();
+    init_http();
+    init_sync_plan();
+    init_odds_market();
     init_odds_market();
     BASE_URL = "https://api.odds-api.io/v3";
     SUPABASE_PAGE_SIZE = 1e3;
     syncRunning = false;
     MAX_EVENTS_PER_SYNC = 40;
     UPCOMING_WINDOW_DAYS = 10;
+    EVENTS_PAGE_SIZE = 200;
+    EVENTS_MAX_PAGES = 2;
     DEFAULT_BOOKMAKERS = "1xbet,M88";
     DEFAULT_SYNC_TIME_BUDGET_MS = 45e3;
     DEFAULT_MARKETS = ["ML", "Totals", "AH", "HT", "BTTS"];
@@ -51694,6 +51966,9 @@ var init_odds_fetcher = __esm({
         this.retryAfterSeconds = retryAfterSeconds;
       }
     };
+    leagueEventsCache = /* @__PURE__ */ new Map();
+    scheduleSavedAt = /* @__PURE__ */ new Map();
+    LEAGUE_EVENTS_CACHE_MS = 9e4;
   }
 });
 
@@ -80275,11 +80550,17 @@ async function loadOddsStatusFallback(fixtureIds, oddsByFixture, movementByFixtu
     movementByFixture.set(fixtureId, (movementByFixture.get(fixtureId) ?? 0) + count - 1);
   }
 }
-router2.post("/sync/trigger", requireAdmin, (req, res) => {
-  res.json({ message: "Odds sync started in background" });
-  fetchAndSaveAllLeagues().catch(
-    (err) => logger.error({ err }, "Manual odds sync failed")
-  );
+router2.post("/sync/trigger", requireAdmin, async (_req, res) => {
+  try {
+    const outcome = await fetchAndSaveAllLeagues();
+    res.json({
+      message: outcome.status === "skipped" ? `Sync dilewati (${outcome.reason ?? "tanpa alasan"})` : "Odds sync selesai",
+      outcome
+    });
+  } catch (err) {
+    logger.error({ err }, "Manual odds sync failed");
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 router2.get("/odds/events", async (req, res) => {
   try {
@@ -81343,8 +81624,52 @@ async function buildAutomationStatus(input) {
   };
 }
 
+// src/services/sync-runs.ts
+init_supabase_client();
+init_logger();
+var STALE_SYNC_RUN_SECONDS = 10 * 60;
+var STALE_RUN_CLOSE_MESSAGE = "Ditutup otomatis: proses sync berhenti sebelum selesai (fungsi serverless dipotong/dibekukan), jadi tidak ada hasil yang bisa dilaporkan. Bukan tanda sync masih berjalan.";
+function normalizeMaxAgeSeconds(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : STALE_SYNC_RUN_SECONDS;
+}
+function staleSyncRunCutoffIso(now = /* @__PURE__ */ new Date(), maxAgeSeconds = STALE_SYNC_RUN_SECONDS) {
+  return new Date(now.getTime() - normalizeMaxAgeSeconds(maxAgeSeconds) * 1e3).toISOString();
+}
+async function closeStaleSyncRuns(options = {}) {
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const cutoff = staleSyncRunCutoffIso(now, options.maxAgeSeconds);
+  if (!supabase) {
+    return { closed: 0, ids: [], cutoff };
+  }
+  try {
+    const { data, error } = await supabase.from("sync_runs").update({
+      status: "failed",
+      finished_at: now.toISOString(),
+      error_message: STALE_RUN_CLOSE_MESSAGE
+    }).eq("status", "running").lt("started_at", cutoff).select("id");
+    if (error) throw error;
+    const ids = (data ?? []).map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+    if (ids.length > 0) {
+      logger.warn({ ids, cutoff }, "sync_runs: run basi ditutup otomatis sebagai failed");
+    }
+    return { closed: ids.length, ids, cutoff };
+  } catch (err) {
+    logger.warn({ err, cutoff }, "sync_runs: gagal menutup run basi");
+    return { closed: 0, ids: [], cutoff };
+  }
+}
+
+// src/lib/sync-run-explain.ts
+var LOW_INSERT_RATIO = 0.5;
+function explainInsertRatio(fetched, inserted) {
+  if (!Number.isFinite(fetched) || fetched <= 0) return null;
+  if (inserted >= fetched * LOW_INSERT_RATIO) return null;
+  const opening = inserted === 0 ? "Tidak ada event baru yang masuk jendela pemindaian." : `Hanya ${inserted} dari ${fetched} event yang disimpan.`;
+  return `${opening} Angka "Event ditarik" menghitung SELURUH daftar liga dari provider \u2014 termasuk pertandingan yang sudah lewat dan yang di luar jendela scan_days. Yang disimpan hanya event akan datang yang belum punya odds segar (<6 jam). Rasio rendah belum tentu kegagalan: periksa kolom Error, Durasi, dan pesan terakhir.`;
+}
+
 // src/routes/config.ts
-var STALE_RUN_SECONDS = 10 * 60;
+var STALE_RUN_SECONDS = STALE_SYNC_RUN_SECONDS;
 var SYNC_HISTORY_LIMIT = 12;
 var SYNC_RUN_COLUMNS = [
   "id",
@@ -81389,12 +81714,8 @@ function toSyncRunSummary(input) {
     rateLimitedSeconds: num(row["rate_limited_seconds"]),
     errorMessage: row["error_message"] ?? null,
     insertRatio: eventsFetched > 0 ? eventsInserted / eventsFetched : null,
-    zeroInsertReason: explainZeroInsert(eventsFetched, eventsInserted)
+    insertReason: explainInsertRatio(eventsFetched, eventsInserted)
   };
-}
-function explainZeroInsert(fetched, inserted) {
-  if (fetched <= 0 || inserted > 0) return null;
-  return `Tidak ada event baru yang masuk jendela pemindaian. Provider mengembalikan ${fetched} event, tetapi semuanya jatuh di luar jendela (atau sudah tersinkron sebelumnya). Ini normal saat liga sedang jeda atau jadwal belum dirilis \u2014 bukan kegagalan. Perbesar scan_days bila ingin jendela lebih jauh.`;
 }
 var LEAGUES_CATALOG = [
   { slug: "england-premier-league", name: "Premier League", country: "Inggris" },
@@ -85411,15 +85732,78 @@ async function runAutoAnalysis(options = {}) {
 
 // src/routes/cron.ts
 init_supabase_client();
+
+// src/lib/cron-auth.ts
+function firstString(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const found = value.find((item) => typeof item === "string");
+    return typeof found === "string" ? found : null;
+  }
+  return null;
+}
+function bearerToken(authorization) {
+  if (!authorization) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(authorization.trim());
+  return match?.[1]?.trim() ?? null;
+}
+function isCronAuthorized(input) {
+  if (!input.secret) return false;
+  if (firstString(input.headerSecret) === input.secret) return true;
+  if (firstString(input.queryToken) === input.secret) return true;
+  if (bearerToken(firstString(input.authorization)) === input.secret) return true;
+  return false;
+}
+
+// src/lib/cron-params.ts
+var MAX_EVENTS_PER_LEAGUE_CALL = 40;
+function parseMaxEvents(raw) {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string" || value.trim() === "") return void 0;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
+    return void 0;
+  }
+  return Math.min(parsed, MAX_EVENTS_PER_LEAGUE_CALL);
+}
+
+// src/services/daily-plan.ts
+function leaguesForDailySync(leagues, now = /* @__PURE__ */ new Date(), count = 2) {
+  if (leagues.length === 0) return [];
+  const wanted = Math.max(0, Math.min(Math.trunc(count) || 0, leagues.length));
+  if (wanted === 0) return [];
+  const dayIndex = Math.floor(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 864e5
+  );
+  const start = (dayIndex % leagues.length + leagues.length) % leagues.length;
+  return Array.from({ length: wanted }, (_, offset) => leagues[(start + offset) % leagues.length]);
+}
+function remainingMs(deadlineAt, now = Date.now()) {
+  return Math.max(0, deadlineAt - now);
+}
+function stepBudgetMs(deadlineAt, maxMs, reserveMs, now = Date.now()) {
+  return Math.max(0, Math.min(maxMs, remainingMs(deadlineAt, now) - reserveMs));
+}
+
+// src/routes/cron.ts
 var router9 = (0, import_express9.Router)();
 var CRON_SECRET = process.env["CRON_SECRET"];
+var VERCEL_FUNCTION_LIMIT_MS = 6e4;
+var DAILY_TIME_BUDGET_MS = 45e3;
+var DAILY_SYNC_MAX_MS = 12e3;
+var DAILY_ANALYZE_MAX_MS = 18e3;
+var DAILY_ANALYZE_MIN_MS = 3e3;
+var DAILY_RESERVE_AFTER_ANALYZE_MS = 6e3;
+var DAILY_SYNC_MAX_EVENTS = 10;
 function isAuthorized(req) {
-  if (!CRON_SECRET) return false;
-  const header = req.headers["x-cron-secret"] ?? req.headers["X-Cron-Secret"];
-  const query = req.query["token"];
-  return header === CRON_SECRET || query === CRON_SECRET;
+  return isCronAuthorized({
+    secret: CRON_SECRET,
+    headerSecret: req.headers["x-cron-secret"] ?? req.headers["X-Cron-Secret"],
+    authorization: req.headers["authorization"],
+    queryToken: req.query["token"]
+  });
 }
-function handleCron(req, res) {
+async function handleCron(req, res) {
   if (!CRON_SECRET) {
     res.status(503).json({ error: "CRON_SECRET not configured" });
     return;
@@ -85431,6 +85815,7 @@ function handleCron(req, res) {
   const action = req.query["action"] ?? "keep-alive";
   if (action === "sync") {
     const requestedLeague = typeof req.query["league"] === "string" ? req.query["league"] : null;
+    const maxEvents = parseMaxEvents(req.query["max"]);
     if (requestedLeague) {
       const league = DEFAULT_LEAGUES.find((l) => l.slug === requestedLeague);
       if (!league) {
@@ -85455,11 +85840,12 @@ function handleCron(req, res) {
           String(process.env["ODDS_API_KEY"]),
           bookmakers,
           leagueIdMap,
-          { upcomingWindowDays: scanDays }
+          { upcomingWindowDays: scanDays, ...maxEvents == null ? {} : { maxEvents } }
         );
       })().then((result2) => {
         res.json({
           message: `Sync liga ${requestedLeague} selesai`,
+          maxEvents: maxEvents ?? null,
           result: result2,
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
         });
@@ -85470,15 +85856,19 @@ function handleCron(req, res) {
       return;
     }
     const leagues = DEFAULT_LEAGUES.map((l) => l.slug);
-    res.json({
-      message: "Cron sync started in background",
-      leagues,
-      hint: "Untuk Vercel, panggil ?action=sync&league=<slug> satu per satu agar tidak kena timeout 60 detik.",
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    fetchAndSaveAllLeagues().catch(
-      (err) => logger.error({ err }, "Cron-triggered odds sync failed")
-    );
+    try {
+      const outcome = await fetchAndSaveAllLeagues();
+      res.json({
+        message: outcome.status === "skipped" ? `Sync dilewati (${outcome.reason ?? "tanpa alasan"})` : "Sync selesai",
+        leagues,
+        outcome,
+        hint: "Untuk pemanggil berbatas waktu ketat, pakai ?action=sync&league=<slug>&max=<n> satu per satu.",
+        timestamp: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    } catch (err) {
+      logger.error({ err }, "Cron-triggered odds sync failed");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
     return;
   }
   if (action === "revalidate") {
@@ -85548,6 +85938,7 @@ function handleCron(req, res) {
   if (action === "daily") {
     const runDaily = async () => {
       const startedAt = Date.now();
+      const deadlineAt = startedAt + DAILY_TIME_BUDGET_MS;
       const step = async (name, fn) => {
         const t0 = Date.now();
         try {
@@ -85563,42 +85954,86 @@ function handleCron(req, res) {
           };
         }
       };
+      const skippedStep = (name, reason) => ({
+        step: name,
+        ok: false,
+        skipped: true,
+        ms: 0,
+        error: `Dilewati: ${reason}`
+      });
       const steps = [];
-      const scanDays = await getConfiguredScanDays().catch(() => 10);
-      const bookmakers = await getConfiguredBookmakers();
-      const leagueIdMap = await (async () => {
-        const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
-        return new Map((data ?? []).map((l) => [l.slug ?? l.name, l.id]));
-      })().catch(() => /* @__PURE__ */ new Map());
-      for (const league of DEFAULT_LEAGUES) {
+      steps.push(await step("reap", () => closeStaleSyncRuns()));
+      const syncLeague = leaguesForDailySync(DEFAULT_LEAGUES, /* @__PURE__ */ new Date(), 1)[0];
+      const syncDeadline = Math.min(
+        startedAt + DAILY_SYNC_MAX_MS,
+        deadlineAt - DAILY_ANALYZE_MIN_MS - DAILY_RESERVE_AFTER_ANALYZE_MS
+      );
+      if (!process.env["ODDS_API_KEY"]) {
+        steps.push(skippedStep("sync", "ODDS_API_KEY tidak diset"));
+      } else if (!syncLeague) {
+        steps.push(skippedStep("sync", "tidak ada liga untuk disinkronkan"));
+      } else if (syncDeadline - Date.now() < 1500) {
+        steps.push(skippedStep("sync", "sisa waktu tidak cukup"));
+      } else {
+        const scanDays = await getConfiguredScanDays().catch(() => 10);
+        const bookmakers = await getConfiguredBookmakers();
+        const leagueIdMap = await (async () => {
+          const { data } = await supabase.from("leagues").select("id, name, slug").eq("is_active", true);
+          return new Map((data ?? []).map((l) => [l.slug ?? l.name, l.id]));
+        })().catch(() => /* @__PURE__ */ new Map());
         steps.push(
           await step(
-            `sync:${league.slug}`,
+            `sync:${syncLeague.slug}`,
             () => fetchAndSaveLeagueOdds(
-              league,
+              syncLeague,
               String(process.env["ODDS_API_KEY"]),
               bookmakers,
               leagueIdMap,
-              { upcomingWindowDays: scanDays }
+              {
+                upcomingWindowDays: scanDays,
+                maxEvents: DAILY_SYNC_MAX_EVENTS,
+                deadlineAt: syncDeadline
+              }
             )
           )
         );
       }
-      steps.push(await step("results", () => refreshElapsedFixtureResults({})));
-      steps.push(await step("analyze", () => runAutoAnalysis({ limit: 3, budgetMs: 2e4 })));
+      const analyzeBudget = stepBudgetMs(
+        deadlineAt,
+        DAILY_ANALYZE_MAX_MS,
+        DAILY_RESERVE_AFTER_ANALYZE_MS
+      );
+      if (analyzeBudget >= DAILY_ANALYZE_MIN_MS) {
+        steps.push(
+          await step("analyze", () => runAutoAnalysis({ limit: 3, budgetMs: analyzeBudget }))
+        );
+      } else {
+        steps.push(skippedStep("analyze", "sisa anggaran waktu < 3 detik"));
+      }
+      if (remainingMs(deadlineAt) > 1e4) {
+        steps.push(await step("results", () => refreshElapsedFixtureResults({})));
+      } else {
+        steps.push(skippedStep("results", "sisa anggaran waktu < 10 detik"));
+      }
       steps.push(await step("closing", () => runClosingOddsCapture()));
       steps.push(await step("outcomes", () => runOutcomeSettlement()));
       return {
         message: "Rangkaian tugas harian selesai",
         totalMs: Date.now() - startedAt,
-        failedSteps: steps.filter((s) => !s.ok).map((s) => s.step),
+        budgetMs: DAILY_TIME_BUDGET_MS,
+        functionLimitMs: VERCEL_FUNCTION_LIMIT_MS,
+        failedSteps: steps.filter((s) => !s.ok && !s.skipped).map((s) => s.step),
+        skippedSteps: steps.filter((s) => s.skipped).map((s) => s.step),
         steps
       };
     };
-    runDaily().then((summary) => res.json(summary)).catch((err) => {
+    try {
+      const summary = await runDaily();
+      res.json(summary);
+    } catch (err) {
       logger.error({ err }, "Cron harian gagal total");
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    });
+    }
     return;
   }
   if (action === "reanalyze") {
@@ -85609,9 +86044,12 @@ function handleCron(req, res) {
     runBaselineBackfill({ dryRun: false }).then(() => runRevalidationAndTriggeredReanalysis({ maxPerRun: 5 })).catch((err) => logger.error({ err }, "Cron-triggered AI re-analysis failed"));
     return;
   }
+  const reaped = await closeStaleSyncRuns();
   res.json({
     ok: true,
     action: "keep-alive",
+    staleRunsClosed: reaped.closed,
+    staleRunIds: reaped.ids,
     timestamp: (/* @__PURE__ */ new Date()).toISOString()
   });
 }

@@ -36,3 +36,4 @@
 - [Prediction board readiness](prediction-board-readiness.md) — Structured market, verified odds, and explicit probability are required; prose recommendations never unlock a bet.
 - [Settlement provider fail-closed](settlement-provider-fail-closed.md) — Odds-API historical results use `settled` and period `p1`; missing coverage or HTTP 429 must remain fail-closed.
 - [Controlled Gemini learning](controlled-gemini-learning.md) — Keep autonomous policy changes bounded and provenance-backed; require strong holdout evidence, confidence, version history, and rollback.
+- [Cron Automation Recovery](cron-automation-recovery.md) — Vercel Cron memakai Authorization Bearer (bukan token/x-cron-secret); workflow GitHub harus di akar repo; maxDuration 60 memaksa analisis dijalankan sebelum sync; jangan fire-and-forget di serverless; api/index.js wajib di-rebuild.
