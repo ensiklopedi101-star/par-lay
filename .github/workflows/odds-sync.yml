@@ -12,10 +12,23 @@
 # Menyapu tujuh liga dalam satu panggilan tidak muat. Satu job per liga membuat
 # tiap panggilan pendek, dan kegagalan satu liga tidak menggagalkan liga lain.
 #
-# ─── Kenapa ?max=10 ───────────────────────────────────────────────────────
+# ─── Kenapa tiap jam, 7 liga, ?max=10 ─────────────────────────────────────
 # Kuota Odds-API free plan 100 permintaan/jam; satu event = satu permintaan
-# odds. 7 liga x 10 event = 70 permintaan, ditambah 7 permintaan daftar event,
-# masih menyisakan ruang untuk `results` dan analisis.
+# odds. 7 liga x 10 event = 70 permintaan + 7 daftar event = 77/jam, aman di
+# bawah kuota.
+#
+# Jadwal lama 6 jam membuat cakupan mustahil: 151 fixture dalam 20 hari,
+# sementara satu run hanya menyegarkan 70 event. Hasil audit 12 Nov 2026:
+# 71 dari 151 fixture belum pernah punya baris odds sama sekali, dan karena
+# batas "odds terverifikasi" adalah 3 jam (MAX_VERIFIED_ODDS_AGE_MS), selama
+# ~3 jam di setiap siklus 6 jam SEMUA fixture terlihat stale sehingga scanner
+# menolak memanggil AI tanpa alasan yang benar.
+#
+# Jam 06:00 UTC dilewati karena pada jam itu cron harian Vercel
+# (`vercel.json` → action=daily) sudah menyinkronkan semua liga; menjalankan
+# keduanya bersamaan akan melewati kuota.
+#
+# Matriks liga harus sama dengan `scheduler_config.leagues`.
 #
 # Rahasia yang dibutuhkan (Settings → Secrets and variables → Actions):
 #   API_BASE_URL = https://<project>.vercel.app   (TANPA /api)
@@ -29,8 +42,8 @@ name: odds-sync
 
 on:
   schedule:
-    # 00:00, 06:00, 12:00, 18:00 UTC
-    - cron: "0 */6 * * *"
+    # Tiap jam, kecuali 06:00 UTC (cron harian Vercel jalan di jam itu).
+    - cron: "0 0-5,7-23 * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -49,9 +62,9 @@ jobs:
           - england-championship
           - spain-laliga
           - italy-serie-a
+          - germany-bundesliga
           - france-ligue-1
           - netherlands-eredivisie
-          - germany-bundesliga
     steps:
       - name: Sync ${{ matrix.league }}
         env:
@@ -77,9 +90,8 @@ jobs:
             exit 1
           fi
 
-  # Analisis AI dijalankan setiap 6 jam, terpisah dari cron harian Vercel.
-  # Tanpa ini, analisis hanya bergantung pada satu slot harian yang anggaran
-  # waktunya sudah dipakai tugas lain — dan `prediction_selections` tetap nol.
+  # Analisis AI ikut tiap jam. Panggilan ini idempoten: fixture yang sudah punya
+  # prediksi dilewati, jadi tambahan biaya hanya terjadi saat ada fixture baru.
   analyze:
     runs-on: ubuntu-latest
     timeout-minutes: 10

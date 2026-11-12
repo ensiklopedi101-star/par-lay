@@ -1,6 +1,25 @@
 import { classifyOddsMarket, type SupportedOddsMarket } from "./odds-market";
 
-export const MAX_VERIFIED_ODDS_AGE_MS = 3 * 60 * 60 * 1000;
+/*
+ * Batas umur snapshot odds yang masih dianggap "terverifikasi".
+ *
+ * Nilai default 3 jam hanya masuk akal kalau sinkronisasi odds berjalan lebih
+ * sering daripada itu. Sebelumnya workflow berjalan setiap 6 jam, sehingga
+ * selama ~3 jam di setiap siklus SEMUA fixture terlihat "stale" dan scanner
+ * menolak memanggil AI walaupun datanya baik. Sekarang jadwal sync dibuat per
+ * jam (`.github/workflows/odds-sync.yml`) dan batas ini bisa disetel lewat
+ * `ODDS_MAX_AGE_HOURS` (1-24) tanpa mengubah kode.
+ */
+const DEFAULT_ODDS_MAX_AGE_HOURS = 3;
+
+function resolveOddsMaxAgeHours(raw = process.env.ODDS_MAX_AGE_HOURS): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_ODDS_MAX_AGE_HOURS;
+  return Math.min(24, Math.max(1, parsed));
+}
+
+export const ODDS_MAX_AGE_HOURS = resolveOddsMaxAgeHours();
+export const MAX_VERIFIED_ODDS_AGE_MS = ODDS_MAX_AGE_HOURS * 60 * 60 * 1000;
 
 export interface MarketOddsSnapshot {
   match_id?: string | number | null;
