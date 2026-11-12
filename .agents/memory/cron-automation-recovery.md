@@ -31,3 +31,11 @@ tetapi karena tidak ada pemicu terjadwal yang berjalan.
 - **`events_fetched` ≠ kandidat.** Angka itu seluruh daftar liga dari provider,
   termasuk laga yang sudah lewat. `events_inserted` = event yang disimpan;
   `odds_fetched` juga menghitung **event**, bukan baris harga.
+
+## 2026-11-12 — fixtures menua & sync lambat
+
+- `fixtures` **tidak pernah dihapus** kodenya; 897 baris, hanya 3 yang akan datang. Horizon menyusut karena baris fixture hanya ditulis di dalam `saveEventAndOdds` (efek samping odds), diurutkan kick-off terdekat, lalu berhenti saat anggaran waktu habis.
+- Lead time per bulan pembuatan: 06=70,8 hari, 07=67, 08=76,7, 10=2,4, 11=9,9 → jauh di muka dulu dari penarikan massal, bukan perilaku provider.
+- Odds memang baru dibuka bandar beberapa hari sebelum kick-off; jadwal bisa berbulan-bulan. Karena itu jadwal dan odds harus dipisah.
+- Perbaikan: `saveScheduleFixtures` (upsert massal 500/permintaan, hanya kick-off belum lewat), `fetchEventsOddsMulti` (`/odds/multi`, ≤10 id, fallback per-event bila bentuk respons aneh), filter `captured_at` di SQL untuk `getAlreadySyncedEventIds`. Tes **254/254**.
+- Sisa batas: `/events` masih tanpa paginasi (`skip`), jadi maksimal ~20 event terdekat per liga.

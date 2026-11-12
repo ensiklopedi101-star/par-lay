@@ -214,3 +214,96 @@ membuat seluruh sync menunggu — lalu instance dibekukan sebelum `finally`.
 - Panel: `zeroInsertReason` → `insertReason` (menjelaskan rasio rendah, bukan
   hanya nol), label "Snapshot odds" tidak lagi menyebut "baris harga".
 - 9 tes baru (`http`, `sync-run-explain`); total **249/249** lulus.
+
+---
+
+## 8. Fixtures "hilang" dan sync odds yang lambat (2026-11-12, lanjutan)
+
+Pertanyaan: dulu 200–800 fixture ditarik dari Odds-API dan bisa mencakup
+beberapa bulan ke depan; sekarang hilang, dan penarikan JSON-nya lama.
+
+### 8.1 Tidak ada yang menghapus fixture
+
+Audit kode: `grep -rn 'from("fixtures")'` hanya menemukan operasi **baca** dan
+`upsert`. Tidak ada `.delete()` yang menyentuh `fixtures` (satu-satunya
+`.delete()` ada di `parlays` dan `ai_learning_prompt_versions`). Tabelnya
+**897 baris**, `fixture_date` 2026-07-03 … 2026-11-21, `created_at`
+2026-06-14 … 2026-11-11.
+
+Yang terjadi adalah **penuaan**, bukan penghapusan:
+
+| bulan `fixture_date` | baris |
+|---|---|
+| 2026-07 | 63 |
+| 2026-08 | 245 |
+| 2026-09 | 276 |
+| 2026-10 | 289 |
+| 2026-11 | **24** |
+
+Dari 897 baris, hanya **3** yang kick-off-nya masih akan datang (semua EPL,
+2026-11-21). Baris lama tetap ada, tetapi sudah lewat sehingga tidak muncul
+sebagai jadwal.
+
+### 8.2 Horizon menyusut dari ~3 bulan ke ~2–3 hari
+
+Lead time = `fixture_date` − `created_at`, dikelompokkan menurut bulan pembuatan:
+
+| dibuat | baris | rata-rata lead | maksimum |
+|---|---|---|---|
+| 2026-06 | 394 | **70,8 hari** | 92 |
+| 2026-07 | 363 | 67,0 hari | 91 |
+| 2026-08 | 105 | 76,7 hari | 89 |
+| 2026-10 | 32 | **2,4 hari** | 3 |
+| 2026-11 | 3 | 9,9 hari | 10 |
+
+Per liga sejak Oktober: bundesliga 2,3 hari (18), serie-a 2,3 (8), laliga 2,4
+(4), EPL 9,9 (3), ligue-1 2,2 (1), championship 2,7 (1).
+
+Penyebabnya ada di kode, bukan di provider:
+
+1. `fetchAndSaveLeagueOdds` menarik `/events` dengan `status=pending`, tanpa
+   paginasi (`skip`), sehingga hanya menerima ~20 event per liga.
+2. Baris `fixtures` **hanya** lahir di dalam `saveEventAndOdds`, yaitu sebagai
+   efek samping pengambilan odds.
+3. `toFetch` diurutkan **dari kick-off terdekat**, lalu loop berhenti saat
+   anggaran 45 detik habis. Jadi yang sempat ditulis hanya pertandingan 2–3
+   hari ke depan; sisa jadwal tidak pernah sampai ke database.
+
+Juni–Agustus bisa 70–92 hari karena saat itu penarikan massal (seed/bulk) masih
+memasukkan seluruh daftar event, bukan karena provider berubah.
+
+### 8.3 Odds memang tidak bisa jauh di muka
+
+Dokumentasi Odds-API menyatakan harga pra-pertandingan muncul setelah bandar
+membuka pasar, biasanya **beberapa hari** sebelum kick-off. Ini sesuai dugaan
+pengguna: **jadwal bisa ditarik berbulan-bulan, odds tidak.** Karena kedua
+urusan itu digabung dalam satu loop, jadwal ikut tertahan oleh odds.
+
+### 8.4 Kenapa lambat
+
+- **N+1 request**: satu event = satu `GET /odds`, plus jeda 300 ms. 40 event =
+  40 round-trip.
+- **Payload penuh**: respons memuat semua pasar (corners, exact goals, team
+  totals) — puluhan ribu baris untuk 140 event.
+- **Baca riwayat tanpa filter**: `getAlreadySyncedEventIds` mengunduh
+  `odds_history` per halaman 1.000 baris untuk semua event kandidat.
+- **Tulis per baris**: setiap baris pasar di-`UPDATE` satu per satu (70+
+  request paralel per event).
+- **Tanpa timeout** sampai `34faaa2`: satu koneksi menggantung menahan seluruh
+  sync (9 menit 12 detik untuk satu event pada run 568).
+
+### 8.5 Perbaikan yang dikirim
+
+| perubahan | berkas | dampak |
+|---|---|---|
+| Jadwal disimpan lebih dulu, massal, tanpa menunggu odds | `saveScheduleFixtures` di `services/odds-fetcher.ts` | satu `GET /events` + upsert 500 baris/permintaan ⇒ fixture berminggu-minggu ke depan kembali tersimpan |
+| Hanya kick-off yang belum lewat yang di-upsert jadwal | `isScheduleCandidate` (`lib/sync-plan.ts`, grace 0) | status "pending" tidak menimpa status akhir pertandingan |
+| Odds per batch 10 event | `fetchEventsOddsMulti` → `/v3/odds/multi` | 40 event = 4 request, bukan 40 |
+| Bentuk respons tak dikenal = error → fallback per-event | `fetchEventsOddsMulti` | tidak ada batch yang hilang diam-diam |
+| `odds_history` disaring `captured_at >= now-6 jam` **di SQL** | `getAlreadySyncedEventIds` | puluhan ribu baris → hanya yang relevan |
+| 5 tes baru | `lib/sync-plan.test.ts` | total **254/254** lulus |
+
+Batas yang tetap ada dan harus jujur disebut: kalau provider hanya
+mengembalikan 20 event per liga tanpa paginasi, jadwal yang bisa disimpan
+tetap 20 event terdekat per liga. Untuk menembus itu perlu `skip`/`limit`
+berulang di `/events` — langkah berikutnya, bukan yang sudah dikerjakan.
