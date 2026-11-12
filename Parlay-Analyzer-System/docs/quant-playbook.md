@@ -164,6 +164,53 @@ probabilitas mengalir berarti menyempurnakan gerbang yang tidak pernah dilewati.
 
 ---
 
+## 8b. Status implementasi lapisan fitur (L2)
+
+Ditambahkan 12 Nov 2026 — `artifacts/api-server/src/lib/match-context.ts`:
+
+| Fungsi | Isi | Kenapa |
+|--------|-----|--------|
+| `parseStatNumber`, `parsePercent`, `parseRate` | membaca format nyata: `"1.20 / match"`, `"80%"`, `"'+53%"` | data mentah berisi satuan dan apostrof liar |
+| `parseTeamRates` | 20 fitur per tim termasuk **split kandang/tandang** dan residual xG | split venue sebelumnya tidak pernah dipakai |
+| `estimateLambdas` | λ dari split venue + xG (bobot 0.6) + shrinkage `n/(n+6)` | `modelLambdas` memakai rata-rata musim sehingga split hilang |
+| `marketProbabilities` | 1X2, Over 1.5/2.5/3.5, BTTS, skor teratas dari **satu** matriks | menghapus probabilitas yang saling bertentangan |
+| `jointProbability`, `correlationFindings` | korelasi Over 2.5+BTTS, Home+Over, dll. | dua leg satu pertandingan tidak boleh dikalikan biasa |
+| `buildMatchContext`, `formatMatchContextBlock` | blok "MODEL PERTANDINGAN" untuk prompt + daftar data hilang | prompt menerima perbandingan, bukan dua daftar mentah |
+
+Perubahan pada `ai-analysis.ts`:
+
+1. Prompt kini memuat blok **MODEL PERTANDINGAN** (λ, probabilitas turunan, korelasi, data hilang) di samping blok mentah.
+2. `buildStandingContext` tidak lagi menulis `Posisi: 0`. Penyebabnya: `stats_team_form` tidak pernah punya key `Pos` (0 dari 133 baris), sedangkan kode membacanya. Sekarang nilai yang tidak ada menjadi `N/A`, dan baris tanpa data klasemen tidak dikirim sama sekali.
+3. H2H diberi catatan eksplisit bahwa sampel maksimal 5 laga bukan dasar probabilitas.
+4. Vektor probabilitas model disimpan ke `ai_predictions.prob_home_win/prob_draw/prob_away_win/prob_over25/prob_under25/prob_btts_yes/prob_btts_no`, dan konteks turunan (λ, reliabilitas, rata-rata liga, sinyal, korelasi, data hilang) ke `manual_context.input.derived` untuk audit.
+5. Rata-rata liga dihitung dari `team_season_stats` (musim terbaru saja, minimal 8 tim) dan di-cache 6 jam per liga; bila gagal, default 1.45/1.15 dipakai **dan ditandai** sebagai data hilang.
+
+### EV yang dihitung kode (mode bayangan)
+
+Jalur LLM kini menghitung sendiri, untuk setiap usulan market:
+
+```
+p_model   = probabilitas dari matriks skor (modelProbabilityForSelection)
+p_market  = de-vig kasus terburuk dari pasar pembanding (fairProbabilityForLabel)
+p_final   = 0.35 × p_model + 0.65 × p_market
+EV        = p_final × odds − 1
+EV_cons   = (p_final − 0.05) × odds − 1
+```
+
+Nilai-nilai itu disimpan ke `ai_predictions.p_model_only / p_market_fair / p_final /
+expected_value / ev_at_analysis`, dan ke `manual_context.recommendation.model`
+(termasuk catatan bila probabilitas tidak bisa dihitung, mis. market HT).
+
+**Penting:** ini masih **mode bayangan** (`gateMode: "shadow"`). Angka model belum
+menggantikan gerbang keputusan; `recommendation.evPercent` tetap memakai perhitungan
+lama. Alasannya: model ini belum punya catatan kalibrasi, dan mengubah gerbang sebelum
+ada bukti berarti memindahkan risiko dari "tidak pernah bertaruh" ke "bertaruh tanpa
+dasar". Setelah ~50 seleksi terkumpul, bandingkan `p_final` vs hasil nyata (Brier),
+lalu naikkan ke `enforced`.
+
+Yang **belum** dikerjakan: menulis `prediction_selections` dari jalur LLM (P3) dan
+menaikkan gerbang ke `enforced` (P1). Keduanya menunggu data bayangan di atas.
+
 ## 9. Pagar yang tidak boleh dilanggar
 
 1. **Tidak ada taruhan tanpa `p` eksplisit.** NO BET adalah jawaban yang sah dan harus
