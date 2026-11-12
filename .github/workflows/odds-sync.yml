@@ -20,6 +20,10 @@
 # Rahasia yang dibutuhkan (Settings → Secrets and variables → Actions):
 #   API_BASE_URL = https://<project>.vercel.app   (TANPA /api)
 #   CRON_SECRET  = sama dengan yang ada di Vercel
+#
+# Kegagalan kini dilaporkan lewat anotasi berisi kode HTTP (401 = token beda,
+# 404 = API_BASE_URL salah/berakhiran /api, 000 = tidak bisa menghubungi host),
+# karena log mentah tidak selalu bisa dibaca dari CLI.
 
 name: odds-sync
 
@@ -55,13 +59,23 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           if [ -z "$API_BASE_URL" ] || [ -z "$CRON_SECRET" ]; then
-            echo "API_BASE_URL atau CRON_SECRET belum diisi di repository secrets."
+            echo "::error::Repository secrets API_BASE_URL / CRON_SECRET belum diisi."
             exit 1
           fi
-          curl -fsS --max-time 55 \
-            "$API_BASE_URL/api/cron?token=$CRON_SECRET&action=sync&league=${{ matrix.league }}&max=10"
-          echo ""
-          echo "OK: ${{ matrix.league }}"
+          if printf '%s' "$API_BASE_URL" | grep -qE '/api/?$'; then
+            echo "::error::API_BASE_URL tidak boleh berakhiran /api — workflow menambahkan /api/cron sendiri."
+            exit 1
+          fi
+          URL="$API_BASE_URL/api/cron?token=$CRON_SECRET&action=sync&league=${{ matrix.league }}&max=10"
+          code=$(curl -sS --max-time 55 -o /tmp/body.txt -w '%{http_code}' "$URL" 2>/tmp/curl.err || true)
+          BODY=$(head -c 300 /tmp/body.txt 2>/dev/null | tr '\n' ' ')
+          echo "HTTP ${code:-000} — sync"
+          echo "$BODY"
+          if [ "$code" != "200" ]; then
+            ERR=$(head -c 160 /tmp/curl.err 2>/dev/null | tr '\n' ' ')
+            echo "::error::sync gagal: HTTP ${code:-000} ${ERR} ${BODY}"
+            exit 1
+          fi
 
   # Analisis AI dijalankan setiap 6 jam, terpisah dari cron harian Vercel.
   # Tanpa ini, analisis hanya bergantung pada satu slot harian yang anggaran
@@ -78,12 +92,23 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           if [ -z "$API_BASE_URL" ] || [ -z "$CRON_SECRET" ]; then
-            echo "API_BASE_URL atau CRON_SECRET belum diisi di repository secrets."
+            echo "::error::Repository secrets API_BASE_URL / CRON_SECRET belum diisi."
             exit 1
           fi
-          curl -fsS --max-time 55 \
-            "$API_BASE_URL/api/cron?token=$CRON_SECRET&action=analyze"
-          echo ""
+          if printf '%s' "$API_BASE_URL" | grep -qE '/api/?$'; then
+            echo "::error::API_BASE_URL tidak boleh berakhiran /api — workflow menambahkan /api/cron sendiri."
+            exit 1
+          fi
+          URL="$API_BASE_URL/api/cron?token=$CRON_SECRET&action=analyze"
+          code=$(curl -sS --max-time 55 -o /tmp/body.txt -w '%{http_code}' "$URL" 2>/tmp/curl.err || true)
+          BODY=$(head -c 300 /tmp/body.txt 2>/dev/null | tr '\n' ' ')
+          echo "HTTP ${code:-000} — analyze"
+          echo "$BODY"
+          if [ "$code" != "200" ]; then
+            ERR=$(head -c 160 /tmp/curl.err 2>/dev/null | tr '\n' ' ')
+            echo "::error::analyze gagal: HTTP ${code:-000} ${ERR} ${BODY}"
+            exit 1
+          fi
 
   # Outcome ledger cukup sekali sehari; hasil pertandingan tidak berubah
   # dalam hitungan jam.
@@ -99,12 +124,23 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           if [ -z "$API_BASE_URL" ] || [ -z "$CRON_SECRET" ]; then
-            echo "API_BASE_URL atau CRON_SECRET belum diisi di repository secrets."
+            echo "::error::Repository secrets API_BASE_URL / CRON_SECRET belum diisi."
             exit 1
           fi
-          curl -fsS --max-time 55 \
-            "$API_BASE_URL/api/cron?token=$CRON_SECRET&action=outcomes"
-          echo ""
+          if printf '%s' "$API_BASE_URL" | grep -qE '/api/?$'; then
+            echo "::error::API_BASE_URL tidak boleh berakhiran /api — workflow menambahkan /api/cron sendiri."
+            exit 1
+          fi
+          URL="$API_BASE_URL/api/cron?token=$CRON_SECRET&action=outcomes"
+          code=$(curl -sS --max-time 55 -o /tmp/body.txt -w '%{http_code}' "$URL" 2>/tmp/curl.err || true)
+          BODY=$(head -c 300 /tmp/body.txt 2>/dev/null | tr '\n' ' ')
+          echo "HTTP ${code:-000} — outcomes"
+          echo "$BODY"
+          if [ "$code" != "200" ]; then
+            ERR=$(head -c 160 /tmp/curl.err 2>/dev/null | tr '\n' ' ')
+            echo "::error::outcomes gagal: HTTP ${code:-000} ${ERR} ${BODY}"
+            exit 1
+          fi
 
 # CATATAN soal closing-odds
 # -------------------------
