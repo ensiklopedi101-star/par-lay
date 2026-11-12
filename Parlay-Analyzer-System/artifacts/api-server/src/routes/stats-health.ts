@@ -8,6 +8,7 @@ import {
   REQUIRED_STAT_KEYS,
 } from "../services/ai-analysis";
 import { TEAM_STATS_STALE_DAYS } from "../lib/team-stats-freshness";
+import { findContradictoryColumns, normalizeStatsRow } from "../lib/stats-integrity";
 
 const router: IRouter = Router();
 
@@ -110,33 +111,103 @@ router.get("/stats/health", async (_req, res) => {
       name: string;
       statsRows: number;
       teamsCovered: number;
-       teamsComplete: number;
-       teamsIncomplete: number;
+      teamsComplete: number;
+      teamsIncomplete: number;
       latestUpdatedAt: string | null;
       ageDays: number | null;
       status: "missing" | "stale" | "current";
+      /** Rincian per musim — dulu dua musim tercampur dalam satu angka. */
+      bySeason: Array<{
+        season: string;
+        rows: number;
+        teams: number;
+        complete: number;
+        incomplete: number;
+        latestUpdatedAt: string | null;
+        ageDays: number | null;
+        status: "missing" | "stale" | "current";
+      }>;
+      /** Blok yang isinya milik kolom lain (mis. "Conceded" di kolom scored). */
+      contradictoryBlocks: number;
+      /** Blok yang diisi ulang dari `stats_team_form` (o25/under). */
+      derivedBlocks: number;
     }>();
 
+    /*
+     * Metrik health sebelumnya menghitung BARIS, bukan tim. Karena satu tim
+     * bisa punya satu baris musim berjalan dan satu baris musim lalu, EPL
+     * tampil "teamsCovered 20" tetapi "teamsComplete 37" (20 + 17) — angka
+     * yang mustahil dan menutupi liga yang sebenarnya tidak lengkap.
+     * Sekarang: cakupan dihitung per tim, kelengkapan dihitung pada musim
+     * terbaru, dan setiap musim punya rinciannya sendiri.
+     */
     for (const slug of leagueInputs) {
       const key = canonicalLeague(slug);
       if (healthByKey.has(key)) continue;
       const rows = rowsByLeague.get(key) ?? [];
-      const latestUpdatedAt = latestDate(rows.map((row) => row.updated_at));
-      const quality = rows.map((row) => assessTeamStatsQuality(row));
-      const teamsComplete = quality.filter((entry) => entry.valid).length;
-      const ageDays = latestUpdatedAt
-        ? Math.max(0, Math.floor((now - new Date(latestUpdatedAt).getTime()) / (24 * 60 * 60 * 1000)))
-        : null;
+
+      const rowsBySeason = new Map<string, StatsRow[]>();
+      for (const row of rows) {
+        const season = String(row.season ?? "");
+        const bucket = rowsBySeason.get(season) ?? [];
+        bucket.push(row);
+        rowsBySeason.set(season, bucket);
+      }
+      const seasonKeys = Array.from(rowsBySeason.keys()).sort((a, b) => b.localeCompare(a));
+
+      let contradictoryBlocks = 0;
+      let derivedBlocks = 0;
+      const bySeason = seasonKeys.map((season) => {
+        const seasonRows = rowsBySeason.get(season) ?? [];
+        let complete = 0;
+        for (const row of seasonRows) {
+          const contradictory = findContradictoryColumns(row);
+          contradictoryBlocks += contradictory.length;
+          if (contradictory.length === 0) {
+            /*
+             * Kualitas dinilai setelah normalisasi supaya blok yang bisa
+             * direkonstruksi (o25 dari form) tidak dihitung "hilang" —
+             * tetapi jumlah blok turunan tetap dilaporkan terpisah.
+             */
+            const normalized = normalizeStatsRow(row);
+            derivedBlocks += normalized.derived.length;
+            if (assessTeamStatsQuality(normalized.stats).valid) complete += 1;
+          }
+        }
+        const latestUpdatedAt = latestDate(seasonRows.map((row) => row.updated_at));
+        return {
+          season,
+          rows: seasonRows.length,
+          teams: new Set(seasonRows.map((row) => row.team_name).filter(Boolean)).size,
+          complete,
+          incomplete: Math.max(0, seasonRows.length - complete),
+          latestUpdatedAt,
+          ageDays: latestUpdatedAt
+            ? Math.max(0, Math.floor((now - new Date(latestUpdatedAt).getTime()) / (24 * 60 * 60 * 1000)))
+            : null,
+          status: (complete === 0
+            ? "missing"
+            : latestUpdatedAt && new Date(latestUpdatedAt).getTime() >= staleCutoff ? "current" : "stale") as
+            "missing" | "stale" | "current",
+        };
+      });
+
+      const latestSeason = bySeason[0];
+      const latestUpdatedAt = latestSeason?.latestUpdatedAt ?? null;
+      const ageDays = latestSeason?.ageDays ?? null;
       healthByKey.set(key, {
         slug,
         name: leagueLabel(slug),
         statsRows: rows.length,
         teamsCovered: new Set(rows.map((row) => row.team_name).filter(Boolean)).size,
-        teamsComplete,
-        teamsIncomplete: Math.max(0, rows.length - teamsComplete),
+        teamsComplete: latestSeason?.complete ?? 0,
+        teamsIncomplete: latestSeason ? Math.max(0, latestSeason.teams - latestSeason.complete) : 0,
         latestUpdatedAt,
         ageDays,
-        status: teamsComplete === 0 ? "missing" : latestUpdatedAt && new Date(latestUpdatedAt).getTime() >= staleCutoff ? "current" : "stale",
+        status: latestSeason?.status ?? "missing",
+        bySeason,
+        contradictoryBlocks,
+        derivedBlocks,
       });
     }
 

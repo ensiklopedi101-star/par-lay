@@ -15,6 +15,7 @@ import {
   type TeamStatsFreshness,
 } from "../lib/team-stats-freshness";
 import { latestOddsByMarket } from "./odds-history";
+import { normalizeStatsRow } from "../lib/stats-integrity";
 import { getGeminiModel } from "./model-discovery";
 import { shadowLogQuantAnalysis } from "./quant-shadow";
 import { classifyOddsMarket } from "./odds-fetcher";
@@ -257,10 +258,18 @@ function hasSaneStatValues(value: unknown, key: string): boolean {
   }
   if (typeof value !== "string") return true;
 
+  /*
+   * Metrik rasio boleh melewati 100%: `stats_goals_scored["Home Advantage"]`
+   * milik Borussia Mönchengladbach bernilai "+114%" dan itu benar — rasio
+   * kandang-vs-tandang, bukan persentase kejadian. Sebelumnya aturan ini
+   * membuang blok tersebut dan timnya berubah jadi "data tidak lengkap".
+   * Batas >100% tetap berlaku untuk persentase kejadian (Over, BTTS, FTS).
+   */
+  const allowsAboveHundred = allowsNegative;
   const percentageValues = [...value.matchAll(/(-?\d+(?:\.\d+)?)\s*%/g)].map((match) => Number(match[1]));
   if (percentageValues.some((percentage) =>
     !Number.isFinite(percentage) ||
-    percentage > 100 ||
+    (!allowsAboveHundred && percentage > 100) ||
     (!allowsNegative && percentage < 0)
   )) {
     return false;
@@ -693,31 +702,67 @@ async function findTeamStats(teamName: string, leagueSlug: string): Promise<Reco
     group.push(row);
     grouped.set(key, group);
   }
-  const mergedMatches = Array.from(grouped.values())
-    .map((rows) => mergeTeamStatsRows(rows))
+  /*
+   * Integritas blok diperiksa SEBELUM data dipakai: blok yang labelnya
+   * bertentangan dengan nama kolom dibuang (18 baris La Liga 2026-27 berisi
+   * data "Conceded" di stats_goals_scored), dan blok turunan yang bisa
+   * direkonstruksi diisi dari stats_team_form (27 tim kehilangan o25 saat
+   * migrasi 11 Nov). Gagal keras lebih baik daripada analisis yang salah.
+   */
+  const integrityRemoved: string[] = [];
+  const normalizedMatches = Array.from(grouped.values())
+    .map((rows) => {
+      const merged = mergeTeamStatsRows(rows);
+      const { stats, removed, derived } = normalizeStatsRow(merged);
+      for (const hit of removed) integrityRemoved.push(`${hit.column}→${hit.belongsTo}`);
+      if (removed.length > 0) {
+        logger.warn(
+          { teamName, leagueSlug, season: merged.season, removed },
+          "[STATS-INTEGRITY] blok bertentangan dengan kolom tujuan — dibuang",
+        );
+      }
+      if (derived.length > 0) {
+        logger.info(
+          { teamName, leagueSlug, season: merged.season, derived },
+          "[STATS-INTEGRITY] blok turunan diisi dari stats_team_form",
+        );
+      }
+      return stats;
+    })
     .sort((a, b) => seasonStart(b.season) - seasonStart(a.season));
 
-  const best = mergedMatches[0];
+  const best = normalizedMatches[0];
   if (!best) return {};
 
   const currentYear = new Date().getFullYear();
-  const currentRows = mergedMatches.filter((row) => seasonIncludesYear(row.season, currentYear));
+  const currentRows = normalizedMatches.filter((row) => seasonIncludesYear(row.season, currentYear));
   const current = currentRows[0];
   const baseline = best;
   const matchesPlayed = matchesPlayedFromStats(current);
 
-  if (current && matchesPlayed >= 6) return current;
+  /*
+   * `_integrity` dibawa ke pemanggil supaya pesan penolakan bisa menyebut
+   * sebabnya. Tanpa ini, data La Liga yang rusak hanya tampil sebagai
+   * "statistik belum lengkap" dan penyebab aslinya tidak pernah terlihat.
+   */
+  const integrity = integrityRemoved.length > 0
+    ? { removedColumns: Array.from(new Set(integrityRemoved)) }
+    : undefined;
+  const tag = <T extends Record<string, unknown>>(value: T): T =>
+    integrity ? { ...value, _integrity: integrity } : value;
+
+  if (current && matchesPlayed >= 6) return tag(current);
   if (current && baseline !== current) {
-    return { current_season: current, baseline_reference: baseline, _meta: "COMBINED" };
+    return tag({ current_season: current, baseline_reference: baseline, _meta: "COMBINED" });
   }
   if (baseline) {
-    return {
+    return tag({
       current_season: current ? "DATA_UNAVAILABLE" : "DATA_UNAVAILABLE",
       baseline_reference: baseline,
       _meta: "BASELINE_ONLY",
-    };
+    });
   }
-  return {};
+  return integrity ? { _integrity: integrity } : {};
 }
 
 async function fetchHeadToHead(
@@ -1487,8 +1532,17 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     const missingHome = homeStatsQuality.missingKeys.join(", ") || "none";
     const missingAway = awayStatsQuality.missingKeys.join(", ") || "none";
     console.log(`[AI-ANALYSIS] DITOLAK — stats belum lengkap. Home missing: ${missingHome}; Away missing: ${missingAway}\n`);
+    const describeIntegrity = (team: string, stats: Record<string, unknown>) => {
+      const integrity = stats._integrity as { removedColumns?: string[] } | undefined;
+      const removed = integrity?.removedColumns ?? [];
+      return removed.length > 0
+        ? ` ${team}: blok rusak dibuang (${removed.join(", ")}) — impor ulang kolom itu.`
+        : "";
+    };
     throw new StatsEmptyError(
-      `Data statistik belum lengkap. ${homeTeam}: ${missingHome}. ${awayTeam}: ${missingAway}.`,
+      `Data statistik belum lengkap. ${homeTeam}: ${missingHome}. ${awayTeam}: ${missingAway}.`
+      + describeIntegrity(homeTeam, homeStats)
+      + describeIntegrity(awayTeam, awayStats),
     );
   }
   if (!homeStatsFreshness.valid || !awayStatsFreshness.valid) {

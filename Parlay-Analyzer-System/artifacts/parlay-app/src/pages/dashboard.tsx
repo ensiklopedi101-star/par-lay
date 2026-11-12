@@ -101,6 +101,7 @@ export default function Dashboard() {
     waitingOdds: number;
     noBet: number;
     technicalReview: number;
+    errors: number;
     message?: string;
     tickets?: Array<{
       home_team: string;
@@ -138,7 +139,9 @@ export default function Dashboard() {
       if (!started.jobId) throw new Error("Batch scanner tidak mengembalikan job ID");
 
       type BatchStatus = {
-        status: "running" | "completed" | "failed";
+        status: "running" | "completed" | "partial" | "failed";
+        pending?: number;
+        errors?: number;
         completed: number;
         total: number;
         currentMatch: string | null;
@@ -163,7 +166,8 @@ export default function Dashboard() {
         }>;
       };
       let result: BatchStatus;
-      do {
+      let resumes = 0;
+      for (;;) {
         await new Promise((resolve) => setTimeout(resolve, 1_500));
         const statusResponse = await fetch(`/api/analyze/batch/${started.jobId}`, {
           headers: { "x-admin-password": pwd },
@@ -171,7 +175,14 @@ export default function Dashboard() {
         if (!statusResponse.ok) {
           if (statusResponse.status === 401) clearStoredAdminPassword();
           const body = await statusResponse.json().catch(() => ({ error: `API ${statusResponse.status}` }));
-          throw new Error(body.error ?? `API ${statusResponse.status}`);
+          /*
+           * Job sekarang disimpan di server, jadi 404 berarti benar-benar
+           * kedaluwarsa (lebih dari 6 jam) — bukan sekadar "instance lain".
+           */
+          const detail = statusResponse.status === 404
+            ? "Job scan kedaluwarsa di server. Jalankan scan ulang."
+            : body.error ?? `API ${statusResponse.status}`;
+          throw new Error(detail);
         }
         result = await statusResponse.json() as BatchStatus;
         setScanProgress({
@@ -186,17 +197,42 @@ export default function Dashboard() {
           waitingOdds: result.waitingOdds,
           noBet: result.noBet,
           technicalReview: result.technicalReview,
+          errors: result.errors ?? 0,
           message: result.status === "running"
             ? `Memproses ${result.completed} dari ${result.total} fixture${result.currentMatch ? ` — ${result.currentMatch}` : ""}`
-            : result.technicalReview > 0
-              ? `Scanning selesai. ${result.technicalReview} fixture perlu review teknis; ${result.noBet} fixture adalah NO BET analitis.`
-            : result.parlayId
-              ? "Scanning selesai dan parlay otomatis berhasil dibuat."
-                : "Scanning selesai. Tidak ada kandidat yang memenuhi syarat parlay.",
+            : result.status === "partial"
+              ? `Selesai sebagian (${result.completed}/${result.total}). Melanjutkan ${result.pending ?? 0} fixture berikutnya...`
+              : result.technicalReview > 0 || (result.errors ?? 0) > 0
+                ? `Scanning selesai. ${result.waitingOdds} menunggu odds, ${result.errors ?? 0} gagal teknis, ${result.noBet} NO BET analitis.`
+                : result.parlayId
+                  ? "Scanning selesai dan parlay otomatis berhasil dibuat."
+                  : "Scanning selesai. Tidak ada kandidat yang memenuhi syarat parlay.",
           tickets: result.tickets,
         });
         if (result.status === "failed") throw new Error(result.error ?? "Batch scanner gagal");
-      } while (result.status === "running");
+
+        /*
+         * `partial` = server berhenti karena anggaran waktu 60 detik habis.
+         * Sisa fixture sudah tersimpan di sana; minta lanjutkan, bukan
+         * dianggap selesai (dulu hasilnya berhenti di 133 dari 147).
+         */
+        if (result.status === "partial") {
+          resumes += 1;
+          if (resumes > 40) {
+            throw new Error("Scan berhenti setelah 40 kali lanjutan. Jalankan scan ulang untuk sisanya.");
+          }
+          const resumeResponse = await fetch(`/api/analyze/batch/${started.jobId}/resume`, {
+            method: "POST",
+            headers: { "x-admin-password": pwd },
+          });
+          if (!resumeResponse.ok) {
+            const body = await resumeResponse.json().catch(() => ({ error: `API ${resumeResponse.status}` }));
+            throw new Error(body.error ?? `Gagal melanjutkan scan (API ${resumeResponse.status})`);
+          }
+          continue;
+        }
+        if (result.status !== "running") break;
+      }
       setScanState("idle");
       await queryClient.invalidateQueries({ queryKey: getListSupabaseParlaysQueryKey({ status: "active" }) });
     } catch (err) {
@@ -277,6 +313,9 @@ export default function Dashboard() {
                 <span>Parlay legs: <strong>{scanResult.parlayLegs}</strong></span>
                 <span className="text-amber-500">Waiting odds: <strong>{scanResult.waitingOdds}</strong></span>
                 <span className="text-muted-foreground">Technical review: <strong>{scanResult.technicalReview}</strong></span>
+                {scanResult.errors > 0 && (
+                  <span className="text-red-500">Gagal teknis: <strong>{scanResult.errors}</strong></span>
+                )}
                 <span className="text-muted-foreground">Analytical no bet: <strong>{scanResult.noBet}</strong></span>
               </div>
             </div>
