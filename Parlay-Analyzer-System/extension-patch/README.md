@@ -1,149 +1,125 @@
-# Perbaikan Ekstensi Chrome (FootyStats → Parlay)
+# Ekstensi Chrome v3.2.0 (FootyStats → Parlay Data Ingest)
 
-Tiga bug di `content.js` yang menyebabkan data masuk ke liga salah, duplikat
-tim, dan tim ter-skip tanpa pemberitahuan.
+Perbaikan ekstensi setelah audit 12 Nov 2026: satu bug yang **merusak data
+diam-diam** (blok "Goals Conceded" tersimpan di kolom gol-dicetak untuk 18/18
+tim La Liga), plus lima celah yang membuat masalah lain tidak terlihat.
 
-**Cara pakai:** buka `content.js` ekstensi Anda, terapkan tiga perubahan di
-bawah (cari tanda `// === PATCH N ===`), lalu muat ulang ekstensi di
-`chrome://extensions`.
+| File | Isi |
+|---|---|
+| `content.js` | v3.2.0 lengkap, siap pakai |
+| `manifest.json` | v3.2.0, `host_permissions` diperbaiki |
+| `v3.1.0-to-v3.2.0.patch` | unified diff dari v3.1.0 → v3.2.0 |
+| `verify-content.mjs` | 17 pemeriksaan otomatis (`node extension-patch/verify-content.mjs`) |
+
+## Cara pakai
+
+**Opsi A — timpa langsung (paling mudah).** Salin `content.js` dan
+`manifest.json` dari folder ini ke folder ekstensi Anda, lalu
+`chrome://extensions` → **Reload**.
+
+**Opsi B — pakai patch.** Dari folder ekstensi (berisi `content.js` v3.1.0):
+
+```bash
+git apply -p1 /path/ke/extension-patch/v3.1.0-to-v3.2.0.patch
+# atau: patch -p1 < v3.1.0-to-v3.2.0.patch
+```
+
+Patch sudah diuji: hasilnya identik byte-per-byte dengan `content.js` v3.2.0.
+
+Setelah reload, buka Config dan pastikan endpoint terisi
+`https://parwon.vercel.app/api/stats/ingest` dan API Key = `EXTENSION_API_KEY`.
 
 ---
 
-## PATCH 1 — `league_slug` dari URL (penyebab utama)
+## PATCH 4 — penjaga label vs `stat_type` (penyebab kerusakan La Liga)
 
-**Bug:** `parts[1]` pada URL FootyStats adalah **kompetisi**, bukan slug liga.
-`footystats.org/spain/la-liga` → `"la-liga"`, lalu server menyimpannya sebagai
-liga baru. Hasilnya 20 tim Spanyol masuk ke `england-premier-league`.
-
-**Cari:**
+**Bug:** koreksi `detectStatTypeFromHeaders()` hanya berjalan saat mode
+**auto**:
 
 ```js
-var leagueSlug = parts[1] || parts[0] || '';
+if (statMode !== 'manual') { ... }   // mode manual tidak pernah dikoreksi
 ```
 
-**Ganti dengan:**
+Ketika dropdown di-set manual ke "Goals Scored" sementara tabel yang di-paste
+adalah tabel *Goals Conceded*, seluruh payload dikirim sebagai
+`stats_goals_scored`. Di database hasilnya:
 
-```js
-// === PATCH 1 ===
-// FootyStats memakai /{negara}/{kompetisi}. League slug di database adalah
-// gabungan keduanya: "spain" + "la-liga" → "spain-la-liga".
-// Baris lama (parts[1] saja) menghasilkan "la-liga", yang tidak cocok dengan
-// slug mana pun sehingga server membuat baris di liga yang salah.
-var leagueSlug = parts.length >= 2
-  ? (parts[0] + '-' + parts[1])
-  : (parts[0] || '');
+```json
+"stats_goals_scored": {"Per Match":"1.00 Conceded / match","Goals Conceded":"6"}
 ```
 
-Dan pada `readContext()`, pastikan `raw_url_path` juga mengirim dua bagian:
+18 dari 18 baris La Liga 2026-27 (update 10 Nov 05:23) berbentuk seperti ini,
+dan `stats_goals_conceded` berisi blok yang sama persis. Server aplikasi
+sebenarnya sudah punya penjaga untuk kasus ini (`detectStatTypeContradiction`,
+HTTP 422), tetapi ekstensi saat itu memanggil Edge Function Supabase yang tidak
+punya penjaga tersebut.
 
-```js
-// === PATCH 1b ===
-var rawPath = parts.length >= 2 ? (parts[0] + '/' + parts[1]) : (parts[0] || '');
-ctx = {
-  raw_url_path: rawPath,          // "spain/la-liga" bukan "la-liga"
-  stat_type: statType,
-  season: elSeason.value || '',
-  league_slug: leagueSlug,
-};
-```
+**Perbaikan:** guard baru berjalan di **semua mode**, dua kali — saat paste dan
+tepat sebelum `fetch`. Jika blok berlabel "Conceded" akan dikirim ke
+`stats_goals_scored` (atau sebaliknya), tombol Push dimatikan dan pesannya
+menyebut kolom yang benar.
 
-> Server sekarang **menolak** (HTTP 422) slug yang tidak ada di tabel
-> `leagues`, jadi kesalahan ini akan langsung terlihat alih-alih merusak data.
+## PATCH 5 — endpoint default & izin host
+
+- `DEFAULT_ENDPOINT = https://parwon.vercel.app/api/stats/ingest`. Route ini
+  punya empat penjaga yang tidak dimiliki Edge Function: kontradiksi label,
+  resolusi `league_slug` (`la-liga` → `spain-la-liga`), validasi `stat_type`,
+  dan dedupe `team_key`.
+- `manifest.json` sebelumnya hanya mengizinkan `*.footystats.org` dan
+  `*.replit.*`, sehingga permintaan ke `parwon.vercel.app` maupun
+  `*.supabase.co` bergantung pada header CORS pihak ketiga. Keduanya sekarang
+  masuk `host_permissions`.
+
+## PATCH 6 — kegagalan per tim tidak lagi hilang
+
+Handler lama hanya membaca `message`, padahal server membalas
+`result_rows[]` (per tim) dan 422 berisi `rejected[]`, `suggestions[]`,
+`known_leagues[]`. Akibatnya tim yang ditolak tampil seolah berhasil.
+
+Sekarang status memisahkan "tersimpan" dan "ditolak", menampilkan sampai enam
+tim yang gagal beserta alasannya, dan menyertakan slug hasil resolusi server.
+
+## PATCH 7 — `league_slug` dikirim lengkap
+
+`buildPayload()` kini menyertakan `league_slug` = `{negara}-{kompetisi}`
+(`spain-la-liga`), tidak hanya `raw_url_path`. Server memang sudah menormalkan
+sendiri, tetapi ini menghilangkan ketergantungan pada satu lapisan saja.
+
+## PATCH 8 — peringatan data basi
+
+Server menolak statistik lebih tua dari `TEAM_STATS_STALE_DAYS = 14` dan
+gejalanya di aplikasi hanya "data statistik belum lengkap". Ekstensi kini
+mencatat setiap push sukses per `(liga|season|stat_type)` di
+`chrome.storage.local` dan menampilkan:
+
+- `⏳` bila liga terakhir dipush ≥ 7 hari,
+- `⚠️` bila > 14 hari (data pasti ditolak server),
+
+sehingga liga yang tertinggal (EPL, Championship, Ligue 1, Serie A, Eredivisie —
+28 hari per 12 Nov) langsung terlihat saat halaman dibuka.
 
 ---
 
-## PATCH 2 — Tampilkan tim yang gagal
+## Verifikasi
 
-**Bug:** respons server sudah berisi `results[]` per tim, tetapi ekstensi hanya
-menghitung `payload.teams.length` sehingga tim yang ditolak tidak pernah
-terlihat.
-
-**Cari di handler `btnPush`:**
-
-```js
-'✅ ' + payload.teams.length + ' tim dikirim.\n' +
+```bash
+node --check extension-patch/content.js
+node extension-patch/verify-content.mjs
 ```
 
-**Ganti dengan:**
+`verify-content.mjs` mengekstrak blok `// === PATCH 4 === GUARD:START` dan
+mengujinya dengan payload nyata dari database, termasuk blok La Liga, lalu
+memeriksa enam perubahan struktural lain dan isi `manifest.json`.
 
-```js
-// === PATCH 2 ===
-// Server mengembalikan results[] per tim. Tampilkan yang gagal supaya tim
-// ter-skip tidak lagi tidak terlihat.
-```
+## Yang masih harus dilakukan manual
 
-Lalu sesudah `res.json()` diterima, tambahkan:
+Perbaikan ini mencegah kerusakan **baru**, bukan memulihkan yang sudah ada:
 
-```js
-var failed = (data.result_rows || data.results || data.details || [])
-  .filter(function (r) { return !r.success; });
-
-var msg = '✅ ' + payload.teams.length + ' tim dikirim.';
-if (failed.length) {
-  msg += '\n\n⚠️ ' + failed.length + ' tim DITOLAK:\n' +
-    failed.map(function (r) {
-      return '  • ' + r.team + ' — ' + (r.error || 'unknown');
-    }).join('\n');
-  setBadge('warn', '⚠️ ' + failed.length + ' tim ditolak');
-} else {
-  setBadge('', '');
-}
-alert(msg + '\n\nLeague: ' + data.league_slug + '\nSeason: ' + data.season);
-```
-
----
-
-## PATCH 3 — Deteksi `stat_type` yang lebih ketat
-
-**Bug:** `'over-25'` tidak cocok dengan `'over-2-5-goals-table'` (ada strip),
-sehingga URL jatuh ke fallback dan menghasilkan
-`stats_over_2_5_goals_table` → ditolak server (400).
-
-**Cari di `STAT_TYPE_MAP`:**
-
-```js
-{ keywords: ['over-25', 'over-2-5'], stat: 'stats_over_25' },
-{ keywords: ['over-35', 'over-3-5'], stat: 'stats_over_35' },
-```
-
-**Ganti dengan:**
-
-```js
-// === PATCH 3 ===
-// FootyStats menulis garis sebagai "2-5" atau "2.5". Cocokkan keduanya,
-// termasuk nama tabel panjang seperti "over-2-5-goals-table".
-{ keywords: ['over-25', 'over-2-5', 'over-2.5', 'over25'], stat: 'stats_over_25' },
-{ keywords: ['over-35', 'over-3-5', 'over-3.5', 'over35'], stat: 'stats_over_35' },
-```
-
-**Penting:** urutkan `STAT_TYPE_MAP` dari yang **paling spesifik** ke paling
-umum. `shots` harus dicek sebelum `over`, dan `goals-conceded` sebelum
-`goals-scored`, karena `"goals-scored"` juga mengandung `"goals"`.
-
----
-
-## PATCH 4 (opsional) — Kirim `season` yang benar
-
-`buildSeasonOptions()` menandai musim berjalan berdasarkan `month >= 8`.
-Untuk liga lintas tahun (EPL, La Liga) itu benar, tetapi liga kalender
-(J1 League, K League, Chinese Super League) berganti pada Januari. Jika Anda
-meng-import liga kalender, pilih musim secara manual di dropdown — server akan
-mencatatnya apa adanya.
-
----
-
-## Setelah patch
-
-1. Muat ulang ekstensi (`chrome://extensions` → Reload).
-2. Buka halaman FootyStats, pastikan panel konfigurasi menampilkan slug liga
-   yang **lengkap** (`spain la liga`, bukan `la liga`).
-3. Import ulang. Jika slug salah, server akan membalas 422 dengan daftar
-   `suggestions` — perbaiki sesuai saran itu.
-
-## Perubahan server yang menyertai
-
-- `stats/ingest` menolak `league_slug` yang tidak ada (HTTP 422 + saran).
-- `stats/ingest` menolak blok yang labelnya bertentangan dengan kolom tujuan
-  (mis. data "Conceded" dikirim sebagai `stats_goals_scored`).
-- Unique index `(league_slug, season, team_key)` membuat duplikat tim mustahil
-  di level database.
+1. **La Liga** — buka halaman *Goals Scored* La Liga di FootyStats dan push
+   ulang. Data conceded tidak bisa diturunkan menjadi scored; sampai itu
+   dilakukan, analisis La Liga memakai GF yang salah.
+2. **27 tim tanpa `stats_over_25`** (Serie A 7, Eredivisie 7, Ligue 1 5,
+   Bundesliga 4, La Liga 4) — push tabel *Over 2.5*. Ke-27 tim masih menyimpan
+   `stats_team_form["Over 2.5"]`, jadi server juga bisa mengisinya lewat
+   fallback (lihat backlog server).
+3. **Lima liga basi** — push ulang semua tabelnya.

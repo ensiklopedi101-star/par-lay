@@ -1,0 +1,338 @@
+--- a/content.js
++++ b/content.js
+@@ -7,6 +7,17 @@
+ // ============================================================
+   // KONSTANTA (SINKRON DENGAN DATABASE SUPABASE)
+   // ============================================================
++  // === PATCH 5 ===
++  var VERSION          = '3.2.0';
++  // Endpoint default = route ingest aplikasi, BUKAN Edge Function Supabase.
++  // Route itu punya validasi yang tidak dimiliki Edge Function: penolakan blok
++  // yang labelnya bertentangan dengan stat_type (PATCH 4), resolusi league_slug
++  // ("la-liga" → "spain-la-liga"), dan dedupe lewat team_key.
++  var DEFAULT_ENDPOINT = 'https://parwon.vercel.app/api/stats/ingest';
++  // Server menolak statistik lebih tua dari TEAM_STATS_STALE_DAYS (14 hari).
++  var STALE_DAYS       = 14;
++  var PUSH_HISTORY_KEY = 'pushHistory';
++
+   var STAT_TYPE_MAP = [
+     { keywords: ['xg-table', 'xg'],               stat: 'stats_xg'             },
+     { keywords: ['failed-to-score'],              stat: 'stats_fts'            },
+@@ -86,9 +97,121 @@
+   }
+ 
+   // ============================================================
++  // === PATCH 4 === GUARD:START — label vs stat_type
++  // ============================================================
++  // Kenapa ini ada: 18/18 baris La Liga 2026-27 menyimpan blok berlabel
++  // "Conceded" di kolom stats_goals_scored. Penyebabnya mode manual: dropdown
++  // dipilih "Goals Scored" sementara tabel yang di-paste adalah tabel
++  // "Goals Conceded", dan satu-satunya koreksi (detectStatTypeFromHeaders)
++  // hanya berjalan saat mode auto. Guard ini berjalan di SEMUA mode, saat
++  // paste maupun tepat sebelum push.
++  var STAT_LABEL_RULES = {
++    stats_goals_scored: {
++      forbidden: /conceded/i,
++      required:  /scored/i,
++      label:     'Goals Conceded',
++      shouldBe:  'stats_goals_conceded'
++    },
++    stats_goals_conceded: {
++      forbidden: /\bscored\b/i,
++      required:  /conceded/i,
++      label:     'Goals Scored',
++      shouldBe:  'stats_goals_scored'
++    }
++  };
++
++  function statBlockText(statData) {
++    if (!statData || typeof statData !== 'object') return '';
++    var chunks = [];
++    Object.keys(statData).forEach(function (k) {
++      var v = statData[k];
++      chunks.push(String(k), v == null ? '' : String(v));
++    });
++    return chunks.join(' ').toLowerCase();
++  }
++
++  function contradictingTeams(statType, teams) {
++    var rule = STAT_LABEL_RULES[statType];
++    if (!rule || !teams || !teams.length) return [];
++    var out = [];
++    for (var i = 0; i < teams.length; i++) {
++      var team = teams[i] || {};
++      var text = statBlockText(team.stat_data);
++      if (!text) continue;
++      if (rule.forbidden.test(text) && !rule.required.test(text)) {
++        out.push(String(team.raw_team_name || 'UNKNOWN'));
++      }
++    }
++    return out;
++  }
++
++  /**
++   * Pesan siap-tampil, atau null kalau payload aman.
++   */
++  function describeContradiction(statType, teams) {
++    var rule = STAT_LABEL_RULES[statType];
++    var bad  = contradictingTeams(statType, teams);
++    if (!bad.length) return null;
++    var preview = bad.slice(0, 3).join(', ') + (bad.length > 3 ? ', +' + (bad.length - 3) + ' lain' : '');
++    return '❌ ' + bad.length + '/' + teams.length + ' tim berlabel "' + rule.label + '"\n' +
++           '(' + preview + ')\n' +
++           'Kolom tujuan: ' + statType + ' — seharusnya ' + rule.shouldBe + '.\n' +
++           'Pilih "' + rule.label + '" di dropdown Stat Type.';
++  }
++  // === GUARD:END ===
++
++  // ============================================================
++  // === PATCH 8 === riwayat push & peringatan data basi
++  // ============================================================
++  function ageInDays(iso) {
++    var t = new Date(iso).getTime();
++    if (!isFinite(t)) return null;
++    return Math.floor((Date.now() - t) / 86400000);
++  }
++
++  function newestPushAgeDays(leagueSlug) {
++    var newest = null;
++    Object.keys(pushHistory).forEach(function (k) {
++      if (k.split('|')[0] !== leagueSlug) return;
++      var iso = pushHistory[k];
++      if (!iso) return;
++      if (!newest || new Date(iso).getTime() > new Date(newest).getTime()) newest = iso;
++    });
++    return newest ? ageInDays(newest) : null;
++  }
++
++  function recordPush(leagueSlug, season, statType) {
++    if (!leagueSlug) return;
++    pushHistory[leagueSlug + '|' + season + '|' + statType] = new Date().toISOString();
++    var patch = {};
++    patch[PUSH_HISTORY_KEY] = pushHistory;
++    chrome.storage.local.set(patch);
++  }
++
++  /**
++   * Server menolak statistik lebih tua dari STALE_DAYS. Peringatkan SEBELUM
++   * push, karena gejalanya di aplikasi hanya "data statistik belum lengkap".
++   */
++  function showStaleness() {
++    if (!ctx.league_slug) return;
++    var age = newestPushAgeDays(ctx.league_slug);
++    if (age === null)  return;
++    if (age > STALE_DAYS) {
++      showStatus('err',
++        '⚠️ Liga ini terakhir dipush ' + age + ' hari lalu.\n' +
++        'Server menolak statistik lebih tua dari ' + STALE_DAYS + ' hari — push ulang semua tabel.');
++    } else if (age >= 7) {
++      showStatus('warn', '⏳ Liga ini terakhir dipush ' + age + ' hari lalu (batas ' + STALE_DAYS + ' hari).');
++    }
++  }
++
++
++  // ============================================================
+   // STATE
+   // ============================================================
+   var CFG     = { endpoint: '', apiKey: '' };
++  // === PATCH 8 === riwayat push per (liga|season|stat_type), ISO timestamp.
++  var pushHistory = {};
+   var ctx     = { raw_url_path: '', stat_type: '', season: '', league_slug: '' };
+   var payload = null;
+   var jsonOpen  = false;
+@@ -278,7 +401,7 @@
+         <span>⚽</span>
+         <div>
+           <div class="fsi-title">Parlay Data Ingest</div>
+-          <div class="fsi-sub">Table Capture → API Push</div>
++          <div class="fsi-sub">Table Capture → API Push · v<span id="fsi-ver">?</span></div>
+         </div>
+       </div>
+       <button class="fsi-btn-min" id="fsi-btn-min">−</button>
+@@ -347,6 +470,7 @@
+   rootEl.id = 'fsi-root';
+   rootEl.innerHTML = HTML;
+   document.body.appendChild(rootEl);
++  document.getElementById('fsi-ver').textContent = VERSION;
+ 
+   // ============================================================
+   // REFERENSI ELEMEN
+@@ -378,10 +502,21 @@
+   // INIT — load config & context
+   // ============================================================
+   chrome.storage.local.get(
+-    ['apiEndpoint', 'apiKey', 'fsiCollapsed', 'selectedSeason', 'showConfig'],
++    ['apiEndpoint', 'apiKey', 'fsiCollapsed', 'selectedSeason', 'showConfig', PUSH_HISTORY_KEY],
+     function (saved) {
+-      if (saved.apiEndpoint) { CFG.endpoint = saved.apiEndpoint; inpEndpt.value = saved.apiEndpoint; }
++      if (saved.apiEndpoint) {
++        CFG.endpoint = saved.apiEndpoint;
++        inpEndpt.value = saved.apiEndpoint;
++      } else {
++        // === PATCH 5 === endpoint lama (Edge Function) tidak dipakai lagi.
++        CFG.endpoint = DEFAULT_ENDPOINT;
++        inpEndpt.value = DEFAULT_ENDPOINT;
++        chrome.storage.local.set({ apiEndpoint: DEFAULT_ENDPOINT });
++      }
+       if (saved.apiKey)      { CFG.apiKey   = saved.apiKey;      inpKey.value   = saved.apiKey; }
++      if (saved[PUSH_HISTORY_KEY] && typeof saved[PUSH_HISTORY_KEY] === 'object') {
++        pushHistory = saved[PUSH_HISTORY_KEY];
++      }
+       if (saved.showConfig)  openConfig(true);
+       if (saved.fsiCollapsed === false) showWidget(true);
+ 
+@@ -505,7 +640,10 @@
+     var parts      = pathname.split('/').filter(Boolean);
+     var rawPath    = parts.length >= 2 ? (parts[0] + '/' + parts[1]) : (parts[0] || '');
+     var statType   = detectStatType(pathname);
+-    var leagueSlug = parts[1] || parts[0] || '';
++    // === PATCH 1 === FootyStats memakai /{negara}/{kompetisi} dan slug liga di
++    // database adalah gabungan keduanya: "spain" + "la-liga" → "spain-la-liga".
++    // parts[1] saja menghasilkan "la-liga" — slug yang tidak pernah di-join.
++    var leagueSlug = parts.length >= 2 ? (parts[0] + '-' + parts[1]) : (parts[0] || '');
+ 
+     // Navigasi ke halaman baru → reset ke mode auto (URL sebelumnya sudah tidak relevan)
+     statMode = 'auto';
+@@ -531,6 +669,7 @@
+     elStatus.className = 'fsi-status';
+     jsonToggle.className = 'fsi-json-toggle';
+     jsonBox.className    = 'fsi-json-box';
++    showStaleness();
+     updateUI();
+   }
+ 
+@@ -666,6 +805,18 @@
+     }
+ 
+     payload = buildPayload(result);
++
++    // === PATCH 4 === guard juga berlaku di mode manual — di sinilah tabel
++    // "Goals Conceded" sebelumnya lolos sebagai stats_goals_scored.
++    var contradiction = describeContradiction(payload.stat_type, payload.teams);
++    if (contradiction) {
++      payload = null; // matikan tombol Push: data ini tidak boleh dikirim
++      setBadge('err', contradiction.split('\n')[0]);
++      showStatus('err', contradiction);
++      updateUI();
++      return;
++    }
++
+     var colCount = (result.headers && result.headers.length) ? result.headers.length : Object.keys((result.rows[0] || {}).stat_data || {}).length;
+     setBadge('ok', '✓ ' + result.rows.length + ' tim · ' + colCount + ' kolom');
+     showJsonPreview(payload);
+@@ -805,6 +956,9 @@
+     ctx.season = elSeason.value;
+     return {
+       raw_url_path: ctx.raw_url_path,
++      // === PATCH 7 === slug lengkap (negara-kompetisi) ikut dikirim supaya
++      // server tidak perlu menebak dari raw_url_path.
++      league_slug:  ctx.league_slug || '',
+       stat_type:    ctx.stat_type || 'stats_unknown',
+       season:       ctx.season,
+       teams:        result.rows // Langsung pakai hasil rows yang sudah rapi
+@@ -826,30 +980,76 @@
+       openConfig(true); return;
+     }
+ 
++    var sent = payload; // payload bisa berubah kalau user paste lagi saat request jalan
++
++    // === PATCH 4 === pertahanan terakhir: jangan pernah kirim blok yang
++    // labelnya bertentangan dengan kolom tujuan, apa pun yang terjadi di UI.
++    var contradiction = describeContradiction(sent.stat_type, sent.teams);
++    if (contradiction) {
++      showStatus('err', contradiction);
++      return;
++    }
++
+     setLoading(true);
+ 
+     fetch(CFG.endpoint, {
+       method:  'POST',
+       headers: { 'Content-Type': 'application/json', 'x-api-key': CFG.apiKey },
+-      body:    JSON.stringify(payload)
++      body:    JSON.stringify(sent)
+     })
+     .then(function (res) {
+       var status = res.status;
+       return res.text().then(function (text) {
+-        var msg = '';
+-        try { msg = JSON.parse(text).message || text; } catch (e) { msg = text; }
++        var body = null;
++        try { body = JSON.parse(text); } catch (e) { body = null; }
++        var head = 'Stat: ' + sent.stat_type + ' · Season: ' + sent.season +
++                   ' · ' + sent.teams.length + ' tim';
++
+         if (status >= 200 && status < 300) {
+-          showStatus('ok',
+-            '✅ ' + payload.teams.length + ' tim dikirim.\n' +
+-            'Stat: '   + payload.stat_type + '\n' +
+-            'Season: ' + payload.season + (msg ? '\n' + msg : '')
+-          );
+-        } else {
+-          showStatus('err', '❌ HTTP ' + status + '\n' + msg);
++          // === PATCH 6 === server mengembalikan result_rows[] per tim; tim yang
++          // ditolak (mis. blok tidak cocok, slug aneh) sebelumnya tidak terlihat.
++          var rows   = (body && (body.result_rows || body.details || body.results)) || [];
++          var failed = rows.filter(function (r) { return r && r.success === false; });
++          var okCount   = body && typeof body.success_count === 'number' ? body.success_count : (sent.teams.length - failed.length);
++          var failCount = body && typeof body.fail_count === 'number' ? body.fail_count : failed.length;
++
++          recordPush(sent.league_slug || ctx.league_slug, sent.season, sent.stat_type);
++
++          if (failCount > 0) {
++            var lines = failed.slice(0, 6).map(function (r) {
++              return '• ' + (r.team || 'UNKNOWN') + ': ' + (r.error || 'gagal');
++            });
++            if (failed.length > 6) lines.push('• +' + (failed.length - 6) + ' tim lain');
++            showStatus('warn',
++              '⚠️ ' + okCount + ' tersimpan, ' + failCount + ' ditolak\n' + head + '\n' + lines.join('\n'));
++          } else {
++            showStatus('ok', '✅ ' + okCount + ' tim tersimpan\n' + head +
++              (body && body.league_slug ? '\nLiga: ' + body.league_slug : ''));
++          }
++          return;
+         }
++
++        // === PATCH 6 === tampilkan alasan penolakan yang sebenarnya, bukan
++        // hanya `message` yang sering kosong pada respons 4xx/422.
++        var detail = (body && (body.error || body.message)) || text || '(tanpa pesan)';
++        var rejected = (body && body.rejected) || [];
++        if (rejected.length) {
++          detail += '\n' + rejected.slice(0, 5).map(function (r) {
++            return '• ' + (r.team || 'UNKNOWN') + ': ' + (r.reason || 'ditolak');
++          }).join('\n');
++        }
++        var suggestions = (body && body.suggestions) || [];
++        if (suggestions.length) detail += '\nSlug mirip: ' + suggestions.join(', ');
++        if (body && body.resolved_slug) detail += '\nSlug terbaca: ' + body.resolved_slug;
++
++        showStatus('err', '❌ HTTP ' + status + '\n' + detail);
+       });
+     })
+-    .catch(function (e) { showStatus('err', '❌ Koneksi gagal:\n' + e.message); })
++    .catch(function (e) {
++      showStatus('err',
++        '❌ Koneksi gagal:\n' + e.message +
++        '\nPastikan host endpoint ada di host_permissions manifest.json.');
++    })
+     .finally(function ()  { setLoading(false); });
+   });
+ 
+--- a/manifest.json
++++ b/manifest.json
+@@ -1,11 +1,13 @@
+ {
+   "manifest_version": 3,
+   "name": "FootyStats → Parlay Data Ingest",
+-  "version": "3.1.0",
++  "version": "3.2.0",
+   "description": "Floating widget di halaman footystats — paste TSV, push JSON ke API, atau download CSV",
+   "permissions": ["storage", "clipboardRead"],
+-   "host_permissions": [
++  "host_permissions": [
+     "*://*.footystats.org/*",
++    "https://parwon.vercel.app/*",
++    "*://*.supabase.co/*",
+     "https://*.replit.app/*",
+     "https://*.replit.dev/*",
+     "https://*.repl.co/*"
