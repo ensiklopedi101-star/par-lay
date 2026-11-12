@@ -24,3 +24,10 @@ tetapi karena tidak ada pemicu terjadwal yang berjalan.
 - **`api/index.js` adalah bundle yang dipakai Vercel.** Setelah mengubah
   `src/`, jalankan `pnpm --filter @workspace/api-server run build:vercel` dan
   commit hasilnya; build Vercel hanya membangun frontend.
+
+- **`fetch()` Node tidak punya timeout.** `ODDS_API_TIMEOUT_MS` (default 20 dtk)
+  wajib dipakai lewat `lib/http.ts`; tanpa itu satu koneksi menggantung bisa
+  menahan satu event 9 menit (run 568).
+- **`events_fetched` ≠ kandidat.** Angka itu seluruh daftar liga dari provider,
+  termasuk laga yang sudah lewat. `events_inserted` = event yang disimpan;
+  `odds_fetched` juga menghitung **event**, bukan baris harga.

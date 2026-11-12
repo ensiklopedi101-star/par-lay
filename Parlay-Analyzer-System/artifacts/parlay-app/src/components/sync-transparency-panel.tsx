@@ -229,12 +229,14 @@ export function SyncTransparencyPanel({
                 Hampir selalu bukan: semua event di luar jendela pemindaian,
                 atau sudah tersinkron. Penjelasan ini yang membedakan
                 "tidak ada yang baru" dari "ada yang rusak". */}
-            {run.zeroInsertReason ? (
+            {run.insertReason ? (
               <div className="rounded-lg border border-border bg-muted/40 p-2.5">
                 <p className="text-[11px] font-medium text-foreground/80">
-                  Kenapa 0 tersimpan?
+                  {run.eventsInserted === 0
+                    ? "Kenapa 0 tersimpan?"
+                    : `Kenapa hanya ${formatCount(run.eventsInserted)} tersimpan?`}
                 </p>
-                <p className="text-[11px] text-muted-foreground">{run.zeroInsertReason}</p>
+                <p className="text-[11px] text-muted-foreground">{run.insertReason}</p>
                 {status?.scanDays != null ? (
                   <p className="mt-1 text-[10px] text-muted-foreground/70">
                     Jendela pemindaian saat ini: <span className="font-mono">{status.scanDays}</span> hari
@@ -275,14 +277,18 @@ export function SyncTransparencyPanel({
               <Metric
                 label="Tersimpan"
                 value={formatCount(run.eventsInserted)}
-                hint={insertRatioPct != null ? `${insertRatioPct}% dari ditarik` : "tidak ada data"}
+                hint={
+                  insertRatioPct != null
+                    ? `${insertRatioPct}% dari ditarik · event`
+                    : "tidak ada data"
+                }
                 Icon={Database}
                 tone={insertRatioPct != null && insertRatioPct < 50 ? "warn" : "good"}
               />
               <Metric
                 label="Snapshot odds"
                 value={formatCount(run.oddsFetched)}
-                hint="baris harga tersimpan"
+                hint="event yang odds-nya tersimpan"
                 Icon={Activity}
               />
               <Metric

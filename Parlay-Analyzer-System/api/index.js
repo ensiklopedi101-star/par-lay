@@ -50743,6 +50743,44 @@ var init_logger = __esm({
   }
 });
 
+// src/lib/http.ts
+function resolveRequestTimeoutMs(raw, fallback = DEFAULT_HTTP_TIMEOUT_MS) {
+  const parsed = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < MIN_TIMEOUT_MS || parsed > MAX_TIMEOUT_MS) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+async function fetchWithTimeout(url, init = {}, timeoutMs = DEFAULT_HTTP_TIMEOUT_MS) {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    const name = err?.name;
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new HttpTimeoutError(timeoutMs);
+    }
+    throw err;
+  }
+}
+var DEFAULT_HTTP_TIMEOUT_MS, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS, HttpTimeoutError;
+var init_http = __esm({
+  "src/lib/http.ts"() {
+    "use strict";
+    DEFAULT_HTTP_TIMEOUT_MS = 2e4;
+    MIN_TIMEOUT_MS = 1e3;
+    MAX_TIMEOUT_MS = 6e4;
+    HttpTimeoutError = class extends Error {
+      constructor(timeoutMs) {
+        super(
+          `Permintaan HTTP melebihi ${Math.round(timeoutMs / 1e3)} detik \u2014 dihentikan agar sync tidak menggantung.`
+        );
+        this.timeoutMs = timeoutMs;
+        this.name = "HttpTimeoutError";
+      }
+    };
+  }
+});
+
 // src/lib/odds-market.ts
 function normalizeMarketToken(value) {
   return String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_").replace(/[()\/]/g, "_").replace(/_+/g, "_");
@@ -50881,7 +50919,7 @@ function parseRetryAfter(body, headerValue) {
 }
 async function apiGet(url, label) {
   logger.info({ url: redactApiKey(url), label }, "RADAR: HTTP request to Odds-API");
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url, {}, resolveRequestTimeoutMs(process.env["ODDS_API_TIMEOUT_MS"]));
   logger.info({ status: res.status, statusText: res.statusText, label, ok: res.ok }, "RADAR: HTTP response from Odds-API");
   if (res.status === 429) {
     const body = await res.text().catch(() => "");
@@ -51679,6 +51717,7 @@ var init_odds_fetcher = __esm({
     "use strict";
     init_logger();
     init_supabase_client();
+    init_http();
     init_odds_market();
     BASE_URL = "https://api.odds-api.io/v3";
     SUPABASE_PAGE_SIZE = 1e3;
@@ -81408,6 +81447,15 @@ async function closeStaleSyncRuns(options = {}) {
   }
 }
 
+// src/lib/sync-run-explain.ts
+var LOW_INSERT_RATIO = 0.5;
+function explainInsertRatio(fetched, inserted) {
+  if (!Number.isFinite(fetched) || fetched <= 0) return null;
+  if (inserted >= fetched * LOW_INSERT_RATIO) return null;
+  const opening = inserted === 0 ? "Tidak ada event baru yang masuk jendela pemindaian." : `Hanya ${inserted} dari ${fetched} event yang disimpan.`;
+  return `${opening} Angka "Event ditarik" menghitung SELURUH daftar liga dari provider \u2014 termasuk pertandingan yang sudah lewat dan yang di luar jendela scan_days. Yang disimpan hanya event akan datang yang belum punya odds segar (<6 jam). Rasio rendah belum tentu kegagalan: periksa kolom Error, Durasi, dan pesan terakhir.`;
+}
+
 // src/routes/config.ts
 var STALE_RUN_SECONDS = STALE_SYNC_RUN_SECONDS;
 var SYNC_HISTORY_LIMIT = 12;
@@ -81454,12 +81502,8 @@ function toSyncRunSummary(input) {
     rateLimitedSeconds: num(row["rate_limited_seconds"]),
     errorMessage: row["error_message"] ?? null,
     insertRatio: eventsFetched > 0 ? eventsInserted / eventsFetched : null,
-    zeroInsertReason: explainZeroInsert(eventsFetched, eventsInserted)
+    insertReason: explainInsertRatio(eventsFetched, eventsInserted)
   };
-}
-function explainZeroInsert(fetched, inserted) {
-  if (fetched <= 0 || inserted > 0) return null;
-  return `Tidak ada event baru yang masuk jendela pemindaian. Provider mengembalikan ${fetched} event, tetapi semuanya jatuh di luar jendela (atau sudah tersinkron sebelumnya). Ini normal saat liga sedang jeda atau jadwal belum dirilis \u2014 bukan kegagalan. Perbesar scan_days bila ingin jendela lebih jauh.`;
 }
 var LEAGUES_CATALOG = [
   { slug: "england-premier-league", name: "Premier League", country: "Inggris" },

@@ -80,8 +80,8 @@ export interface SyncRunSummary {
   errorMessage: string | null;
   /** Proporsi event tersimpan dari yang ditarik (0–1), `null` bila nol. */
   insertRatio: number | null;
-  /** Penjelasan bila tidak ada event tersimpan meski ada yang ditarik. */
-  zeroInsertReason?: string | null;
+  /** Penjelasan bila rasio tersimpan/ditarik rendah (termasuk nol). */
+  insertReason?: string | null;
 }
 
 /**

@@ -8,6 +8,7 @@ import { reloadOddsSchedule } from "../scheduler";
 import { buildSettlementSummary } from "../services/settlement-summary";
 import { buildAutomationStatus } from "../services/automation-status";
 import { STALE_SYNC_RUN_SECONDS } from "../services/sync-runs";
+import { explainInsertRatio } from "../lib/sync-run-explain";
 
 /**
  * ─── Transparansi sync ────────────────────────────────────────────────────
@@ -60,14 +61,14 @@ export interface SyncRunSummary {
   /** Persentase event yang tersimpan dari yang ditarik; `null` bila tidak ada. */
   insertRatio: number | null;
   /**
-   * Penjelasan bila tidak ada satu pun event tersimpan meski ada yang ditarik.
+   * Penjelasan bila rasio tersimpan/ditarik rendah (termasuk nol).
    *
-   * Angka `eventsFetched: 811, eventsInserted: 0` terlihat seperti kegagalan
-   * total, padahal hampir selalu berarti "semua event di luar jendela".
-   * Tanpa penjelasan ini, dashboard hanya menampilkan nol tanpa sebab — dan
-   * itulah yang membuat proses sync terasa tidak transparan.
+   * `140 ditarik / 1 tersimpan` terlihat seperti kegagalan total, padahal
+   * kedua angka mengukur hal berbeda: "ditarik" adalah SELURUH daftar liga
+   * dari provider (termasuk pertandingan yang sudah lewat), "tersimpan"
+   * hanya event akan datang yang belum punya odds segar.
    */
-  zeroInsertReason: string | null;
+  insertReason: string | null;
 }
 
 function num(value: unknown): number {
@@ -103,31 +104,8 @@ function toSyncRunSummary(input: unknown): SyncRunSummary {
     rateLimitedSeconds: num(row["rate_limited_seconds"]),
     errorMessage: (row["error_message"] as string | null) ?? null,
     insertRatio: eventsFetched > 0 ? eventsInserted / eventsFetched : null,
-    zeroInsertReason: explainZeroInsert(eventsFetched, eventsInserted),
+    insertReason: explainInsertRatio(eventsFetched, eventsInserted),
   };
-}
-
-/**
- * Terangkan kenapa `eventsFetched` bisa besar sementara `eventsInserted` nol.
- *
- * Alurnya di `fetchAndSaveLeagueOdds`:
- *   1. provider mengembalikan SEMUA event satu liga  → `eventsFetched`
- *   2. event disaring ke jendela `scan_days` (default 10 hari ke depan)
- *   3. event yang sudah tersinkron dibuang
- *   4. sisa event diambil odds-nya satu per satu    → `saved` / `inserted`
- *
- * Jadi nol bukan berarti gagal: bisa berarti tidak ada satu pun event yang
- * jatuh di jendela, atau semuanya sudah tersinkron sebelumnya. Keduanya
- * normal dan tidak butuh tindakan — beda halnya dengan error atau rate limit.
- */
-function explainZeroInsert(fetched: number, inserted: number): string | null {
-  if (fetched <= 0 || inserted > 0) return null;
-  return (
-    "Tidak ada event baru yang masuk jendela pemindaian. Provider mengembalikan " +
-    `${fetched} event, tetapi semuanya jatuh di luar jendela (atau sudah tersinkron ` +
-    "sebelumnya). Ini normal saat liga sedang jeda atau jadwal belum dirilis — " +
-    "bukan kegagalan. Perbesar scan_days bila ingin jendela lebih jauh."
-  );
 }
 
 export const LEAGUES_CATALOG = [

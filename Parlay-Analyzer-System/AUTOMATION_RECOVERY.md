@@ -172,3 +172,45 @@ prediction_selections: 0  <-- target yang harus berubah
   `results` dan refresh manual ikut berjalan di jam yang sama, batas 100 bisa
   tersentuh; `scheduler_config.scan_days` dan `?max=` adalah dua kendali yang
   tersedia.
+
+---
+
+## 7. Lanjutan — kenapa "140 ditarik, 1 tersimpan" (run 568)
+
+Pertanyaan wajar dari panel: 140 event ditarik tetapi hanya 1 tersimpan.
+Angka itu bukan kehilangan data; ia mencampur dua hal berbeda.
+
+| Istilah panel | Isi sebenarnya |
+| --- | --- |
+| **Event ditarik (140)** | Seluruh daftar **satu liga** (EPL) dari provider, termasuk pertandingan yang sudah lewat. Sync tidak pernah sampai ke liga ke-2. |
+| **Tersimpan (1)** | Event yang benar-benar ditulis: fixture + odds. Satu event = puluhan baris `odds_history`. |
+| **Snapshot odds (1)** | Jumlah **event** yang odds-nya tersimpan — bukan jumlah baris harga. |
+
+Fakta dari database:
+
+```
+fixture 72221406 (Man City–Fulham)  odds terakhir 2026-11-12 11:37:59  <-- satu-satunya yang tersimpan
+fixture 72221392 (Aston Villa–Sunderland) odds terakhir 2026-11-11 15:53
+fixture 72221394 (Bournemouth–Forest)     odds terakhir 2026-11-11 15:53
+fixture EPL akan datang: 3
+```
+
+Jadi dari 140 event EPL, hanya **3** yang akan datang; dua di antaranya tidak
+sempat diambil odds-nya.
+
+### Penyebab lambatnya: `fetch()` tanpa timeout
+
+Run 568 mulai **11:28:47**, tetapi statistik liga pertama baru tertulis
+**11:37:59** — **9 menit 12 detik untuk satu event**. `apiGet()` memakai
+`fetch(url)` polos, dan `fetch` Node tidak punya batas waktu. Anggaran 45 detik
+hanya diperiksa *di antara* panggilan, jadi satu koneksi yang menggantung
+membuat seluruh sync menunggu — lalu instance dibekukan sebelum `finally`.
+
+### Perbaikan
+
+- `lib/http.ts`: `fetchWithTimeout` + `ODDS_API_TIMEOUT_MS` (default **20 detik**).
+  Semua panggilan Odds-API kini gagal cepat; kegagalan dihitung `errors` dan
+  sisa event diproses siklus berikutnya, bukan menggantung.
+- Panel: `zeroInsertReason` → `insertReason` (menjelaskan rasio rendah, bukan
+  hanya nol), label "Snapshot odds" tidak lagi menyebut "baris harga".
+- 9 tes baru (`http`, `sync-run-explain`); total **249/249** lulus.

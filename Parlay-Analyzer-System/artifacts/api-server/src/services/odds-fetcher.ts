@@ -1,5 +1,6 @@
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
+import { fetchWithTimeout, resolveRequestTimeoutMs } from "../lib/http";
 import {
   classifyOddsMarket,
   normalizeMarketToken,
@@ -332,7 +333,12 @@ function parseRetryAfter(body: string, headerValue?: string | null): number {
 
 async function apiGet<T>(url: string, label: string): Promise<T> {
    logger.info({ url: redactApiKey(url), label }, "RADAR: HTTP request to Odds-API");
-  const res = await fetch(url);
+  /*
+   * WAJIB memakai batas waktu. `fetch()` tanpa timeout pernah menahan satu
+   * event selama 9 menit (run 568) — anggaran 45 detik tidak berguna bila
+   * prosesnya sedang menunggu koneksi yang tidak pernah menjawab.
+   */
+  const res = await fetchWithTimeout(url, {}, resolveRequestTimeoutMs(process.env["ODDS_API_TIMEOUT_MS"]));
   logger.info({ status: res.status, statusText: res.statusText, label, ok: res.ok }, "RADAR: HTTP response from Odds-API");
   if (res.status === 429) {
     const body = await res.text().catch(() => "");
