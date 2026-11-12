@@ -7,6 +7,7 @@ import {
   formatMatchContextBlock,
   jointProbability,
   marketProbabilities,
+  modelProbabilityForSelection,
   parsePercent,
   parseStatNumber,
   parseTeamRates,
@@ -214,4 +215,49 @@ test("formatMatchContextBlock memuat probabilitas, korelasi, dan aturan", () => 
   assert.match(text, /1X2/);
   assert.match(text, /Korelasi market/);
   assert.match(text, /jangan menghitung ulang probabilitas sendiri/);
+});
+
+/* ── Probabilitas model untuk sebuah seleksi ───────────────────────────── */
+
+test("modelProbabilityForSelection memetakan label kanonik ke matriks yang sama", () => {
+  const matrix = scoreMatrix(1.6, 1.1);
+  const markets = marketProbabilities(matrix);
+
+  const home = modelProbabilityForSelection(matrix, markets, "Home Win");
+  assert.equal(home.family, "ML");
+  assert.ok(Math.abs(home.probability! - markets.homeWin) < 1e-9);
+
+  const over = modelProbabilityForSelection(matrix, markets, "Over 2.5 Goals");
+  assert.equal(over.family, "Totals");
+  assert.ok(Math.abs(over.probability! - markets.over25) < 1e-9);
+
+  const btts = modelProbabilityForSelection(matrix, markets, "BTTS Yes");
+  assert.equal(btts.family, "BTTS");
+  assert.ok(Math.abs(btts.probability! - markets.bttsYes) < 1e-9);
+
+  /* Handicap -0.5 untuk tuan rumah identik dengan kemenangan tuan rumah. */
+  const ah = modelProbabilityForSelection(matrix, markets, "Asian Handicap Home -0.5");
+  assert.equal(ah.family, "AH");
+  assert.ok(Math.abs(ah.probability! - markets.homeWin) < 1e-6);
+});
+
+test("modelProbabilityForSelection menolak HT dan label asing dengan catatan", () => {
+  const matrix = scoreMatrix(1.4, 1.2);
+  const markets = marketProbabilities(matrix);
+  const ht = modelProbabilityForSelection(matrix, markets, "HT Home");
+  assert.equal(ht.probability, null);
+  assert.match(ht.note!, /babak pertama/);
+
+  /* Label bebas dari data lama ("HT Result - Manchester City Win") tidak boleh
+     dianggap probabilitas; ia hanya menghasilkan null + catatan. */
+  const legacy = modelProbabilityForSelection(matrix, markets, "HT Result - Manchester City Win");
+  assert.equal(legacy.probability, null);
+
+  const foreign = modelProbabilityForSelection(matrix, markets, "Corners Over 9.5");
+  assert.equal(foreign.probability, null);
+  assert.match(foreign.note!, /tidak dapat dipetakan/);
+
+  const empty = modelProbabilityForSelection(matrix, markets, null);
+  assert.equal(empty.probability, null);
+  assert.equal(empty.family, null);
 });

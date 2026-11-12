@@ -16,7 +16,18 @@ import {
 } from "../lib/team-stats-freshness";
 import { latestOddsByMarket } from "./odds-history";
 import { normalizeStatsRow } from "../lib/stats-integrity";
-import { buildMatchContext, formatMatchContextBlock, parseTeamRates } from "../lib/match-context";
+import {
+  buildMatchContext,
+  formatMatchContextBlock,
+  modelProbabilityForSelection,
+  parseTeamRates,
+} from "../lib/match-context";
+import {
+  blendProbability,
+  conservativeEv,
+  expectedValue,
+  worstCaseFairProbability,
+} from "../lib/betting-math";
 import type { LeagueAverages } from "../lib/quant/strength";
 import { getGeminiModel } from "./model-discovery";
 import { shadowLogQuantAnalysis } from "./quant-shadow";
@@ -802,6 +813,52 @@ async function fetchHeadToHead(
 }
 
 /**
+ * Probabilitas wajar (de-vig) untuk label market kanonik.
+ *
+ * Memakai `worstCaseFairProbability`: probabilitas terendah di antara metode
+ * devig, sehingga edge tidak lahir dari asumsi yang paling menguntungkan.
+ * Mengembalikan null bila pasar pembandingnya tidak ditemukan — bukan 0.
+ */
+function fairProbabilityForLabel(
+  label: string | null,
+  odds: StructuredOdds,
+  line: number | null,
+): number | null {
+  if (!label) return null;
+  const lower = label.trim().toLowerCase();
+  const withLine = <T extends { line?: number }>(rows: T[]): T | null => {
+    if (rows.length === 0) return null;
+    if (line == null) return rows[0]!;
+    return rows.find((row) => row.line != null && Math.abs(row.line - line) < 1e-9) ?? null;
+  };
+
+  if (lower === "home win" || lower === "away win" || lower === "draw") {
+    const row = odds.matchWinner[0];
+    if (!row) return null;
+    const index = lower === "home win" ? 0 : lower === "draw" ? 1 : 2;
+    return worstCaseFairProbability([row.home ?? null, row.draw ?? null, row.away ?? null], index);
+  }
+  if (lower === "btts yes" || lower === "btts no") {
+    const row = odds.btts[0];
+    if (!row) return null;
+    return worstCaseFairProbability([row.yes ?? null, row.no ?? null], lower === "btts yes" ? 0 : 1);
+  }
+  if (/^(over|under)\s/.test(lower)) {
+    const row = withLine(odds.overUnder);
+    if (!row) return null;
+    return worstCaseFairProbability([row.over ?? null, row.under ?? null], lower.startsWith("over") ? 0 : 1);
+  }
+  if (lower.startsWith("asian handicap")) {
+    const row = withLine(odds.asianHandicap);
+    if (!row) return null;
+    const isHome = lower.includes("home");
+    return worstCaseFairProbability([row.home ?? null, row.away ?? null], isHome ? 0 : 1);
+  }
+  /* HT dan market lain: tidak ada pasar pembanding yang bisa di-devig di sini. */
+  return null;
+}
+
+/**
  * Rata-rata gol liga untuk normalisasi kekuatan tim.
  *
  * `estimateLambdas` membutuhkan rata-rata liga; tanpa itu ia memakai default
@@ -1180,6 +1237,12 @@ export interface AnalysisResult {
   probability?: number | null;
   ev_percent?: number;
   ev_at_analysis?: number;
+  /** Probabilitas akhir hasil hitung kode (0.35·model + 0.65·pasar). */
+  model_p_final?: number | null;
+  /** EV dan EV konservatif hasil hitung kode, dalam pecahan (0.03 = 3%). */
+  model_ev?: number | null;
+  model_ev_conservative?: number | null;
+  model_probability_note?: string | null;
   odds_status?: OddsAvailabilityStatus;
   odds_captured_at?: string | null;
   readiness_status?: "bet_ready" | "analytical_no_bet" | "technical_review";
@@ -1227,8 +1290,33 @@ interface EvaluationSnapshot {
     evPercent: number;
     evAtAnalysis: number;
     rejectionReason: string | null;
+    /** Angka hasil hitung kode; disimpan sebagai bukti, belum menjadi gerbang. */
+    model?: {
+      marketProbability: number | null;
+      marketFairProbability: number | null;
+      finalProbability: number | null;
+      ev: number | null;
+      evConservative: number | null;
+      note: string | null;
+      gateMode: "shadow" | "enforced";
+    };
   };
   input: {
+    derived?: {
+      lambdas: { home: number; away: number; reliability: number };
+      leagueAverages: LeagueAverages;
+      leagueIsDefault: boolean;
+      markets: {
+        homeWin: number;
+        draw: number;
+        awayWin: number;
+        over25: number;
+        bttsYes: number;
+      };
+      signals: string[];
+      correlation: Array<{ pair: string; joint: number; independent: number; ratio: number }>;
+      dataGaps: string[];
+    };
     odds: {
       provider: "Odds-API";
       status: OddsAvailabilityStatus;
@@ -1770,6 +1858,47 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     const selectedOddsCapturedAt = oddsMatch?.capturedAt ?? oddsAvailability.latestCapturedAt;
     const evAtAnalysis = recommendation.evPercent / 100;
 
+    /*
+     * EV yang dihitung kode (bukan disalin dari LLM).
+     *
+     * p_model  = probabilitas dari matriks skor (satu model untuk semua market)
+     * p_market = de-vig kasus terburuk dari pasar pembanding
+     * p_final  = 0.35 × model + 0.65 × pasar, karena model belum terkalibrasi
+     * EV       = p_final × odds − 1; EV konservatif memotong 5 poin persen
+     *
+     * Saat ini nilainya DISIMPAN sebagai bukti (mode bayangan) dan belum
+     * menggantikan gerbang keputusan, supaya tidak ada taruhan yang lahir dari
+     * model yang belum punya catatan kalibrasi.
+     */
+    /* Dihitung dari usulan AI (bukan hanya yang lolos gerbang) supaya seleksi
+       yang ditolak pun tercatat — tanpa itu kita tidak bisa mengukur apa yang
+       sengaja kita lewatkan. */
+    const modelSelection = modelProbabilityForSelection(
+      matchContext.matrix,
+      matchContext.markets,
+      parsedRecommendation.marketBet,
+    );
+    const marketFairProbability = fairProbabilityForLabel(
+      parsedRecommendation.marketBet,
+      structuredOdds,
+      oddsMatch?.matchedLine ?? oddsMatch?.line ?? null,
+    );
+    const pModelOnly = modelSelection.probability;
+    const pFinal = pModelOnly != null && marketFairProbability != null
+      ? blendProbability(pModelOnly, marketFairProbability, 0.35)
+      : pModelOnly ?? marketFairProbability ?? null;
+    const verifiedSelectionOdds = verifiedOdds != null && verifiedOdds > 1
+      ? verifiedOdds
+      : recommendation.odds > 1
+        ? recommendation.odds
+        : null;
+    const modelEv = pFinal != null && verifiedSelectionOdds != null
+      ? expectedValue(pFinal, verifiedSelectionOdds)
+      : null;
+    const modelEvConservative = pFinal != null && verifiedSelectionOdds != null
+      ? conservativeEv(pFinal, verifiedSelectionOdds, 0.05)
+      : null;
+
    console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
 
    const analyzedAt = new Date().toISOString();
@@ -1797,6 +1926,16 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
        evPercent: recommendation.evPercent,
        evAtAnalysis,
        rejectionReason: rejectionReason ?? null,
+       model: {
+         marketProbability: pModelOnly == null ? null : Number(pModelOnly.toFixed(4)),
+         marketFairProbability:
+           marketFairProbability == null ? null : Number(marketFairProbability.toFixed(4)),
+         finalProbability: pFinal == null ? null : Number(pFinal.toFixed(4)),
+         ev: modelEv == null ? null : Number(modelEv.toFixed(4)),
+         evConservative: modelEvConservative == null ? null : Number(modelEvConservative.toFixed(4)),
+         note: modelSelection.note,
+         gateMode: "shadow",
+       },
      },
      input: {
        derived: {
@@ -1885,8 +2024,13 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
      prob_under25: Number(matchContext.markets.under25.toFixed(4)),
      prob_btts_yes: Number(matchContext.markets.bttsYes.toFixed(4)),
      prob_btts_no: Number(matchContext.markets.bttsNo.toFixed(4)),
-     expected_value: evAtAnalysis,
-    ev_at_analysis: evAtAnalysis,
+     /* Probabilitas & EV hasil hitung kode untuk seleksi yang dipilih.
+        p_market_fair = de-vig kasus terburuk; p_final = 0.35·model + 0.65·pasar. */
+     p_model_only: pModelOnly == null ? null : Number(pModelOnly.toFixed(4)),
+     p_market_fair: marketFairProbability == null ? null : Number(marketFairProbability.toFixed(4)),
+     p_final: pFinal == null ? null : Number(pFinal.toFixed(4)),
+     expected_value: modelEv != null ? Number(modelEv.toFixed(4)) : evAtAnalysis,
+    ev_at_analysis: modelEv != null ? Number(modelEv.toFixed(4)) : evAtAnalysis,
      confidence_score: recommendation.confidence,
      manual_context: {
        ...evaluationSnapshot,
@@ -1962,6 +2106,10 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     probability: recommendation.probability,
     ev_percent: recommendation.evPercent,
     ev_at_analysis: evAtAnalysis,
+    model_p_final: pFinal,
+    model_ev: modelEv,
+    model_ev_conservative: modelEvConservative,
+    model_probability_note: modelSelection.note,
     odds_status: oddsAvailability.status,
      odds_captured_at: selectedOddsCapturedAt,
      readiness_status: readinessStatus,

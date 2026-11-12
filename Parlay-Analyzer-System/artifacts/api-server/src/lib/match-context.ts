@@ -19,6 +19,7 @@
 
 import {
   bttsProb,
+  handicapOutcome,
   matchResultProbs,
   scoreMatrix,
   totalsOutcome,
@@ -336,6 +337,84 @@ export function correlationFindings(matrix: ScoreMatrix): CorrelationFinding[] {
       note,
     };
   });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PROBABILITAS MODEL UNTUK SEBUAH SELEKSI
+   ═══════════════════════════════════════════════════════════════ */
+
+export type SelectionFamily = "ML" | "BTTS" | "Totals" | "AH" | "HT";
+
+export interface SelectionModelProbability {
+  probability: number | null;
+  family: SelectionFamily | null;
+  /** alasan bila probabilitas tidak tersedia — jangan pernah mengembalikan 0 diam-diam */
+  note: string | null;
+}
+
+/**
+ * Memetakan label market kanonik (keluaran `normalizeStructuredMarketSelection`)
+ * ke probabilitas dari matriks skor yang sama.
+ *
+ * Label yang tidak dikenali menghasilkan `probability: null` dan catatan, bukan 0.
+ * Angka 0 yang menyamar sebagai analisis adalah bug yang sedang diperbaiki di sini.
+ */
+export function modelProbabilityForSelection(
+  matrix: ScoreMatrix,
+  markets: MarketProbabilities,
+  label: string | null | undefined,
+): SelectionModelProbability {
+  const text = String(label ?? "").trim();
+  if (!text) return { probability: null, family: null, note: "Market tidak dipilih." };
+
+  const lower = text.toLowerCase();
+  if (lower === "home win") return { probability: markets.homeWin, family: "ML", note: null };
+  if (lower === "away win") return { probability: markets.awayWin, family: "ML", note: null };
+  if (lower === "draw") return { probability: markets.draw, family: "ML", note: null };
+  if (lower === "btts yes") return { probability: markets.bttsYes, family: "BTTS", note: null };
+  if (lower === "btts no") return { probability: markets.bttsNo, family: "BTTS", note: null };
+
+  const totals = lower.match(/^(over|under)\s+(\d+(?:\.\d+)?)/);
+  if (totals) {
+    const side = totals[1] === "over" ? "over" : "under";
+    const line = Number(totals[2]);
+    if (!Number.isFinite(line)) {
+      return { probability: null, family: "Totals", note: "Line totals tidak valid." };
+    }
+    return {
+      probability: winShare(totalsOutcome(matrix, line, side)),
+      family: "Totals",
+      note: null,
+    };
+  }
+
+  const handicap = lower.match(/^asian handicap\s+(home|away)\s+([+-]?\d+(?:\.\d+)?)/);
+  if (handicap) {
+    const side = handicap[1] === "home" ? "home" : "away";
+    const line = Number(handicap[2]);
+    if (!Number.isFinite(line)) {
+      return { probability: null, family: "AH", note: "Line handicap tidak valid." };
+    }
+    return {
+      probability: winShare(handicapOutcome(matrix, line, side)),
+      family: "AH",
+      note: null,
+    };
+  }
+
+  if (lower.startsWith("ht ")) {
+    return {
+      probability: null,
+      family: "HT",
+      note: "Model gol saat ini tidak memodelkan babak pertama; HT tidak diberi probabilitas.",
+    };
+  }
+
+  return {
+    probability: null,
+    family: null,
+    note: `Label market "${text}" tidak dapat dipetakan ke matriks skor.`,
+  };
 }
 
 /* ═══════════════════════════════════════════════════════════════
