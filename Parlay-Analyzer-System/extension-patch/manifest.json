@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "FootyStats → Parlay Data Ingest",
+  "version": "3.2.0",
+  "description": "Floating widget di halaman footystats — paste TSV, push JSON ke API, atau download CSV",
+  "permissions": ["storage", "clipboardRead"],
+  "host_permissions": [
+    "*://*.footystats.org/*",
+    "https://parwon.vercel.app/*",
+    "*://*.supabase.co/*",
+    "https://*.replit.app/*",
+    "https://*.replit.dev/*",
+    "https://*.repl.co/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://*.footystats.org/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
