@@ -48,3 +48,11 @@ tetapi karena tidak ada pemicu terjadwal yang berjalan.
 - `/odds/multi?eventIds=a,b` mengembalikan array event + `bookmakers`; batas 10 id.
 - Kode: pass 1 jadwal semua liga → pass odds; `fetchLeagueEvents` paginasi + cache 90 dtk; filter `markets` di kedua endpoint. Tes **260/260**.
 - Data lama `Corners Totals*`/`Team Total*` masih terklasifikasi sebagai `Totals`/`AH`; data baru sudah tersaring di sumber.
+
+## 2026-11-12 — merge, deploy, dan blocker verifikasi
+
+- PR #13 merged (`5653385`), deploy produksi READY, kode baru terbukti live karena `/api/sync/status` memuat `insertReason`.
+- Workflow `odds-sync` kini terdaftar dan bisa di-dispatch, tetapi **semua job gagal** karena repo secrets `API_BASE_URL`/`CRON_SECRET` kosong (terbukti dari anotasi check-run; `sync_runs` tidak bertambah).
+- `CRON_SECRET` di Vercel bertipe `sensitive` → tidak bisa didekripsi siapa pun, termasuk UI. Harus ditetapkan ulang di Vercel **dan** GitHub.
+- Cron harian Vercel (06:00 UTC) tetap jadi jalur cadangan karena memakai env sendiri.
+- PR #14 (merged): workflow melaporkan HTTP code lewat anotasi agar kegagalan berikutnya bisa didiagnosis tanpa log.

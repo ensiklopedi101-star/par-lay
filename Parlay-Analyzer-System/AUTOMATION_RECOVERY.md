@@ -366,3 +366,54 @@ terklasifikasi sebagai `Totals` (kata "total" cocok), dan `Team Total Home`
 juga — jadi analisis gol bisa tercampur pasar corners. Data lama masih ada
 (`Total Corners` 2.108 baris, `Corners Totals*` ribuan) dan perlu dibersihkan
 terpisah; data baru sudah bersih di sumbernya.
+
+---
+
+## 10. Merge PR #13, deploy produksi, dan status verifikasi (2026-11-12)
+
+### 10.1 Yang sudah terverifikasi
+
+| langkah | bukti |
+|---|---|
+| PR #13 merged ke `main` | merge commit `5653385`, 2026-11-12 12:17:05Z |
+| Deploy produksi baru | `dpl_6inMvjodAREj7qAiuro7ugTLctoW` **READY** 12:17:31Z, alias `parwon.vercel.app` |
+| Kode baru benar-benar live | `GET /api/sync/status` mengembalikan `insertReason` (kunci yang baru ada di PR #13) |
+| Workflow terdaftar | `gh workflow list` → `odds-sync active 415964807` (sebelumnya tidak ada) |
+| Workflow bisa dipicu | `gh workflow run odds-sync.yml` → run `43216683930`, `43217007651` |
+
+### 10.2 Yang GAGAL: cron tidak pernah sampai ke aplikasi
+
+Semua job (7 liga + analyze + outcomes) berhenti dengan `exit code 1` dalam
+hitungan detik, dan **tidak ada satu pun baris baru di `sync_runs`**.
+Anotasi check-run membuktikan sebabnya:
+
+```
+Repository secrets API_BASE_URL / CRON_SECRET belum diisi.
+```
+
+Jadi bukan bug kode: GitHub Actions belum punya kredensial untuk memanggil
+`/api/cron`. Catatan: `CRON_SECRET` di Vercel bertipe **sensitive** sehingga
+tidak bisa dibaca ulang (bukan hanya oleh agen — UI Vercel pun tidak
+menampilkannya). Karena itu nilainya harus ditetapkan ulang di kedua sisi.
+
+### 10.3 Langkah yang dibutuhkan (di luar repo)
+
+1. Vercel → Settings → Environment Variables → `CRON_SECRET`: set nilai baru
+   (Production + Preview), lalu **redeploy** agar env terbaca.
+2. GitHub → Settings → Secrets and variables → Actions:
+   - `API_BASE_URL` = `https://parwon.vercel.app` (tanpa akhiran `/api`)
+   - `CRON_SECRET` = nilai yang sama dengan langkah 1.
+3. Jalankan ulang `odds-sync`; verifikasi di Supabase: baris baru `sync_runs`,
+   `fixtures` bertambah sampai berbulan-bulan ke depan, `odds_history` dapat
+   `captured_at` baru.
+
+Jalur cadangan yang **tidak** butuh Actions: cron harian Vercel
+(`/api/cron?action=daily`, `0 6 * * *` UTC) memakai `CRON_SECRET` dari
+environment sendiri, jadi otomatis berjalan 06:00 UTC berikutnya.
+
+### 10.4 Perbaikan diagnosa (PR #14)
+
+Kegagalan cron sebelumnya tidak meninggalkan jejak yang bisa dibaca: log
+mentah tidak selalu bisa diunduh dari CLI. Workflow sekarang menulis anotasi
+berisi kode HTTP dan potongan body (`401` = token beda, `404` = base URL salah,
+`000` = host tak terjangkau) **tanpa mencetak secret**.
