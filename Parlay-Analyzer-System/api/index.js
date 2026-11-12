@@ -50820,9 +50820,24 @@ function classifyOddsMarket(value) {
   if (baseToken === "ml" || baseToken === "h2h" || baseToken === "1x2" || baseToken.includes("match_winner") || baseToken.includes("match_result")) return "ML";
   return null;
 }
+function providerMarketNames(markets) {
+  const names = /* @__PURE__ */ new Set();
+  for (const market of markets) {
+    for (const name of PROVIDER_MARKET_NAMES[market] ?? []) names.add(name);
+  }
+  return Array.from(names);
+}
+var PROVIDER_MARKET_NAMES;
 var init_odds_market = __esm({
   "src/lib/odds-market.ts"() {
     "use strict";
+    PROVIDER_MARKET_NAMES = {
+      ML: ["ML"],
+      AH: ["Spread"],
+      Totals: ["Totals"],
+      BTTS: ["Both Teams To Score"],
+      HT: []
+    };
   }
 });
 
@@ -50980,23 +50995,46 @@ async function fetchActiveLeagueSlugs(apiKey) {
   }
 }
 async function fetchLeagueEvents(leagueSlug, apiKey) {
-  const params = new URLSearchParams({
-    apiKey,
-    sport: "football",
-    league: leagueSlug,
-    status: "pending"
-  });
-  const url = `${BASE_URL}/events?${params}`;
-  logger.info({ url: redactApiKey(url), leagueSlug }, "RADAR: Fetching league events from Odds-API");
-  const data = await apiGet(
-    url,
-    `events:${leagueSlug}`
+  const cached = leagueEventsCache.get(leagueSlug);
+  if (cached && Date.now() - cached.at < LEAGUE_EVENTS_CACHE_MS) {
+    return cached.events;
+  }
+  const collected = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (let page = 0; page < EVENTS_MAX_PAGES; page++) {
+    const params = new URLSearchParams({
+      apiKey,
+      sport: "football",
+      league: leagueSlug,
+      status: "pending",
+      limit: String(EVENTS_PAGE_SIZE),
+      skip: String(page * EVENTS_PAGE_SIZE)
+    });
+    const url = `${BASE_URL}/events?${params}`;
+    logger.info(
+      { url: redactApiKey(url), leagueSlug, page },
+      "RADAR: Fetching league events from Odds-API"
+    );
+    const data = await apiGet(url, `events:${leagueSlug}:${page}`);
+    const batch = Array.isArray(data) ? data : [data];
+    for (const event of batch) {
+      if (seen.has(event.id)) continue;
+      seen.add(event.id);
+      collected.push(event);
+    }
+    if (batch.length < EVENTS_PAGE_SIZE) break;
+  }
+  leagueEventsCache.set(leagueSlug, { events: collected, at: Date.now() });
+  logger.info(
+    { leagueSlug, events: collected.length, pages: Math.max(1, Math.ceil(collected.length / EVENTS_PAGE_SIZE)) },
+    "RADAR: League events collected"
   );
-  logger.info({ rawData: data, isArray: Array.isArray(data), dataLength: Array.isArray(data) ? data.length : 1 }, "RADAR: Response from Odds-API events");
-  return Array.isArray(data) ? data : [data];
+  return collected;
 }
-async function fetchEventOdds(eventId, apiKey, bookmakers) {
+async function fetchEventOdds(eventId, apiKey, bookmakers, requestedMarkets = DEFAULT_MARKETS) {
   const params = new URLSearchParams({ apiKey, eventId: String(eventId), bookmakers });
+  const marketNames = providerMarketNames(requestedMarkets);
+  if (marketNames.length > 0) params.set("markets", marketNames.join(","));
   const url = `${BASE_URL}/odds?${params}`;
   logger.info({ url: redactApiKey(url), eventId, bookmakers }, "RADAR: Fetching event odds from Odds-API");
   const result2 = await apiGet(url, `odds:${eventId}`);
@@ -51371,6 +51409,14 @@ async function getAlreadySyncedEventIds(eventIds, requestedBookmakers, requested
     )
   );
 }
+async function ensureScheduleSaved(events, leagueSlug, leagueIdMap) {
+  if (events.length === 0) return 0;
+  const last = scheduleSavedAt.get(leagueSlug) ?? 0;
+  if (Date.now() - last < LEAGUE_EVENTS_CACHE_MS) return 0;
+  const upserted = await saveScheduleFixtures(events, leagueSlug, leagueIdMap);
+  scheduleSavedAt.set(leagueSlug, Date.now());
+  return upserted;
+}
 async function saveScheduleFixtures(events, leagueSlug, leagueIdMap) {
   const leagueId = leagueIdMap.get(leagueSlug);
   if (!leagueId || events.length === 0) return 0;
@@ -51406,7 +51452,7 @@ async function saveScheduleFixtures(events, leagueSlug, leagueIdMap) {
   );
   return upserted;
 }
-async function fetchEventsOddsMulti(eventIds, apiKey, bookmakers) {
+async function fetchEventsOddsMulti(eventIds, apiKey, bookmakers, requestedMarkets = DEFAULT_MARKETS) {
   const ids = eventIds.slice(0, ODDS_MULTI_BATCH_SIZE);
   if (ids.length === 0) return /* @__PURE__ */ new Map();
   const params = new URLSearchParams({
@@ -51414,6 +51460,8 @@ async function fetchEventsOddsMulti(eventIds, apiKey, bookmakers) {
     eventIds: ids.join(","),
     bookmakers
   });
+  const marketNames = providerMarketNames(requestedMarkets);
+  if (marketNames.length > 0) params.set("markets", marketNames.join(","));
   const url = `${BASE_URL}/odds/multi?${params}`;
   logger.info({ eventCount: ids.length, bookmakers }, "RADAR: Fetching batch odds");
   const data = await apiGet(url, `odds-multi:${ids.length}`);
@@ -51442,6 +51490,7 @@ async function fetchEventsOddsMulti(eventIds, apiKey, bookmakers) {
 }
 async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, options = {}) {
   const { maxEvents, upcomingWindowDays = UPCOMING_WINDOW_DAYS } = options;
+  const requestedMarkets = options.markets ?? DEFAULT_MARKETS;
   let saved = 0;
   let errors = 0;
   let eventsFetched = 0;
@@ -51457,7 +51506,7 @@ async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, o
       return { league: league.slug, saved: 0, skipped: true, errors: 0, eventsFetched: 0, oddsFetched: 0, fixturesUpserted: 0 };
     }
     try {
-      fixturesUpserted = await saveScheduleFixtures(events, league.slug, leagueIdMap);
+      fixturesUpserted = await ensureScheduleSaved(events, league.slug, leagueIdMap);
     } catch (err) {
       logger.error({ err, league: league.slug }, "RADAR: Gagal menyimpan jadwal fixtures");
     }
@@ -51491,7 +51540,7 @@ async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, o
       }
       let oddsById = null;
       try {
-        oddsById = await fetchEventsOddsMulti(batch.map((e) => e.id), apiKey, bookmakers);
+        oddsById = await fetchEventsOddsMulti(batch.map((e) => e.id), apiKey, bookmakers, requestedMarkets);
       } catch (err) {
         if (err instanceof RateLimitError) {
           rateLimitedSeconds = err.retryAfterSeconds;
@@ -51512,9 +51561,9 @@ async function fetchAndSaveLeagueOdds(league, apiKey, bookmakers, leagueIdMap, o
               continue;
             }
             await new Promise((r) => setTimeout(r, 300));
-            withOdds = await fetchEventOdds(event.id, apiKey, bookmakers);
+            withOdds = await fetchEventOdds(event.id, apiKey, bookmakers, requestedMarkets);
           }
-          const savedRows = await saveEventAndOdds(withOdds, league.slug, leagueIdMap, options.markets);
+          const savedRows = await saveEventAndOdds(withOdds, league.slug, leagueIdMap, requestedMarkets);
           if (savedRows > 0) {
             saved++;
             oddsFetched++;
@@ -51635,6 +51684,7 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
   let totalEventsInserted = 0;
   let totalOddsFetched = 0;
   let totalErrors = 0;
+  let totalFixturesUpserted = 0;
   let rateLimitedSeconds = 0;
   let status = "completed";
   let errorMessage2 = "";
@@ -51654,6 +51704,29 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
     leagueIdMap = /* @__PURE__ */ new Map();
   }
   try {
+    for (const league of leaguesToSync) {
+      if (Date.now() >= deadlineAt) {
+        logger.warn({ league: league.slug }, "RADAR: Anggaran habis sebelum jadwal liga ini \u2014 jadwal menyusul");
+        break;
+      }
+      try {
+        const events = await fetchLeagueEvents(league.slug, apiKey);
+        const upserted = await ensureScheduleSaved(events, league.slug, leagueIdMap);
+        totalFixturesUpserted += upserted;
+        logger.info(
+          { league: league.slug, events: events.length, fixturesUpserted: upserted },
+          "RADAR: Jadwal liga diproses"
+        );
+      } catch (err) {
+        if (err instanceof RateLimitError) {
+          rateLimitedSeconds = Math.max(rateLimitedSeconds, err.retryAfterSeconds);
+          logger.warn({ retryAfter: err.retryAfterSeconds }, "RADAR: Rate limited saat mengambil jadwal \u2014 sisa liga dilewati");
+          break;
+        }
+        totalErrors++;
+        logger.error({ err, league: league.slug }, "RADAR: Gagal mengambil jadwal liga");
+      }
+    }
     let remainingSlots = MAX_EVENTS_PER_SYNC;
     for (const league of leaguesToSync) {
       if (remainingSlots <= 0) {
@@ -51774,6 +51847,7 @@ async function fetchAndSaveAllLeagues(leagues = DEFAULT_LEAGUES, bookmakers, sca
     eventsInserted: totalEventsInserted,
     oddsFetched: totalOddsFetched,
     errors: totalErrors,
+    fixturesUpserted: totalFixturesUpserted,
     rateLimitedSeconds,
     errorMessage: errorMessage2,
     durationMs: Date.now() - startedAt
@@ -51842,7 +51916,7 @@ async function refreshOddsForFixtures(fixtureIds) {
   logger.info(summary, "[ODDS-READINESS] Fixture odds refresh complete");
   return summary;
 }
-var BASE_URL, SUPABASE_PAGE_SIZE, syncRunning, MAX_EVENTS_PER_SYNC, UPCOMING_WINDOW_DAYS, DEFAULT_BOOKMAKERS, DEFAULT_SYNC_TIME_BUDGET_MS, DEFAULT_MARKETS, ODDS_REFRESH_HOURS, ACTIVE_LEAGUE_CACHE_MS, MAX_RATE_LIMIT_RETRIES, MAX_RATE_LIMIT_BACKOFF_SECONDS, activeLeagueCache, lastOddsRefreshState, DEFAULT_LEAGUES, RateLimitError;
+var BASE_URL, SUPABASE_PAGE_SIZE, syncRunning, MAX_EVENTS_PER_SYNC, UPCOMING_WINDOW_DAYS, EVENTS_PAGE_SIZE, EVENTS_MAX_PAGES, DEFAULT_BOOKMAKERS, DEFAULT_SYNC_TIME_BUDGET_MS, DEFAULT_MARKETS, ODDS_REFRESH_HOURS, ACTIVE_LEAGUE_CACHE_MS, MAX_RATE_LIMIT_RETRIES, MAX_RATE_LIMIT_BACKOFF_SECONDS, activeLeagueCache, lastOddsRefreshState, DEFAULT_LEAGUES, RateLimitError, leagueEventsCache, scheduleSavedAt, LEAGUE_EVENTS_CACHE_MS;
 var init_odds_fetcher = __esm({
   "src/services/odds-fetcher.ts"() {
     "use strict";
@@ -51851,11 +51925,14 @@ var init_odds_fetcher = __esm({
     init_http();
     init_sync_plan();
     init_odds_market();
+    init_odds_market();
     BASE_URL = "https://api.odds-api.io/v3";
     SUPABASE_PAGE_SIZE = 1e3;
     syncRunning = false;
     MAX_EVENTS_PER_SYNC = 40;
     UPCOMING_WINDOW_DAYS = 10;
+    EVENTS_PAGE_SIZE = 200;
+    EVENTS_MAX_PAGES = 2;
     DEFAULT_BOOKMAKERS = "1xbet,M88";
     DEFAULT_SYNC_TIME_BUDGET_MS = 45e3;
     DEFAULT_MARKETS = ["ML", "Totals", "AH", "HT", "BTTS"];
@@ -51889,6 +51966,9 @@ var init_odds_fetcher = __esm({
         this.retryAfterSeconds = retryAfterSeconds;
       }
     };
+    leagueEventsCache = /* @__PURE__ */ new Map();
+    scheduleSavedAt = /* @__PURE__ */ new Map();
+    LEAGUE_EVENTS_CACHE_MS = 9e4;
   }
 });
 

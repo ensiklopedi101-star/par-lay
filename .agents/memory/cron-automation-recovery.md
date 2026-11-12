@@ -39,3 +39,12 @@ tetapi karena tidak ada pemicu terjadwal yang berjalan.
 - Odds memang baru dibuka bandar beberapa hari sebelum kick-off; jadwal bisa berbulan-bulan. Karena itu jadwal dan odds harus dipisah.
 - Perbaikan: `saveScheduleFixtures` (upsert massal 500/permintaan, hanya kick-off belum lewat), `fetchEventsOddsMulti` (`/odds/multi`, ≤10 id, fallback per-event bila bentuk respons aneh), filter `captured_at` di SQL untuk `getAlreadySyncedEventIds`. Tes **254/254**.
 - Sisa batas: `/events` masih tanpa paginasi (`skip`), jadi maksimal ~20 event terdekat per liga.
+
+## 2026-11-12 — verifikasi langsung Odds-API
+
+- `/events` **tanpa `limit` = 20 event** (akar horizon pendek). `limit=200` untuk EPL memberi 200 event sampai **2027-02-06**; `skip=200` kosong; `limit>200` tidak menambah (plafon 200).
+- Nama pasar penyedia: `ML`, `Spread`, `Totals`, `Both Teams To Score`, plus `Double Chance`, `Corners *`, `Team Total *`, `Correct Score`. Tidak ada pasar HT 1X2 (`markets=HT` → `[]`).
+- `markets=...` memotong payload satu event dari ~60 KB ke ~4 KB dan berfungsi di `/odds` maupun `/odds/multi`.
+- `/odds/multi?eventIds=a,b` mengembalikan array event + `bookmakers`; batas 10 id.
+- Kode: pass 1 jadwal semua liga → pass odds; `fetchLeagueEvents` paginasi + cache 90 dtk; filter `markets` di kedua endpoint. Tes **260/260**.
+- Data lama `Corners Totals*`/`Team Total*` masih terklasifikasi sebagai `Totals`/`AH`; data baru sudah tersaring di sumber.

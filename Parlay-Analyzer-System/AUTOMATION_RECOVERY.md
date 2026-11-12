@@ -307,3 +307,62 @@ Batas yang tetap ada dan harus jujur disebut: kalau provider hanya
 mengembalikan 20 event per liga tanpa paginasi, jadwal yang bisa disimpan
 tetap 20 event terdekat per liga. Untuk menembus itu perlu `skip`/`limit`
 berulang di `/events` — langkah berikutnya, bukan yang sudah dikerjakan.
+
+---
+
+## 9. Verifikasi langsung ke Odds-API (2026-11-12)
+
+Kunci API diuji manual dari luar sandbox (sandbox hanya boleh menghubungi
+domain tertentu). **Kunci tidak disimpan di repo.**
+
+### 9.1 Akar masalah horizon: `/events` default hanya 20 event
+
+| permintaan | hasil |
+|---|---|
+| `/events?sport=football&status=pending` (tanpa `limit`, seperti kode lama) | **20 event** — hanya putaran terdekat |
+| `...&league=england-premier-league&limit=200` | **200 event**, 2026-11-21 → **2027-02-06** |
+| `...&limit=200&skip=200` | `[]` (habis) |
+| `...&limit=500` | tetap 200 → **200 adalah plafon** |
+
+Jadi jadwal sampai Februari memang tersedia; kode lama tidak pernah memintanya.
+Ini juga menjelaskan matematika 140: 7 liga × 20 event.
+
+### 9.2 Nama pasar dan filter `markets`
+
+Satu event EPL (1xbet) mengembalikan: `ML`, `Double Chance`, `Spread`,
+`Totals`, `Both Teams To Score`, `Team Total Home`, `Team Total Away`,
+`Corners Spread`, `Corners Totals`, `Corners Totals Home`, `Correct Score`
+(100+ hasil), dll — sekitar 60 KB untuk satu event.
+
+| uji | hasil |
+|---|---|
+| `markets=ML,Spread,Totals,Both Teams To Score` | hanya 4 pasar itu; payload satu event ±4 KB (**turun ~15×**) |
+| `markets=ML,HT` | hanya `ML` (nama tak dikenal diabaikan, bukan error) |
+| `markets=HT` saja | `[]` → penyedia **tidak punya** pasar 1X2 babak pertama |
+
+### 9.3 `/odds/multi` benar-benar ada
+
+`GET /v3/odds/multi?eventIds=72221406,72221392&bookmakers=1xbet` →
+array event lengkap dengan `bookmakers`. Parameter `eventIds` (koma), batas
+10 id, dan `markets` juga berlaku. `/odds` (single) juga menerima `markets`.
+
+### 9.4 Perubahan kode
+
+| perubahan | berkas |
+|---|---|
+| `/events` memakai `limit=200` + `skip` bertingkat (maks 2 halaman), dedupe per id, cache 90 detik | `fetchLeagueEvents` |
+| **Pass 1**: jadwal semua liga disimpan lebih dulu, baru pass odds | `fetchAndSaveAllLeagues` |
+| Upsert jadwal tidak diulang dalam siklus yang sama | `ensureScheduleSaved` |
+| Filter `markets` di `/odds` **dan** `/odds/multi` | `fetchEventOdds`, `fetchEventsOddsMulti`, `providerMarketNames` |
+| Tes URL nyata dengan `fetch` tiruan (paginasi, `eventIds`, `markets`, bentuk respons aneh) | `odds-fetcher.pagination.test.ts`, `odds-fetcher.multi.test.ts` |
+
+Total tes: **260/260**, typecheck bersih, `api/index.js` dibangun ulang.
+
+### 9.5 Efek samping yang perlu dicatat
+
+Filter `markets` juga menghentikan masuknya pasar **corners** dan **team
+totals** ke `odds_history`. Selama ini `Corners Totals 9.5` ikut
+terklasifikasi sebagai `Totals` (kata "total" cocok), dan `Team Total Home`
+juga — jadi analisis gol bisa tercampur pasar corners. Data lama masih ada
+(`Total Corners` 2.108 baris, `Corners Totals*` ribuan) dan perlu dibersihkan
+terpisah; data baru sudah bersih di sumbernya.

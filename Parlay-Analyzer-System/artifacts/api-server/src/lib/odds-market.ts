@@ -53,3 +53,30 @@ export function classifyOddsMarket(value: unknown): SupportedOddsMarket | null {
   ) return "ML";
   return null;
 }
+
+/**
+ * Nama pasar versi Odds-API untuk tiap kelas yang kita pakai.
+ *
+ * Diverifikasi langsung ke API pada 2026-11-12:
+ * - `markets=ML,Spread,Totals,Both Teams To Score` mengembalikan hanya 4 pasar
+ *   itu (payload satu event turun dari ~2 chunk menjadi 1 chunk kecil).
+ * - Nama yang tidak dikenal (mis. `HT`) diabaikan, bukan error — tetapi juga
+ *   tidak menghasilkan data, jadi tidak kita kirim.
+ * - Pasaran 1X2 babak pertama tidak tersedia dari penyedia ini.
+ */
+export const PROVIDER_MARKET_NAMES: Record<SupportedOddsMarket, string[]> = {
+  ML: ["ML"],
+  AH: ["Spread"],
+  Totals: ["Totals"],
+  BTTS: ["Both Teams To Score"],
+  HT: [],
+};
+
+/** Daftar nama pasar unik untuk parameter `markets` Odds-API. */
+export function providerMarketNames(markets: SupportedOddsMarket[]): string[] {
+  const names = new Set<string>();
+  for (const market of markets) {
+    for (const name of PROVIDER_MARKET_NAMES[market] ?? []) names.add(name);
+  }
+  return Array.from(names);
+}

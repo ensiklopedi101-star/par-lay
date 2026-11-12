@@ -2,6 +2,7 @@ import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 import { fetchWithTimeout, resolveRequestTimeoutMs } from "../lib/http";
 import { ODDS_MULTI_BATCH_SIZE, chunkItems, isScheduleCandidate } from "../lib/sync-plan";
+import { providerMarketNames } from "../lib/odds-market";
 import {
   classifyOddsMarket,
   normalizeMarketToken,
@@ -18,6 +19,11 @@ export function isSyncRunning(): boolean { return syncRunning; }
 
 const MAX_EVENTS_PER_SYNC = 40;
 const UPCOMING_WINDOW_DAYS = 10;
+/* `/events` tanpa `limit` hanya mengembalikan 20 event terdekat (terverifikasi
+ * 2026-11-12). Dengan `limit=200` + `skip`, EPL mengembalikan jadwal sampai
+ * 2027-02-06. `limit` di atas 200 tidak menambah hasil — 200 adalah plafon. */
+const EVENTS_PAGE_SIZE = 200;
+const EVENTS_MAX_PAGES = 2;
 // Pilihan buku sesuai paket free odds-api.io (2026-11): 1xbet + M88.
 // Bet365 kini berbayar sehingga permintaan yang menyebutnya ditolak API.
 export const DEFAULT_BOOKMAKERS = "1xbet,M88";
@@ -377,25 +383,61 @@ export async function fetchActiveLeagueSlugs(apiKey: string): Promise<Set<string
   }
 }
 
-async function fetchLeagueEvents(leagueSlug: string, apiKey: string): Promise<ApiEvent[]> {
-  const params = new URLSearchParams({
-    apiKey,
-    sport: "football",
-    league: leagueSlug,
-    status: "pending",
-  });
-  const url = `${BASE_URL}/events?${params}`;
-   logger.info({ url: redactApiKey(url), leagueSlug }, "RADAR: Fetching league events from Odds-API");
-  const data = await apiGet<ApiEvent | ApiEvent[]>(
-    url,
-    `events:${leagueSlug}`,
+export async function fetchLeagueEvents(leagueSlug: string, apiKey: string): Promise<ApiEvent[]> {
+  const cached = leagueEventsCache.get(leagueSlug);
+  if (cached && Date.now() - cached.at < LEAGUE_EVENTS_CACHE_MS) {
+    return cached.events;
+  }
+
+  const collected: ApiEvent[] = [];
+  const seen = new Set<number>();
+
+  for (let page = 0; page < EVENTS_MAX_PAGES; page++) {
+    const params = new URLSearchParams({
+      apiKey,
+      sport: "football",
+      league: leagueSlug,
+      status: "pending",
+      limit: String(EVENTS_PAGE_SIZE),
+      skip: String(page * EVENTS_PAGE_SIZE),
+    });
+    const url = `${BASE_URL}/events?${params}`;
+    logger.info(
+      { url: redactApiKey(url), leagueSlug, page },
+      "RADAR: Fetching league events from Odds-API",
+    );
+    const data = await apiGet<ApiEvent | ApiEvent[]>(url, `events:${leagueSlug}:${page}`);
+    const batch = Array.isArray(data) ? data : [data];
+
+    for (const event of batch) {
+      if (seen.has(event.id)) continue;
+      seen.add(event.id);
+      collected.push(event);
+    }
+
+    /* Halaman terakhir bila hasilnya kurang dari plafon. */
+    if (batch.length < EVENTS_PAGE_SIZE) break;
+  }
+
+  leagueEventsCache.set(leagueSlug, { events: collected, at: Date.now() });
+  logger.info(
+    { leagueSlug, events: collected.length, pages: Math.max(1, Math.ceil(collected.length / EVENTS_PAGE_SIZE)) },
+    "RADAR: League events collected",
   );
-  logger.info({ rawData: data, isArray: Array.isArray(data), dataLength: Array.isArray(data) ? data.length : 1 }, "RADAR: Response from Odds-API events");
-  return Array.isArray(data) ? data : [data];
+  return collected;
 }
 
-async function fetchEventOdds(eventId: number, apiKey: string, bookmakers: string): Promise<ApiEvent> {
+async function fetchEventOdds(
+  eventId: number,
+  apiKey: string,
+  bookmakers: string,
+  requestedMarkets: SupportedOddsMarket[] = DEFAULT_MARKETS,
+): Promise<ApiEvent> {
   const params = new URLSearchParams({ apiKey, eventId: String(eventId), bookmakers });
+  /* Tanpa filter ini penyedia mengirim SEMUA pasar — termasuk Correct Score
+   * (100+ hasil) dan corners — sehingga satu event bisa puluhan kilobyte. */
+  const marketNames = providerMarketNames(requestedMarkets);
+  if (marketNames.length > 0) params.set("markets", marketNames.join(","));
   const url = `${BASE_URL}/odds?${params}`;
   logger.info({ url: redactApiKey(url), eventId, bookmakers }, "RADAR: Fetching event odds from Odds-API");
   const result = await apiGet<ApiEvent>(url, `odds:${eventId}`);
@@ -942,6 +984,25 @@ async function getAlreadySyncedEventIds(
  * Satu permintaan `/events` per liga sudah cukup untuk restore itu, dan
  * upsert massal jauh lebih murah daripada satu permintaan odds per event.
  */
+/* Cache jadwal per liga untuk satu siklus sync: pass jadwal dan pass odds
+ * memakai daftar event yang sama, jadi `/events` tidak diunduh dua kali. */
+const leagueEventsCache = new Map<string, { events: ApiEvent[]; at: number }>();
+const scheduleSavedAt = new Map<string, number>();
+const LEAGUE_EVENTS_CACHE_MS = 90_000;
+
+async function ensureScheduleSaved(
+  events: ApiEvent[],
+  leagueSlug: string,
+  leagueIdMap: Map<string, number>,
+): Promise<number> {
+  if (events.length === 0) return 0;
+  const last = scheduleSavedAt.get(leagueSlug) ?? 0;
+  if (Date.now() - last < LEAGUE_EVENTS_CACHE_MS) return 0;
+  const upserted = await saveScheduleFixtures(events, leagueSlug, leagueIdMap);
+  scheduleSavedAt.set(leagueSlug, Date.now());
+  return upserted;
+}
+
 async function saveScheduleFixtures(
   events: ApiEvent[],
   leagueSlug: string,
@@ -998,10 +1059,11 @@ async function saveScheduleFixtures(
  * Satu event = satu permintaan adalah penyebab utama sync lambat: 40 event
  * berarti 40 round-trip HTTP plus jeda 300 ms. Dengan batch 10, cukup 4.
  */
-async function fetchEventsOddsMulti(
+export async function fetchEventsOddsMulti(
   eventIds: number[],
   apiKey: string,
   bookmakers: string,
+  requestedMarkets: SupportedOddsMarket[] = DEFAULT_MARKETS,
 ): Promise<Map<number, ApiEvent>> {
   const ids = eventIds.slice(0, ODDS_MULTI_BATCH_SIZE);
   if (ids.length === 0) return new Map();
@@ -1011,6 +1073,8 @@ async function fetchEventsOddsMulti(
     eventIds: ids.join(","),
     bookmakers,
   });
+  const marketNames = providerMarketNames(requestedMarkets);
+  if (marketNames.length > 0) params.set("markets", marketNames.join(","));
   const url = `${BASE_URL}/odds/multi?${params}`;
   logger.info({ eventCount: ids.length, bookmakers }, "RADAR: Fetching batch odds");
   const data = await apiGet<unknown>(url, `odds-multi:${ids.length}`);
@@ -1064,6 +1128,7 @@ export async function fetchAndSaveLeagueOdds(
   fixturesUpserted: number;
 }> {
   const { maxEvents, upcomingWindowDays = UPCOMING_WINDOW_DAYS } = options;
+  const requestedMarkets = options.markets ?? DEFAULT_MARKETS;
   let saved = 0;
   let errors = 0;
   let eventsFetched = 0;
@@ -1084,7 +1149,7 @@ export async function fetchAndSaveLeagueOdds(
     /* Jadwal disimpan lebih dulu — bahkan untuk event yang odds-nya belum
      * dibuka bandar. Ini yang memulihkan tampilan beberapa minggu ke depan. */
     try {
-      fixturesUpserted = await saveScheduleFixtures(events, league.slug, leagueIdMap);
+      fixturesUpserted = await ensureScheduleSaved(events, league.slug, leagueIdMap);
     } catch (err) {
       logger.error({ err, league: league.slug }, "RADAR: Gagal menyimpan jadwal fixtures");
     }
@@ -1130,7 +1195,7 @@ export async function fetchAndSaveLeagueOdds(
 
       let oddsById: Map<number, ApiEvent> | null = null;
       try {
-        oddsById = await fetchEventsOddsMulti(batch.map((e) => e.id), apiKey, bookmakers);
+        oddsById = await fetchEventsOddsMulti(batch.map((e) => e.id), apiKey, bookmakers, requestedMarkets);
       } catch (err) {
         if (err instanceof RateLimitError) {
           rateLimitedSeconds = err.retryAfterSeconds;
@@ -1154,9 +1219,9 @@ export async function fetchAndSaveLeagueOdds(
               continue;
             }
             await new Promise((r) => setTimeout(r, 300));
-            withOdds = await fetchEventOdds(event.id, apiKey, bookmakers);
+            withOdds = await fetchEventOdds(event.id, apiKey, bookmakers, requestedMarkets);
           }
-          const savedRows = await saveEventAndOdds(withOdds, league.slug, leagueIdMap, options.markets);
+          const savedRows = await saveEventAndOdds(withOdds, league.slug, leagueIdMap, requestedMarkets);
           if (savedRows > 0) {
             saved++;
             oddsFetched++;
@@ -1217,6 +1282,8 @@ export interface AllLeaguesSyncOutcome {
   eventsInserted: number;
   oddsFetched: number;
   errors: number;
+  /** Baris `fixtures` (jadwal) yang di-upsert pada pass pertama. */
+  fixturesUpserted?: number;
   rateLimitedSeconds: number;
   errorMessage: string;
   durationMs: number;
@@ -1326,6 +1393,7 @@ export async function fetchAndSaveAllLeagues(
   let totalEventsInserted = 0;
   let totalOddsFetched = 0;
   let totalErrors = 0;
+  let totalFixturesUpserted = 0;
   let rateLimitedSeconds = 0;
   let status: "completed" | "partial" | "failed" = "completed";
   let errorMessage = "";
@@ -1353,6 +1421,37 @@ export async function fetchAndSaveAllLeagues(
   // finishSyncRun wajib berjalan di semua jalur — baris sync_runs yang
   // tertinggal "running" itulah yang tampil "Berjalan" selamanya di panel.
   try {
+    /* PASS 1 — JADWAL. Ini yang paling penting dan paling murah: satu-dua
+     * permintaan `/events` per liga, lalu satu upsert massal. Dijalankan untuk
+     * semua liga SEBELUM anggaran waktu dipakai odds, supaya jadwal berbulan-
+     * bulan ke depan tetap masuk walaupun kuota odds habis. */
+    for (const league of leaguesToSync) {
+      if (Date.now() >= deadlineAt) {
+        logger.warn({ league: league.slug }, "RADAR: Anggaran habis sebelum jadwal liga ini — jadwal menyusul");
+        break;
+      }
+      try {
+        const events = await fetchLeagueEvents(league.slug, apiKey);
+        /* Jangan menambah totalEventsFetched di sini: pass odds di bawah juga
+         * menghitung jumlah event yang sama, dan angka ganda di panel
+         * membuat "140 event" berubah jadi "280" tanpa alasan. */
+        const upserted = await ensureScheduleSaved(events, league.slug, leagueIdMap);
+        totalFixturesUpserted += upserted;
+        logger.info(
+          { league: league.slug, events: events.length, fixturesUpserted: upserted },
+          "RADAR: Jadwal liga diproses",
+        );
+      } catch (err) {
+        if (err instanceof RateLimitError) {
+          rateLimitedSeconds = Math.max(rateLimitedSeconds, err.retryAfterSeconds);
+          logger.warn({ retryAfter: err.retryAfterSeconds }, "RADAR: Rate limited saat mengambil jadwal — sisa liga dilewati");
+          break;
+        }
+        totalErrors++;
+        logger.error({ err, league: league.slug }, "RADAR: Gagal mengambil jadwal liga");
+      }
+    }
+
     let remainingSlots = MAX_EVENTS_PER_SYNC;
     for (const league of leaguesToSync) {
       if (remainingSlots <= 0) {
@@ -1487,6 +1586,7 @@ export async function fetchAndSaveAllLeagues(
     eventsInserted: totalEventsInserted,
     oddsFetched: totalOddsFetched,
     errors: totalErrors,
+    fixturesUpserted: totalFixturesUpserted,
     rateLimitedSeconds,
     errorMessage,
     durationMs: Date.now() - startedAt,
