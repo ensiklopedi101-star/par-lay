@@ -41,6 +41,25 @@ test("common spelling and suffix variations resolve across leagues", () => {
   assert.equal(preferredTeamDisplayName("Leeds", [{ team_name: "Leeds United" }], "england-premier-league"), "Leeds United");
 });
 
+test("Eredivisie provider names resolve to the canonical stored rows (regression: FC Twente & Go Ahead Eagles ditolak ingest)", () => {
+  /* Nama tersimpan NYATA di produksi: "Enschede" dan "GA Eagles". */
+  const rows = [
+    { team_name: "Enschede", league_slug: "netherlands-eredivisie", season: "2026-27", stats_team_form: { MP: "11" } },
+    { team_name: "GA Eagles", league_slug: "netherlands-eredivisie", season: "2026-27", stats_team_form: { MP: "11" } },
+    { team_name: "Ajax Amsterdam", league_slug: "netherlands-eredivisie", season: "2026-27", stats_team_form: { MP: "11" } },
+  ];
+
+  /* "GA Eagles" vs "Go Ahead Eagles": token "ga" tidak pernah subset dari
+     "go ahead", jadi tanpa alias eksplisit tim ini selalu dianggap baru. */
+  assert.equal(teamNamesEquivalent("Go Ahead Eagles", "GA Eagles", "netherlands-eredivisie"), true);
+  assert.equal(teamNamesEquivalent("FC Twente", "Enschede", "netherlands-eredivisie"), true);
+  assert.equal(teamNamesEquivalent("FC Twente", "FC Twente Enschede", "netherlands-eredivisie"), true);
+  assert.equal(findEquivalentTeamStatsRows(rows, "Go Ahead Eagles", "netherlands-eredivisie").length, 1);
+  assert.equal(findEquivalentTeamStatsRows(rows, "FC Twente", "netherlands-eredivisie").length, 1);
+  /* Alias tidak boleh bocor ke liga lain. */
+  assert.equal(teamNamesEquivalent("Go Ahead Eagles", "GA Eagles", "england-premier-league"), false);
+});
+
 test("one-word aliases shared by multiple teams stay ambiguous", () => {
   const rows = [
     { team_name: "Manchester United", league_slug: "england-premier-league", season: "2025-26", stats_xg: { xG: "1.5" } },
