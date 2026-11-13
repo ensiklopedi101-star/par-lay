@@ -330,3 +330,62 @@ export function resolveMarketOdds(
 
   return result("verified", "Odds provider cocok dengan market, sisi pilihan, line, dan batas freshness.", common);
 }
+
+export interface LedgerMarketKey {
+  /** Format kunci yang dipakai `parseMarketKey` / settlement (`ML:home`, `TOT:over:2.5`, …). */
+  key: string;
+  family: "ML" | "Totals" | "AH" | "BTTS";
+  /** Nilai kolom `prediction_selections.line` — garis kunci, bukan garis label. */
+  line: number | null;
+}
+
+/**
+ * Peta label market (mis. "Asian Handicap Away -0.25") → `market_key` yang
+ * dipahami settlement. Aturan:
+ *
+ *  - HT ditolak: `parseMarketKey` tidak mengenal kunci HT, jadi barisnya tidak
+ *    akan pernah bisa di-settle — menulisnya hanya memproduksi baris macet.
+ *  - Totals/AH wajib punya line; tanpa line kita tidak menebak.
+ *  - AH memakai konvensi garis kandang: provider line = garis kandang, dan
+ *    sisi tandang menyimpan kebalikannya (`AH:home:L` / `AH:away:-L`) — sama
+ *    persis dengan yang ditulis engine kuant dan yang diharapkan
+ *    `outcomeOfMarket`. `resolution.matchedLine` (garis provider) diutamakan
+ *    atas garis label; keduanya hanya bisa beda bila odds tidak verified,
+ *    dan hanya odds verified yang boleh masuk ledger.
+ *
+ * Mengembalikan null bila label tidak bisa dipetakan tanpa menebak — pemanggil
+ * wajib melewatinya, bukan mengisi kunci karangan.
+ */
+export function ledgerMarketKey(
+  market: string,
+  teams: { homeTeam?: string; awayTeam?: string } = {},
+  resolution?: Pick<MarketOddsResolution, "line" | "matchedLine"> | null,
+): LedgerMarketKey | null {
+  const selection = parseSelection(market, teams.homeTeam, teams.awayTeam);
+  if (!selection || !selection.side) return null;
+  if (selection.marketType === "HT") return null;
+
+  const providerLine = resolution?.matchedLine ?? resolution?.line ?? selection.line;
+
+  switch (selection.marketType) {
+    case "ML":
+      if (selection.side !== "home" && selection.side !== "draw" && selection.side !== "away") return null;
+      return { key: `ML:${selection.side}`, family: "ML", line: null };
+    case "BTTS":
+      if (selection.side !== "yes" && selection.side !== "no") return null;
+      return { key: `BTTS:${selection.side}`, family: "BTTS", line: null };
+    case "Totals": {
+      if (providerLine == null) return null;
+      if (selection.side !== "over" && selection.side !== "under") return null;
+      return { key: `TOT:${selection.side}:${providerLine}`, family: "Totals", line: providerLine };
+    }
+    case "AH": {
+      if (providerLine == null) return null;
+      if (selection.side !== "home" && selection.side !== "away") return null;
+      const keyLine = selection.side === "away" ? -providerLine : providerLine;
+      return { key: `AH:${selection.side}:${keyLine}`, family: "AH", line: keyLine };
+    }
+    default:
+      return null;
+  }
+}

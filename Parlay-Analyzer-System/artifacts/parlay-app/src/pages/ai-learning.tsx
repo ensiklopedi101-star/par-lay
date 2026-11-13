@@ -1,6 +1,7 @@
 import { BrainCircuit } from "lucide-react";
 import AILearningTransparency from "@/components/ai-learning-transparency";
 import LearningLoopControls from "@/components/learning-loop-controls";
+import { LedgerReportPanel } from "@/components/ledger-report-panel";
 
 export default function AILearning() {
   return (
@@ -16,6 +17,7 @@ export default function AILearning() {
         </p>
       </div>
       <LearningLoopControls />
+      <LedgerReportPanel />
       <AILearningTransparency />
     </div>
   );

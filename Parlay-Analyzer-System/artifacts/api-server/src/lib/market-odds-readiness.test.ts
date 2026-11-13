@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ledgerMarketKey,
   normalizeStructuredMarketSelection,
   resolveMarketOdds,
   type MarketOddsSnapshot,
@@ -139,4 +140,63 @@ test("unrecognized selection fails closed", () => {
   );
   assert.equal(result.status, "unsupported");
   assert.equal(result.odds, null);
+});
+
+/* ─── ledgerMarketKey — kunci baris prediction_selections (P3) ─── */
+
+test("ledgerMarketKey: ML tanpa garis termasuk hasil seri", () => {
+  assert.deepEqual(ledgerMarketKey("Home Win"), { key: "ML:home", family: "ML", line: null });
+  assert.deepEqual(ledgerMarketKey("Draw"), { key: "ML:draw", family: "ML", line: null });
+  assert.deepEqual(ledgerMarketKey("Away Win"), { key: "ML:away", family: "ML", line: null });
+});
+
+test("ledgerMarketKey: label tanpa nomor yang dikenal mengembalikan null", () => {
+  assert.equal(ledgerMarketKey("No Bet"), null);
+  assert.equal(ledgerMarketKey("Over Goals"), null, "totals tanpa line tidak boleh dipetakan");
+  assert.equal(ledgerMarketKey("Value pick"), null);
+});
+
+test("ledgerMarketKey: HT ditolak — settlement tidak mengenal kunci HT", () => {
+  assert.equal(ledgerMarketKey("HT Home"), null);
+  assert.equal(ledgerMarketKey("First Half Home"), null);
+  assert.equal(ledgerMarketKey("1X2 HT Away"), null);
+});
+
+test("ledgerMarketKey: Totals memakai garis provider (matchedLine diutamakan)", () => {
+  assert.deepEqual(ledgerMarketKey("Over 2.5 Goals"), {
+    key: "TOT:over:2.5",
+    family: "Totals",
+    line: 2.5,
+  });
+  assert.deepEqual(
+    ledgerMarketKey("Under 3.5 Goals", {}, { line: 3.5, matchedLine: 3.5 }),
+    { key: "TOT:under:3.5", family: "Totals", line: 3.5 },
+  );
+  /* matchedLine (garis snapshot provider) menang atas garis label bila keduanya
+   * berbeda — kunci baris harus selaras dengan harga yang benar-benar diambil. */
+  assert.deepEqual(
+    ledgerMarketKey("Over 2.5 Goals", {}, { line: 2.5, matchedLine: 2.75 }),
+    { key: "TOT:over:2.75", family: "Totals", line: 2.75 },
+  );
+});
+
+test("ledgerMarketKey: AH away menegasi garis provider (konvensi garis kandang)", () => {
+  /* Provider hdp -0.25 = garis kandang. Kunci engine: AH:away:-(-0.25) = +0.25. */
+  assert.deepEqual(
+    ledgerMarketKey("Asian Handicap Away -0.25", {}, { line: -0.25, matchedLine: -0.25 }),
+    { key: "AH:away:0.25", family: "AH", line: 0.25 },
+  );
+  assert.deepEqual(
+    ledgerMarketKey("Asian Handicap Home -0.25", {}, { line: -0.25, matchedLine: -0.25 }),
+    { key: "AH:home:-0.25", family: "AH", line: -0.25 },
+  );
+});
+
+test("ledgerMarketKey: AH tanpa garis tidak boleh dipetakan", () => {
+  assert.equal(ledgerMarketKey("Asian Handicap Home"), null);
+});
+
+test("ledgerMarketKey: BTTS tanpa garis", () => {
+  assert.deepEqual(ledgerMarketKey("BTTS Yes"), { key: "BTTS:yes", family: "BTTS", line: null });
+  assert.deepEqual(ledgerMarketKey("BTTS No"), { key: "BTTS:no", family: "BTTS", line: null });
 });

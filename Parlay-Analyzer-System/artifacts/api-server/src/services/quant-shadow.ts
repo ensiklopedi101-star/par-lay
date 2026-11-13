@@ -30,7 +30,12 @@ export interface ShadowLogInput {
   structuredOdds: StructuredOddsInput;
   /** Raw LLM news output; sanitised into a ±12% λ adjustment or dropped. */
   llmAdjustment?: unknown;
-  /** Marks the selection the engine would actually have staked. */
+  /**
+   * Marks the selection the engine would actually have staked. Defaults to
+   * the engine's own decision (`decision === "BET"` → `best.key`) when
+   * omitted — callers that don't know the engine's pick still get an honest
+   * `was_bet` column.
+   */
   betMarketKey?: string | null;
 }
 
@@ -96,6 +101,13 @@ export async function shadowLogQuantAnalysis(input: ShadowLogInput): Promise<Sha
     }
 
     const analysedAt = new Date().toISOString();
+    /* Selection yang benar-benar akan di-stake: preferensi pemanggil, kalau
+     * tidak ada — keputusan engine sendiri (`decision: "BET"` ⇔ best != null).
+     * Tanpa default ini `was_bet` selalu false dan settlement-summary
+     * melaporkan 0 taruhan walau engine sudah memilih. */
+    const betKey =
+      input.betMarketKey ??
+      (result.analysis.decision === "BET" ? (result.analysis.best?.key ?? null) : null);
     const rows = result.analysis.selections.map((s) => ({
       fixture_id: String(input.fixtureId),
       analysed_at: analysedAt,
@@ -109,7 +121,7 @@ export async function shadowLogQuantAnalysis(input: ShadowLogInput): Promise<Sha
       p_model_only: s.pModelOnly,
       ev: s.ev,
       ev_conservative: s.evConservative,
-      was_bet: input.betMarketKey != null && input.betMarketKey === s.key,
+      was_bet: betKey != null && betKey === s.key,
       bookmaker: result.bookmaker,
     }));
 
