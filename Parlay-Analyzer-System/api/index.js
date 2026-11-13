@@ -54529,7 +54529,97 @@ var init_team_name_cleaner = __esm({
         /* Nama tersimpan di DB hanya "Enschede" (bukan "FC Twente Enschede"). */
         enschede: "FC Twente Enschede",
         "go ahead eagles": "GA Eagles",
-        "ga eagles": "GA Eagles"
+        "ga eagles": "GA Eagles",
+        /* Nama panjang FootyStats vs nama pendek yang sudah tersimpan: tanpa
+           alias ini AZ/NEC/Ajax/dll. terpecah jadi dua baris per musim. */
+        az: "AZ",
+        alkmaar: "AZ",
+        "alkmaar zaanstreek": "AZ",
+        nec: "NEC",
+        nijmegen: "NEC",
+        "nijmegen eendracht combinatie": "NEC",
+        ajax: "Ajax",
+        "ajax amsterdam": "Ajax",
+        feyenoord: "Feyenoord",
+        "feyenoord rotterdam": "Feyenoord",
+        sparta: "Sparta",
+        "sparta rotterdam": "Sparta",
+        excelsior: "Excelsior",
+        "sbv excelsior": "Excelsior",
+        cambuur: "Cambuur",
+        "cambuur leeuwarden": "Cambuur",
+        "willem ii": "Willem II",
+        "willem ii tilburg": "Willem II",
+        "hfc ado den haag": "ADO Den Haag"
+      },
+      /* Ligue 1: FootyStats mengirim nama resmi panjang ("Stade Rennais",
+         "Olympique Lyonnais", "Association Jeunesse Auxerroise") sementara
+         impor lain memakai nama pendek. Keduanya lolos uji token-ekuivalen
+         (rennes ≠ rennais, lyon ≠ lyonnais) sehingga satu klub tersimpan dua
+         kali — kasus "Rennes ganda" yang ditemukan 13 Nov 2026. */
+      "france-ligue-1": {
+        rennes: "Rennes",
+        "stade rennais": "Rennes",
+        lyon: "Lyon",
+        "olympique lyonnais": "Lyon",
+        auxerre: "Auxerre",
+        "association jeunesse auxerroise": "Auxerre",
+        angers: "Angers SCO",
+        "angers sco": "Angers SCO",
+        "angers sporting club de l ouest": "Angers SCO",
+        "stade brest 29": "Stade Brest 29",
+        "stade brestois 29": "Stade Brest 29",
+        lille: "Lille",
+        "lille osc metropole": "Lille",
+        nice: "Nice",
+        "ogc nice cote d azur": "Nice",
+        lens: "Lens",
+        "racing club de lens": "Lens",
+        "strasbourg alsace": "Strasbourg Alsace",
+        "rc strasbourg alsace": "Strasbourg Alsace",
+        troyes: "Troyes",
+        "esperance sportive troyes aube champagne": "Troyes",
+        marseille: "Marseille",
+        "olympique de marseille": "Marseille"
+      },
+      "italy-serie-a": {
+        inter: "Inter",
+        "internazionale milano": "Inter",
+        atalanta: "Atalanta",
+        "atalanta bergamasca": "Atalanta",
+        bologna: "Bologna",
+        "bologna fc 1909": "Bologna",
+        Genoa: "Genoa",
+        "genoa cfc": "Genoa",
+        parma: "Parma",
+        "parma calcio": "Parma",
+        "parma calcio 1913": "Parma",
+        lazio: "Lazio",
+        "ss lazio": "Lazio",
+        fiorentina: "Fiorentina",
+        "acf fiorentina": "Fiorentina",
+        monza: "Monza",
+        "ss monza 1912": "Monza"
+      },
+      "spain-laliga": {
+        "rc celta de vigo": "RC Celta de Vigo",
+        "celta de vigo": "RC Celta de Vigo",
+        "real club celta de vigo": "RC Celta de Vigo",
+        espanyol: "RCD Espanyol",
+        "rcd espanyol": "RCD Espanyol",
+        "reial club deportiu espanyol": "RCD Espanyol",
+        Getafe: "Getafe",
+        "getafe club de futbol": "Getafe",
+        "real betis": "Real Betis",
+        "real betis balompie": "Real Betis",
+        "real sociedad": "Real Sociedad",
+        "real sociedad de futbol": "Real Sociedad",
+        "racing santander": "Racing Santander",
+        "real racing club de santander": "Racing Santander",
+        "deportivo la coruna": "Deportivo La Coruna",
+        "real club deportivo de la coruna": "Deportivo La Coruna",
+        osasuna: "Osasuna",
+        "ca osasuna": "Osasuna"
       }
     };
     GLOBAL_TEAM_ALIASES = {
@@ -86866,6 +86956,23 @@ router8.post("/stats/ingest", requireApiKey, async (req, res) => {
       }
       existingStatsRows.push(...loadedRows ?? []);
     }
+    const isCupLeague = (slug) => slug.startsWith("uefa-") || slug.startsWith("international-");
+    const foreignTeamLeagues = /* @__PURE__ */ new Map();
+    if (!isCupLeague(leagueSlug)) {
+      const { data: foreignRows, error: foreignError } = await supabase.from("team_season_stats").select("team_name, league_slug").eq("season", normalizedSeason).neq("league_slug", leagueSlug).limit(1e3);
+      if (foreignError) {
+        logger.warn({ foreignError }, "STATS INGEST: penjaga lintas-liga dilewati (lookup gagal)");
+      } else {
+        for (const row of foreignRows ?? []) {
+          const foreignSlug = String(row.league_slug ?? "");
+          if (!foreignSlug || isCupLeague(foreignSlug)) continue;
+          const foreignName = String(row.team_name ?? "");
+          for (const key of [teamIdentityKey(foreignName), teamIdentityKey(foreignName, foreignSlug)]) {
+            if (key && !foreignTeamLeagues.has(key)) foreignTeamLeagues.set(key, foreignSlug);
+          }
+        }
+      }
+    }
     const results = [];
     for (const team of teams) {
       const rawNameValue = team.raw_team_name ?? team.team_name ?? team.teamName ?? team.name ?? team.team;
@@ -86900,6 +87007,16 @@ router8.post("/stats/ingest", requireApiKey, async (req, res) => {
           success: false,
           error: `data tidak cocok untuk ${statType}: metrik ${validation.missing.join(", ")} tidak ada`,
           warnings: [`tidak ditulis \u2014 periksa deteksi stat_type di ekstensi`]
+        });
+        continue;
+      }
+      const foreignLeague = [teamIdentityKey(rawName), teamIdentityKey(rawName, leagueSlug)].map((key) => foreignTeamLeagues.get(key)).find(Boolean);
+      if (foreignLeague) {
+        results.push({
+          team: rawName,
+          success: false,
+          error: `tim sudah terdaftar di liga "${foreignLeague}" musim ${normalizedSeason} \u2014 kemungkinan pemilih liga di ekstensi salah (payload mengklaim "${leagueSlug}")`,
+          warnings: ["tidak ditulis \u2014 periksa liga terpilih di ekstensi"]
         });
         continue;
       }
