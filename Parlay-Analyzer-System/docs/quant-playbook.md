@@ -208,8 +208,17 @@ ada bukti berarti memindahkan risiko dari "tidak pernah bertaruh" ke "bertaruh t
 dasar". Setelah ~50 seleksi terkumpul, bandingkan `p_final` vs hasil nyata (Brier),
 lalu naikkan ke `enforced`.
 
-Yang **belum** dikerjakan: menulis `prediction_selections` dari jalur LLM (P3) dan
-menaikkan gerbang ke `enforced` (P1). Keduanya menunggu data bayangan di atas.
+Yang **sudah** dikerjakan (P3): jalur LLM kini menulis `prediction_selections`
+dengan `model_version = 1` — hanya bila odds provider `verified`, `p_final`
+terisi, dan label terpetakan ke kunci yang dikenal settlement; seleksi yang
+ditolak kebijakan pun tercatat (`was_bet = false`) supaya tingkat penolakan
+bisa diaudit. Laporan Brier/BSS/ECE + CLV tersedia di `GET /learning/ledger`
+(panel "Laporan Ledger & Kalibrasi" di halaman AI Learning): kalibrasi atas
+**semua** baris, ROI/vonis hanya atas baris `was_bet` (ROI "semua baris" akan
+memicu vonis refuted palsu karena overround).
+
+Yang **belum** dikerjakan: menaikkan gerbang ke `enforced` (P1) — menunggu
+~50 seleksi terkumpul di ledger yang kini terisi.
 
 ## 9. Pagar yang tidak boleh dilanggar
 

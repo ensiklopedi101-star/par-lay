@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { getLearningSummary } from "../services/learning-summary";
+import { buildLedgerReport } from "../services/ledger-report";
 import { requireAdmin } from "../middlewares/admin";
 import {
   backfillSettledPredictionEvaluations,
@@ -25,6 +26,22 @@ router.get("/learning/summary", async (_req, res) => {
   } catch (error) {
     logger.error({ error }, "[LEARNING] Failed to build transparent learning summary");
     res.status(500).json({ error: "Failed to load AI learning summary" });
+  }
+});
+
+/**
+ * GET /learning/ledger — laporan ledger & kalibrasi (P3, playbook §8).
+ *
+ * Publik seperti `/learning/summary`: hanya agregat yang keluar, tanpa
+ * baris mentah per market. Dua pandangan: `all` (kalibrasi Brier/BSS/ECE +
+ * CLV atas SEMUA baris) dan `bets` (ROI + vonis atas baris `was_bet` saja).
+ */
+router.get("/learning/ledger", async (_req, res) => {
+  try {
+    res.json(await buildLedgerReport());
+  } catch (error) {
+    logger.error({ error }, "[LEARNING] Failed to build ledger report");
+    res.status(500).json({ error: "Failed to load ledger report" });
   }
 });
 

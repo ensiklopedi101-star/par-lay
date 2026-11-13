@@ -31,6 +31,7 @@ import {
 import type { LeagueAverages } from "../lib/quant/strength";
 import { getGeminiModel } from "./model-discovery";
 import { shadowLogQuantAnalysis } from "./quant-shadow";
+import { logLLMSelection } from "./llm-ledger";
 import { classifyOddsMarket } from "./odds-fetcher";
 import { getActiveLearningPromptVersion } from "./prompt-learning";
 import {
@@ -2057,6 +2058,37 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
      logger.error({ insertError, fixtureId }, "Failed to save prediction");
      throw new Error(`Failed to save AI prediction: ${insertError.message}`);
    }
+
+  /*
+   * P3 — ledger jalur LLM (playbook §8b): catat pilihan LLM ke
+   * `prediction_selections` dengan model_version = 1, di samping baris
+   * bayangan engine (v2). Syarat ketat ada di dalam `logLLMSelection`:
+   * odds provider verified, p_final terisi, market terpetakan — dan semua
+   * kegagalan ditelan supaya ledger tidak pernah menggagalkan analisis.
+   * `was_bet` = lolos gerbang (`readinessStatus === "bet_ready"`), sehingga
+   * seleksi yang ditolak kebijakan pun tercatat untuk audit kalibrasi.
+   * Guard persist sama: reanalysis (`persistPrediction:false`) tidak boleh
+   * menimpa catatan out-of-sample.
+   */
+  if (context?.persistPrediction !== false) {
+    const logged = await logLLMSelection({
+      fixtureId,
+      analysedAt: analyzedAt,
+      marketLabel: parsedRecommendation.marketBet,
+      homeTeam,
+      awayTeam,
+      oddsMatch,
+      pFinal,
+      marketFairProbability,
+      pModelOnly,
+      modelEv,
+      modelEvConservative,
+      wasBet: readinessStatus === "bet_ready",
+    });
+    if (logged) {
+      logger.info({ fixtureId, market: parsedRecommendation.marketBet }, "[AI-ANALYSIS] Pilihan LLM tercatat di ledger");
+    }
+  }
 
   /*
    * Shadow-run the deterministic quant engine on the same fixture.

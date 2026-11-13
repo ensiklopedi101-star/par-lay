@@ -953,6 +953,77 @@ export function useGetLearningSummary() {
   });
 }
 
+/* ─── Laporan Ledger & Kalibrasi (P3 — playbook §8) ─── */
+
+/** Bin kalibrasi satu rentang probabilitas. */
+export interface LedgerCalibrationBin {
+  label: string;
+  n: number;
+  meanPredicted: number;
+  observed: number;
+}
+
+/**
+ * Laporan ledger — lihat `services/ledger-report.ts`.
+ *
+ * `all` = SEMUA baris: hanya kalibrasi (Brier/BSS/ECE) + CLV, tanpa ROI/vonis
+ * (ROI "taruh semua baris" akan memicu vonis refuted palsu karena overround).
+ * `bets` = baris `was_bet` saja: ROI + vonis dari himpunan yang jujur.
+ * `null` pada salah satunya berarti himpunan itu kosong — bukan nol.
+ */
+export interface LedgerReport {
+  counts: { total: number; withOutcome: number; withClosingOdds: number; wasBet: number };
+  all: {
+    scores: {
+      n: number;
+      brierModel: number;
+      brierMarket: number | null;
+      logLossModel: number;
+      logLossMarket: number | null;
+      /** 1 − LL_model/LL_market; > 0 model mengalahkan pasar. */
+      skillVsMarket: number | null;
+    } | null;
+    calibration: LedgerCalibrationBin[];
+    clv: {
+      n: number;
+      mean: number;
+      ci: { lo: number; hi: number; pLeZero: number };
+      positiveRate: number;
+      tStat: number;
+      fairBasedShare: number;
+    } | null;
+    /** 1 − brierModel/brierMarket; > 0 model mengalahkan pasar pada Brier. */
+    brierSkill: number | null;
+    /** Σ (nᵢ/N)·|meanPᵢ − observedᵢ| — makin kecil makin kalibrasi. */
+    ece: number | null;
+  } | null;
+  bets: {
+    n: number;
+    nSettled: number;
+    profit: number;
+    staked: number;
+    roi: number | null;
+    roiCI: { lo: number; hi: number; pLeZero: number } | null;
+    hitRate: number | null;
+    avgOdds: number | null;
+    avgClaimedEv: number | null;
+    betsNeeded: number | null;
+    verdict: { level: "insufficient" | "early" | "supported" | "refuted"; headline: string; reasons: string[] };
+  } | null;
+  /** Penjelasan jujur apa yang belum bisa dihitung dan kenapa. */
+  notes: string[];
+  generatedAt: string;
+}
+
+export const getLedgerReportQueryKey = () => ["learning/ledger"];
+export function useGetLedgerReport() {
+  return useQuery<LedgerReport>({
+    queryKey: getLedgerReportQueryKey(),
+    queryFn: () => apiGet<LedgerReport>(`${API_BASE}/learning/ledger`),
+    refetchInterval: 120_000,
+  });
+}
+
 export interface LearningPolicyView {
   minConfidence: number;
   minEvPercent: number;
