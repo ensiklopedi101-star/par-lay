@@ -9,6 +9,8 @@ import { buildSettlementSummary } from "../services/settlement-summary";
 import { buildAutomationStatus } from "../services/automation-status";
 import { STALE_SYNC_RUN_SECONDS } from "../services/sync-runs";
 import { explainInsertRatio } from "../lib/sync-run-explain";
+import { DEFAULT_SYSTEM_INSTRUCTION } from "../services/ai-analysis";
+import { V5_CONTRACT_SUFFIX } from "../lib/quant/llm-contract";
 
 /**
  * ─── Transparansi sync ────────────────────────────────────────────────────
@@ -175,6 +177,8 @@ router.get("/catalog", (_req, res) => {
 router.get("/config", async (_req, res) => {
   try {
     const cfg = await getOrCreateConfig();
+    const storedPersona = typeof cfg.ai_persona === "string" ? cfg.ai_persona : "";
+    const usesStoredPersona = storedPersona.trim().length > 20;
     res.json({
       id: cfg.id,
       leagues: cfg.leagues,
@@ -184,6 +188,13 @@ router.get("/config", async (_req, res) => {
       scanDays: Number(cfg.scan_days ?? 11),
       aiPersona: cfg.ai_persona ?? null,
       agentInstructions: cfg.agent_instructions ?? null,
+      /* Persona yang benar-benar berjalan tidak selalu sama dengan isi kolom
+         DB: DB kosong/singkat memakai fallback kode, lalu instruksi tambahan
+         dan Kontrak V5 selalu ditempel terakhir oleh ai-analysis. Settings
+         harus menampilkan rantai efektif ini, bukan menebak label versi lama. */
+      effectiveAiPersona: usesStoredPersona ? storedPersona : DEFAULT_SYSTEM_INSTRUCTION,
+      personaSource: usesStoredPersona ? "database" : "default",
+      v5ContractSuffix: V5_CONTRACT_SUFFIX.trim(),
       updatedAt: cfg.updated_at ?? null,
     });
   } catch (err) {

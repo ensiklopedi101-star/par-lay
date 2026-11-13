@@ -67,70 +67,71 @@
 }
 
 :root {
-  --button-outline: rgba(255,255,255, .10);
-  --badge-outline: rgba(255,255,255, .05);
+  --button-outline: rgba(15, 23, 42, .08);
+  --badge-outline: rgba(15, 23, 42, .06);
   --opaque-button-border-intensity: 9;
-  --elevate-1: rgba(255,255,255, .04);
-  --elevate-2: rgba(255,255,255, .09);
+  --elevate-1: rgba(15, 23, 42, .03);
+  --elevate-2: rgba(15, 23, 42, .06);
 
-  /* Defaulting to dark mode as requested */
-  --background: 240 10% 4%;
-  --foreground: 0 0% 98%;
-  --border: 240 10% 15%;
-  --input: 240 10% 15%;
-  --ring: 142 71% 45%;
+  /* Tema terang profesional: latar abu-biru sangat muda, permukaan putih,
+     teks slate gelap, dan aksen teal yang tenang. Tidak ada mode hitam. */
+  --background: 216 33% 97%;
+  --foreground: 222 47% 11%;
+  --border: 214 32% 88%;
+  --input: 214 32% 84%;
+  --ring: 174 72% 32%;
 
-  --card: 240 10% 6%;
-  --card-foreground: 0 0% 98%;
-  --card-border: 240 10% 12%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --card-border: 214 32% 88%;
 
-  --popover: 240 10% 6%;
-  --popover-foreground: 0 0% 98%;
-  --popover-border: 240 10% 12%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --popover-border: 214 32% 88%;
 
-  --primary: 142 71% 45%;
-  --primary-foreground: 144 100% 10%;
+  --primary: 174 72% 30%;
+  --primary-foreground: 0 0% 100%;
 
-  --secondary: 240 10% 15%;
-  --secondary-foreground: 0 0% 98%;
+  --secondary: 214 32% 93%;
+  --secondary-foreground: 222 47% 16%;
 
-  --muted: 240 10% 12%;
-  --muted-foreground: 240 5% 65%;
+  --muted: 216 33% 94%;
+  --muted-foreground: 215 16% 42%;
 
-  --accent: 240 10% 15%;
-  --accent-foreground: 0 0% 98%;
+  --accent: 214 45% 92%;
+  --accent-foreground: 222 47% 16%;
 
-  --destructive: 0 84% 60%;
-  --destructive-foreground: 0 0% 98%;
+  --destructive: 0 72% 48%;
+  --destructive-foreground: 0 0% 100%;
 
-  --chart-1: 142 71% 45%;
-  --chart-2: 217 91% 60%;
-  --chart-3: 35 100% 55%;
-  --chart-4: 280 65% 60%;
-  --chart-5: 340 75% 55%;
+  --chart-1: 174 72% 34%;
+  --chart-2: 217 82% 50%;
+  --chart-3: 35 92% 45%;
+  --chart-4: 262 60% 55%;
+  --chart-5: 340 70% 50%;
 
-  --sidebar: 240 10% 4%;
-  --sidebar-foreground: 240 5% 65%;
-  --sidebar-border: 240 10% 12%;
-  --sidebar-primary: 142 71% 45%;
-  --sidebar-primary-foreground: 144 100% 10%;
-  --sidebar-accent: 240 10% 12%;
-  --sidebar-accent-foreground: 0 0% 98%;
-  --sidebar-ring: 142 71% 45%;
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 215 18% 34%;
+  --sidebar-border: 214 32% 88%;
+  --sidebar-primary: 174 72% 30%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 174 45% 92%;
+  --sidebar-accent-foreground: 174 72% 24%;
+  --sidebar-ring: 174 72% 32%;
 
-  --app-font-sans: 'Inter', system-ui, sans-serif;
+  --app-font-sans: 'Inter', system-ui, -apple-system, "Segoe UI", sans-serif;
   --app-font-serif: Georgia, serif;
   --app-font-mono: 'JetBrains Mono', Menlo, monospace;
-  --radius: 0.25rem;
+  --radius: 0.75rem;
 
-  --shadow-2xs: 0px 1px 2px 0px rgba(0,0,0,0.4);
-  --shadow-xs: 0px 1px 3px 0px rgba(0,0,0,0.5);
-  --shadow-sm: 0px 2px 4px 0px rgba(0,0,0,0.5);
-  --shadow: 0px 4px 6px -1px rgba(0,0,0,0.5);
-  --shadow-md: 0px 6px 8px -1px rgba(0,0,0,0.5);
-  --shadow-lg: 0px 10px 15px -3px rgba(0,0,0,0.5);
-  --shadow-xl: 0px 20px 25px -5px rgba(0,0,0,0.5);
-  --shadow-2xl: 0px 25px 50px -12px rgba(0,0,0,0.5);
+  --shadow-2xs: 0px 1px 2px 0px rgba(15,23,42,0.04);
+  --shadow-xs: 0px 1px 3px 0px rgba(15,23,42,0.05);
+  --shadow-sm: 0px 1px 3px 0px rgba(15,23,42,0.06), 0px 1px 2px -1px rgba(15,23,42,0.06);
+  --shadow: 0px 4px 10px -2px rgba(15,23,42,0.07);
+  --shadow-md: 0px 8px 16px -4px rgba(15,23,42,0.09);
+  --shadow-lg: 0px 16px 28px -8px rgba(15,23,42,0.12);
+  --shadow-xl: 0px 24px 40px -12px rgba(15,23,42,0.14);
+  --shadow-2xl: 0px 32px 56px -16px rgba(15,23,42,0.16);
 
   --tracking-normal: 0em;
   --spacing: 0.25rem;
@@ -145,7 +146,8 @@
 }
 
 .dark {
-  /* Same as root because we are enforcing dark mode */
+  /* Aplikasi ini sengaja hanya memiliki tema terang agar konsisten,
+     terbaca jelas, dan tidak kembali ke tampilan hitam/terminal. */
 }
 
 @layer base {

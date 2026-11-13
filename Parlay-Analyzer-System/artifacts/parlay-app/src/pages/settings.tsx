@@ -463,7 +463,7 @@ export default function SettingsPage() {
             {personaExpanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
           </div>
           <CardDescription className="text-xs text-muted-foreground">
-            Ubah cara Gemini berpikir dan apa yang harus diperhatikannya. Kosongkan untuk pakai default (Quant Sniper v3).
+            Lihat persona efektif yang benar-benar berjalan saat ini. Kolom DB boleh dikosongkan; sistem akan memakai fallback kode Quant Sniper v4, lalu selalu menempel Kontrak V5 di akhir.
           </CardDescription>
         </CardHeader>
 
@@ -471,25 +471,50 @@ export default function SettingsPage() {
           <CardContent className="space-y-6">
             <div className="space-y-2">
               <Label htmlFor="ai-persona" className="flex items-center gap-1.5">
-                Persona Gemini
+                Persona dasar Gemini (dapat diedit)
                 <span className="text-xs font-normal text-muted-foreground">(System Instruction)</span>
               </Label>
-              <p className="text-xs text-muted-foreground">
-                Ini adalah "kepribadian" dan aturan analisis yang dipakai Gemini setiap kali Anda klik <strong>Analisis Sekarang (AI)</strong>.
-                Jika dikosongkan, sistem akan memakai default Quant Sniper v3.
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Ini adalah persona dasar yang disimpan di database. Jika kosong, persona efektif berasal dari fallback kode.
+                Apa pun sumbernya, urutan akhirnya selalu: persona dasar → instruksi tambahan → addendum learning aktif → <strong>Kontrak V5</strong>.
               </p>
+              <div className="rounded-xl border border-primary/25 bg-primary/5 p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="secondary">Persona efektif saat ini</Badge>
+                  <Badge variant="outline">{config?.personaSource === "database" ? "Sumber: database Settings" : "Sumber: fallback kode Quant Sniper v4"}</Badge>
+                  <Badge variant="outline">Kontrak V5 selalu terakhir</Badge>
+                </div>
+                <Textarea
+                  value={config?.effectiveAiPersona ?? ""}
+                  readOnly
+                  rows={12}
+                  className="mt-3 resize-y bg-white font-mono text-xs"
+                  aria-label="Persona efektif yang sedang berjalan"
+                />
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Kolom di atas read-only karena mencerminkan gabungan sumber yang sedang aktif. Untuk mengubah persona dasar, edit kolom berikutnya lalu simpan.
+                </p>
+                {config?.v5ContractSuffix && (
+                  <details className="mt-3 rounded-lg border border-border bg-white p-3">
+                    <summary className="cursor-pointer text-xs font-semibold">Lihat Kontrak V5 yang selalu ditempel terakhir</summary>
+                    <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">{config.v5ContractSuffix}</pre>
+                  </details>
+                )}
+              </div>
               <Textarea
                 id="ai-persona"
                 value={aiPersona}
                 onChange={(e) => setAiPersona(e.target.value)}
-                placeholder={`Anda adalah Quant Sniper, AI Analis Kuantitatif level elit...\n\n(Kosongkan untuk pakai default)`}
+                placeholder={`Kosongkan untuk memakai fallback kode Quant Sniper v4.\n\nTulis persona dasar kustom di sini hanya bila memang ingin mengganti fallback tersebut.`}
                 rows={10}
                 className="font-mono text-xs resize-y"
               />
               <p className="text-xs text-muted-foreground">
-                {aiPersona.length > 0
-                  ? `${aiPersona.length} karakter — persona kustom aktif`
-                  : "Menggunakan persona default (Quant Sniper v3)"}
+                {aiPersona.trim().length > 20
+                  ? `${aiPersona.length} karakter — persona database akan aktif setelah disimpan`
+                  : aiPersona.length > 0
+                    ? "Terlalu singkat (≤20 karakter) — runtime akan tetap memakai fallback Quant Sniper v4"
+                    : "Menggunakan fallback kode Quant Sniper v4 + Kontrak V5"}
               </p>
             </div>
 

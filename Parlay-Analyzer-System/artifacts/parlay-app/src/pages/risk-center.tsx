@@ -266,7 +266,7 @@ function PredictionCard({
   );
 }
 
-export default function RiskCenter() {
+export default function RiskCenter({ embedded = false }: { embedded?: boolean } = {}) {
   const { data: predictions = [], isLoading, isError, refetch, isFetching } = usePredictionBoard();
   const recordManualResult = useRecordManualPredictionResult();
   const { open: adminDialogOpen, withPassword, onSubmit, onCancel } = useAdminPassword();
@@ -418,7 +418,7 @@ export default function RiskCenter() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
+        {!embedded && (<div>
           <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary">
             <BrainCircuit className="h-4 w-4" />
             AI decision workspace
@@ -434,7 +434,7 @@ export default function RiskCenter() {
             Pilihan AI memerlukan market, odds, dan probabilitas yang valid. Pilih otomatis menyusun maksimal 4 leg yang memenuhi syarat
             untuk Anda tinjau; parlay tidak dibuat atau dipasang otomatis.
           </p>
-        </div>
+        </div>)}
         <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"

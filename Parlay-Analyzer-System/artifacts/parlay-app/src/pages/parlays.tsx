@@ -350,7 +350,7 @@ function PredictionQueue({
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline">
               <Link href="/risk-center">
-                Kembali ke Prediction Board
+                Kembali ke Prediksi AI
                 <ArrowRight className="h-4 w-4" />
               </Link>
             </Button>
@@ -365,10 +365,10 @@ function PredictionQueue({
         {totalLegs === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-6 text-center">
             <p className="text-sm text-muted-foreground">
-              Belum ada pertandingan di shortlist. Pilih checkbox pada AI Prediction Board untuk memulai.
+              Belum ada pertandingan di shortlist. Pilih checkbox pada tab Prediksi AI untuk memulai.
             </p>
             <Button asChild variant="outline" size="sm" className="mt-4">
-              <Link href="/risk-center">Buka AI Prediction Board</Link>
+              <Link href="/risk-center">Buka Prediksi AI</Link>
             </Button>
           </div>
         ) : (
@@ -441,7 +441,7 @@ function PredictionQueue({
   );
 }
 
-export default function Parlays() {
+export default function Parlays({ embedded = false }: { embedded?: boolean } = {}) {
   const { data: parlays, isLoading, error } = useListSupabaseParlays();
   const { data: predictions = [] } = usePredictionBoard();
   const [selectedParlay, setSelectedParlay] = useState<Parlay | null>(null);
@@ -537,12 +537,14 @@ export default function Parlays() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Parlays</h1>
-         <p className="text-muted-foreground">
-           Final workspace untuk meninjau shortlist dari AI Prediction Board, membuat parlay, dan memeriksa histori WIN/LOSS.
-         </p>
-      </div>
+      {!embedded && (
+        <div className="flex flex-col gap-2">
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Parlays</h1>
+          <p className="text-muted-foreground">
+            Final workspace untuk meninjau shortlist dari AI Prediction Board, membuat parlay, dan memeriksa histori WIN/LOSS.
+          </p>
+        </div>
+      )}
 
       <PredictionQueue
         predictions={queuedPredictions}

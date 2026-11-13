@@ -227,6 +227,9 @@ export interface Config {
   scanDays?: number;
   aiPersona?: string | null;
   agentInstructions?: string | null;
+  effectiveAiPersona?: string;
+  personaSource?: "database" | "default";
+  v5ContractSuffix?: string;
   [key: string]: unknown;
 }
 
