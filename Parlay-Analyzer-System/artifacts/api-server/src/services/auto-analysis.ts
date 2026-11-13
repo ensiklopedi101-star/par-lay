@@ -34,6 +34,8 @@
 
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { collectPagedRows } from "./odds-history";
+import { MAX_VERIFIED_ODDS_AGE_MS } from "../lib/market-odds-readiness";
 
 /**
  * Batas anggaran waktu bawaan.
@@ -172,14 +174,27 @@ export async function findFixturesAwaitingAnalysis(options: {
   /* Fixture tanpa harga di `odds_history` tidak bisa dinilai engine. Melewati
    * mereka menghemat kuota model bahasa — dan mencegah NO BET palsu yang
    * lahir dari data kosong, bukan dari analisis. */
-  const { data: oddsRows } = await client
-    .from("odds_history")
-    .select("match_id")
-    .in("match_id", ids.map((id) => String(id)))
-    .limit(2000);
+  /* Sama seperti scanner batch: tanpa paginasi, PostgREST memotong di
+   * 1000 baris dan fixture di luar potongan itu dikira belum punya odds.
+   * Hanya snapshot segar yang dihitung — odds basi toh akan ditolak
+   * analyzeFixture sebagai OddsUnavailableError. */
+  const freshCutoffIso = new Date(Date.now() - MAX_VERIFIED_ODDS_AGE_MS).toISOString();
+  const oddsRows = await collectPagedRows<{ match_id: string | number }>(async (from, to) => {
+    const { data, error } = await client
+      .from("odds_history")
+      .select("match_id")
+      .in("match_id", ids.map((id) => String(id)))
+      .gte("captured_at", freshCutoffIso)
+      .order("match_id", { ascending: true })
+      .range(from, to);
+    return { data: (data ?? []) as Array<{ match_id: string | number }>, error };
+  }).catch((error) => {
+    logger.warn({ error }, "AUTO-ANALYSIS: lookup odds segar gagal; semua fixture dianggap belum punya odds");
+    return [] as Array<{ match_id: string | number }>;
+  });
 
   const withOddsSet = new Set(
-    (oddsRows ?? []).map((row: { match_id: string | number }) => Number(row.match_id)),
+    oddsRows.map((row) => Number(row.match_id)),
   );
 
   const pending = rows.filter((f) => !done.has(Number(f.fixture_id)));

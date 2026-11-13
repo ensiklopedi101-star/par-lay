@@ -35,6 +35,17 @@ function fakeClient(state: FakeState) {
           filters.push("gt");
           return builder;
         },
+        gte() {
+          filters.push("gte");
+          return builder;
+        },
+        range(from: number, to: number) {
+          if (table === "odds_history") {
+            const rows = [...priced].map((id) => ({ match_id: String(id) }));
+            return Promise.resolve({ data: rows.slice(from, to + 1), error: null });
+          }
+          return Promise.resolve({ data: [], error: null });
+        },
         lte() {
           filters.push("lte");
           return builder;

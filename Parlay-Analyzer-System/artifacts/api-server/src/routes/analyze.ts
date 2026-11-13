@@ -12,7 +12,8 @@ import { supabase } from "../lib/supabase-client";
 import { calculateKelly } from "../lib/kelly-criterion";
 import { requireAdmin } from "../middlewares/admin";
 import { createParlayFromCandidates, type ParlayCandidate } from "../services/parlay-builder";
-import { latestOddsByMarket } from "../services/odds-history";
+import { collectPagedRows, latestOddsByMarket } from "../services/odds-history";
+import { MAX_VERIFIED_ODDS_AGE_MS } from "../lib/market-odds-readiness";
 import { randomUUID } from "node:crypto";
 
 const router: IRouter = Router();
@@ -245,15 +246,46 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
       .map((row) => String(row.fixture_id)),
   );
   const pendingFixtures = fixtures.filter((fixture) => !existingSet.has(String(fixture.fixture_id)));
-  const oddsResult = pendingFixtures.length > 0
-    ? await supabase
-      .from("odds_history")
-      .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
-      .in("match_id", pendingFixtures.map((fixture) => String(fixture.fixture_id)))
-    : { data: [], error: null };
-  if (oddsResult.error) {
-    throw new Error(`Failed to load odds snapshots: ${oddsResult.error.message}`);
+  /*
+   * Muat snapshot odds segar untuk seluruh antrean. Dua jebakan lama:
+   * 1. Tanpa `.range()`, PostgREST memotong respons di 1000 baris — untuk
+   *    161 fixture itu hanya mencakup ±23 match, dan 137 fixture salah
+   *    dinyatakan "menunggu odds" (scan 13 Nov 2026).
+   * 2. Tanpa filter umur, seluruh riwayat ikut terunduh. Hanya snapshot
+   *    di dalam jendela validitas yang bisa membuat fixture "valid";
+   *    sisanya memang harus menunggu refresh.
+   */
+  const freshCutoffIso = new Date(Date.now() - MAX_VERIFIED_ODDS_AGE_MS).toISOString();
+  type OddsHistoryRow = {
+    match_id: string | number;
+    bookmaker: string | null;
+    market_type: string | null;
+    odds_1: number | null;
+    odds_2: number | null;
+    odds_draw: number | null;
+    captured_at?: string | null;
+  };
+  let oddsData: OddsHistoryRow[] = [];
+  if (pendingFixtures.length > 0) {
+    try {
+      oddsData = await collectPagedRows<OddsHistoryRow>(async (from, to) => {
+        const { data, error } = await supabase
+          .from("odds_history")
+          .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+          .in("match_id", pendingFixtures.map((fixture) => String(fixture.fixture_id)))
+          .gte("captured_at", freshCutoffIso)
+          .order("match_id", { ascending: true })
+          .order("bookmaker", { ascending: true })
+          .order("market_type", { ascending: true })
+          .order("captured_at", { ascending: true })
+          .range(from, to);
+        return { data: (data ?? []) as OddsHistoryRow[], error };
+      });
+    } catch (error) {
+      throw new Error(`Failed to load odds snapshots: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
+  const oddsResult = { data: oddsData, error: null };
   const oddsByFixture = new Map<string, Array<{
     bookmaker: string;
     market_type: string;
@@ -271,7 +303,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
       odds_1: row.odds_1,
       odds_2: row.odds_2,
       odds_draw: row.odds_draw,
-      captured_at: row.captured_at,
+      captured_at: row.captured_at ?? undefined,
     });
     oddsByFixture.set(key, rows);
   }
