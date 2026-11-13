@@ -8,7 +8,7 @@ import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { loadKnownLeagueSlugs, resolveLeagueSlug } from "../lib/league-slug";
-import { canonicalTeamName } from "../lib/team-name-cleaner";
+import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
 import { STATS_DICTIONARY, VALID_STAT_TYPES, validateStatPayload } from "../utils/stats-dictionary";
 import {
   findEquivalentTeamStatsRows,
@@ -325,6 +325,39 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
       existingStatsRows.push(...((loadedRows ?? []) as Array<Record<string, unknown>>));
     }
 
+    /*
+     * Penjaga lintas-liga: tim yang sudah terdaftar di liga domestik LAIN
+     * pada musim yang sama tidak boleh ditulis ke liga ini. Pada 13 Nov 2026
+     * pemilih liga di ekstensi tertinggal di Championship saat halaman
+     * La Liga di-scrape, sehingga 20 klub Spanyol tersimpan di bawah
+     * england-championship tanpa ada yang protes — kedua slug sama-sama
+     * valid, jadi validasi slug saja tidak cukup. Kompetisi piala/Eropa
+     * dikecualikan: klub yang sama sah tampil di liga domestik dan
+     * Champions League pada musim yang sama.
+     */
+    const isCupLeague = (slug: string) => slug.startsWith("uefa-") || slug.startsWith("international-");
+    const foreignTeamLeagues = new Map<string, string>();
+    if (!isCupLeague(leagueSlug)) {
+      const { data: foreignRows, error: foreignError } = await supabase
+        .from("team_season_stats")
+        .select("team_name, league_slug")
+        .eq("season", normalizedSeason)
+        .neq("league_slug", leagueSlug)
+        .limit(1000);
+      if (foreignError) {
+        logger.warn({ foreignError }, "STATS INGEST: penjaga lintas-liga dilewati (lookup gagal)");
+      } else {
+        for (const row of (foreignRows ?? []) as Array<Record<string, unknown>>) {
+          const foreignSlug = String(row.league_slug ?? "");
+          if (!foreignSlug || isCupLeague(foreignSlug)) continue;
+          const foreignName = String(row.team_name ?? "");
+          for (const key of [teamIdentityKey(foreignName), teamIdentityKey(foreignName, foreignSlug)]) {
+            if (key && !foreignTeamLeagues.has(key)) foreignTeamLeagues.set(key, foreignSlug);
+          }
+        }
+      }
+    }
+
     /* Proses setiap team */
     const results: Array<{
       team: string;
@@ -386,6 +419,20 @@ router.post("/stats/ingest", requireApiKey, async (req, res) => {
           success: false,
           error: `data tidak cocok untuk ${statType}: metrik ${validation.missing.join(", ")} tidak ada`,
           warnings: [`tidak ditulis — periksa deteksi stat_type di ekstensi`],
+        });
+        continue;
+      }
+
+      /* Penjaga lintas-liga (lihat pemuatan foreignTeamLeagues di atas). */
+      const foreignLeague = [teamIdentityKey(rawName), teamIdentityKey(rawName, leagueSlug)]
+        .map((key) => foreignTeamLeagues.get(key))
+        .find(Boolean);
+      if (foreignLeague) {
+        results.push({
+          team: rawName,
+          success: false,
+          error: `tim sudah terdaftar di liga "${foreignLeague}" musim ${normalizedSeason} — kemungkinan pemilih liga di ekstensi salah (payload mengklaim "${leagueSlug}")`,
+          warnings: ["tidak ditulis — periksa liga terpilih di ekstensi"],
         });
         continue;
       }
