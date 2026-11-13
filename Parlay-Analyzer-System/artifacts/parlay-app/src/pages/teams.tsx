@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useListTeamStats, useListAvailableLeagues } from "@/api/parlay-hooks";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -6,8 +6,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { formatLeagueName } from "@/utils/format-league";
-/* 11 stat indicator keys as defined in backend */
+
 const STAT_KEYS = [
   { key: "stats_xg", label: "xG", desc: "Expected Goals" },
   { key: "stats_fts", label: "FTS", desc: "First to Score" },
@@ -22,11 +23,22 @@ const STAT_KEYS = [
   { key: "stats_ht", label: "HT", desc: "Half Time" },
 ];
 
+function currentSeason(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  return now.getMonth() >= 5 ? `${year}-${String(year + 1).slice(2)}` : `${year - 1}-${String(year).slice(2)}`;
+}
+
+function previousSeason(season: string): string {
+  const start = Number(season.slice(0, 4));
+  return `${start - 1}-${String(start).slice(2)}`;
+}
+
 function StatIndicator({ value }: { value: unknown }) {
   const hasData = value != null && (typeof value === "object" ? Object.keys(value).length > 0 : true);
   return (
-    <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold ${hasData ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"}`}>
-      {hasData ? "✓" : "✗"}
+    <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${hasData ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-600"}`}>
+      {hasData ? "✓" : "×"}
     </span>
   );
 }
@@ -39,13 +51,20 @@ interface TeamStat {
   [key: string]: unknown;
 }
 
+function coverage(team: Record<string, unknown>) {
+  return STAT_KEYS.filter((stat) => {
+    const value = team[stat.key];
+    return value != null && (typeof value === "object" ? Object.keys(value).length > 0 : true);
+  }).length;
+}
+
 function TeamStatBadges({ team }: { team: Record<string, unknown> }) {
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-wrap gap-x-3 gap-y-1.5">
       {STAT_KEYS.map((stat) => (
         <div key={stat.key} className="flex items-center gap-1" title={`${stat.desc}: ${team[stat.key] ? "Available" : "Missing"}`}>
           <StatIndicator value={team[stat.key]} />
-          <span className="text-[10px] text-muted-foreground uppercase">{stat.label}</span>
+          <span className="text-[10px] font-medium uppercase text-muted-foreground">{stat.label}</span>
         </div>
       ))}
     </div>
@@ -53,136 +72,144 @@ function TeamStatBadges({ team }: { team: Record<string, unknown> }) {
 }
 
 export default function Teams() {
-  const [leagueSlug, setLeagueSlug] = useState<string>("all");
-  const [season, setSeason] = useState<string>("");
-  const [search, setSearch] = useState<string>("");
+  const thisSeason = currentSeason();
+  const lastSeason = previousSeason(thisSeason);
+  const [leagueSlug, setLeagueSlug] = useState("all");
+  const [seasonMode, setSeasonMode] = useState<"current" | "previous" | "all">("current");
+  const [search, setSearch] = useState("");
+  const season = seasonMode === "current" ? thisSeason : seasonMode === "previous" ? lastSeason : "";
 
   const { data: leagues } = useListAvailableLeagues();
-  const { data: teamsRaw, isLoading } = useListTeamStats(
-    leagueSlug === "all" && !season
-      ? undefined
-      : {
-          leagueSlug: leagueSlug === "all" ? undefined : leagueSlug,
-          season: season || undefined,
-        }
-  );
+  const { data: teamsRaw, isLoading } = useListTeamStats({
+    leagueSlug: leagueSlug === "all" ? undefined : leagueSlug,
+    season: season || undefined,
+  });
   const teams = teamsRaw as TeamStat[] | undefined;
 
-  const filtered = teams?.filter((t) =>
-    (t.team_name ?? "").toLowerCase().includes(search.toLowerCase())
+  const filtered = useMemo(
+    () => teams?.filter((team) => (team.team_name ?? "").toLowerCase().includes(search.toLowerCase())) ?? [],
+    [teams, search],
   );
 
-  /* Group by league */
-  const grouped = filtered?.reduce<Record<string, TeamStat[]>>((acc, team) => {
-    const lg = (team.league_slug as string) ?? "Unknown";
-    if (!acc[lg]) acc[lg] = [];
-    acc[lg]!.push(team);
-    return acc;
-  }, {}) ?? {};
+  const groupedBySeason = useMemo(() => {
+    const seasons = new Map<string, Map<string, TeamStat[]>>();
+    for (const team of filtered) {
+      if (!seasons.has(team.season)) seasons.set(team.season, new Map());
+      const leaguesMap = seasons.get(team.season)!;
+      if (!leaguesMap.has(team.league_slug)) leaguesMap.set(team.league_slug, []);
+      leaguesMap.get(team.league_slug)!.push(team);
+    }
+    return [...seasons.entries()].sort(([a], [b]) => b.localeCompare(a));
+  }, [filtered]);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Team Stats</h1>
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+          Kelengkapan 11 indikator statistik tim. Musim berjalan dan musim lalu kini dipisahkan secara eksplisit
+          agar data lama tidak tercampur dengan data yang dipakai analisis saat ini.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Pilih rentang musim">
+        {[
+          { value: "current" as const, label: `${thisSeason} · Musim berjalan` },
+          { value: "previous" as const, label: `${lastSeason} · Musim lalu` },
+          { value: "all" as const, label: "Bandingkan semua musim" },
+        ].map((option) => (
+          <Button
+            key={option.value}
+            type="button"
+            role="tab"
+            aria-selected={seasonMode === option.value}
+            variant={seasonMode === option.value ? "default" : "outline"}
+            className={seasonMode === option.value ? "" : "bg-white"}
+            onClick={() => setSeasonMode(option.value)}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
+
+      <div className="grid gap-3 rounded-2xl border border-border bg-white p-4 shadow-sm md:grid-cols-[1fr_280px]">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Team Stats</h1>
-          <p className="text-muted-foreground text-sm">11 indicator coverage from FootyStats CSV uploads.</p>
+          <label htmlFor="team-search" className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cari tim</label>
+          <Input id="team-search" data-testid="input-team-search" placeholder="Contoh: Arsenal, Barcelona, Enschede…" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-white" />
         </div>
-        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-          <Input
-            data-testid="input-team-search"
-            placeholder="Search team..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full sm:w-48"
-          />
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">Liga</label>
           <Select value={leagueSlug} onValueChange={setLeagueSlug}>
-            <SelectTrigger className="w-full sm:w-52" data-testid="select-league">
-              <SelectValue placeholder="All Leagues" />
+            <SelectTrigger className="w-full bg-white" data-testid="select-league">
+              <SelectValue placeholder="Semua liga" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Leagues</SelectItem>
-              {leagues?.map((l) => (
-                <SelectItem key={l.slug} value={l.slug}>
-                  {l.name}
-                </SelectItem>
+              <SelectItem value="all">Semua liga</SelectItem>
+              {leagues?.map((league) => (
+                <SelectItem key={league.slug} value={league.slug}>{league.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <Input
-            data-testid="input-season"
-            placeholder="Season (e.g. 2024-25)"
-            value={season}
-            onChange={(e) => setSeason(e.target.value)}
-            className="w-full sm:w-44"
-          />
+          <p className="mt-1.5 text-xs text-muted-foreground">Dropdown membuat daftar liga panjang tetap compact.</p>
         </div>
       </div>
 
       {isLoading ? (
-        <Card className="bg-card border-border overflow-hidden">
+        <Card className="overflow-hidden">
           <Table>
-            <TableHeader className="bg-secondary/50">
-              <TableRow className="border-border">
-                <TableHead className="w-40">Team</TableHead>
-                <TableHead className="w-24">Season</TableHead>
-                <TableHead>11 Indicators</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {Array.from({ length: 6 }).map((_, i) => (
-                <TableRow key={i} className="border-border">
-                  {Array.from({ length: 3 }).map((__, j) => (
-                    <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
+            <TableHeader className="bg-secondary/60"><TableRow><TableHead>Team</TableHead><TableHead>Musim</TableHead><TableHead>Cakupan</TableHead><TableHead>11 indikator</TableHead></TableRow></TableHeader>
+            <TableBody>{Array.from({ length: 6 }).map((_, i) => <TableRow key={i}>{Array.from({ length: 4 }).map((__, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>)}</TableBody>
           </Table>
         </Card>
+      ) : groupedBySeason.length === 0 ? (
+        <Card className="p-8 text-center text-sm text-muted-foreground">
+          {teams?.length === 0
+            ? `Belum ada team stats untuk ${seasonMode === "all" ? "filter ini" : `musim ${season}`}. Data masuk melalui ingest/ekstensi, bukan Upload CSV.`
+            : "Tidak ada tim yang cocok dengan pencarian."}
+        </Card>
       ) : (
-        <div className="space-y-6">
-          {Object.keys(grouped).length === 0 ? (
-            <Card className="bg-card border-border p-8 text-center text-muted-foreground">
-              {teams?.length === 0 ? "No team stats found. Upload a CSV to get started." : "No teams match your search."}
-            </Card>
-          ) : (
-            Object.entries(grouped).map(([league, leagueTeams]) => (
-              <div key={league} className="space-y-3">
+        groupedBySeason.map(([seasonGroup, leaguesMap]) => (
+          <section key={seasonGroup} className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className="px-3 py-1 text-sm">{seasonGroup}</Badge>
+              <span className="text-sm font-medium">{seasonGroup === thisSeason ? "Musim berjalan" : seasonGroup === lastSeason ? "Musim lalu" : "Musim arsip"}</span>
+              <span className="text-xs text-muted-foreground">{[...leaguesMap.values()].reduce((sum, rows) => sum + rows.length, 0)} tim · {leaguesMap.size} liga</span>
+            </div>
+            {[...leaguesMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([league, leagueTeams]) => (
+              <div key={`${seasonGroup}-${league}`} className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary" className="text-sm">{formatLeagueName(league)}</Badge>
-                  <span className="text-xs text-muted-foreground">{leagueTeams?.length} teams</span>
+                  <Badge variant="secondary">{formatLeagueName(league)}</Badge>
+                  <span className="text-xs text-muted-foreground">{leagueTeams.length} tim</span>
                 </div>
-                <Card className="bg-card border-border overflow-hidden">
+                <Card className="overflow-hidden">
                   <Table>
-                    <TableHeader className="bg-secondary/50">
-                      <TableRow className="border-border">
-                        <TableHead className="w-40">Team</TableHead>
-                        <TableHead className="w-24">Season</TableHead>
-                        <TableHead className="w-auto">11 Indicators</TableHead>
+                    <TableHeader className="bg-secondary/60">
+                      <TableRow>
+                        <TableHead className="w-52">Team</TableHead>
+                        <TableHead className="w-28">Musim</TableHead>
+                        <TableHead className="w-28">Cakupan</TableHead>
+                        <TableHead>11 indikator</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {leagueTeams?.map((team) => (
-                        <TableRow key={team.id} className="border-border hover:bg-secondary/20 transition-colors" data-testid={`row-team-${team.id}`}>
+                      {leagueTeams.map((team) => (
+                        <TableRow key={team.id} data-testid={`row-team-${team.id}`}>
                           <TableCell className="font-semibold text-sm">{team.team_name}</TableCell>
-                          <TableCell className="text-muted-foreground text-xs">{team.season}</TableCell>
-                          <TableCell>
-                            <TeamStatBadges team={team as Record<string, unknown>} />
-                          </TableCell>
+                          <TableCell><Badge variant="outline">{team.season}</Badge></TableCell>
+                          <TableCell><Badge variant={coverage(team) === 11 ? "default" : "secondary"}>{coverage(team)}/11</Badge></TableCell>
+                          <TableCell><TeamStatBadges team={team} /></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </Card>
               </div>
-            ))
-          )}
-        </div>
+            ))}
+          </section>
+        ))
       )}
 
-      {filtered && filtered.length > 0 && (
-        <p className="text-xs text-muted-foreground text-right">{filtered.length} teams total</p>
-      )}
+      {filtered.length > 0 && <p className="text-right text-xs text-muted-foreground">{filtered.length} tim ditampilkan · ✓ tersedia · × belum tersedia</p>}
     </div>
   );
 }

@@ -21,21 +21,30 @@ function getUpcomingSeason(): string {
   return `${year - 1}-${String(year).slice(2)}`;
 }
 
+function previousSeason(season: string): string {
+  const start = Number(season.slice(0, 4));
+  return Number.isFinite(start) ? `${start - 1}-${String(start).slice(2)}` : season;
+}
+
 function FormPills({ form }: { form: string }) {
-  if (!form) return <span className="text-xs text-muted-foreground">-</span>;
+  if (!form) return <span className="text-xs text-muted-foreground">Belum ada data</span>;
+  const labels: Record<string, string> = { W: "Menang", D: "Seri", L: "Kalah" };
   return (
-    <div className="flex items-center gap-0.5">
+    <div className="flex min-w-[172px] items-center justify-center gap-1" aria-label={`Form enam pertandingan: ${form}`}>
       {form.slice(0, 6).split("").map((char, i) => {
         const result = char.toUpperCase();
-        let color = "bg-slate-500/20 text-slate-400";
-        if (result === "W") color = "bg-emerald-500/20 text-emerald-400";
-        if (result === "D") color = "bg-amber-500/20 text-amber-400";
-        if (result === "L") color = "bg-red-500/20 text-red-400";
+        const color = result === "W"
+          ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+          : result === "D"
+            ? "border-amber-300 bg-amber-100 text-amber-800"
+            : result === "L"
+              ? "border-red-300 bg-red-100 text-red-700"
+              : "border-slate-300 bg-slate-100 text-slate-600";
         return (
           <span
             key={i}
-            className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold ${color}`}
-            title={result === "W" ? "Win" : result === "D" ? "Draw" : result === "L" ? "Loss" : result}
+            className={`inline-flex h-7 w-7 items-center justify-center rounded-md border text-[11px] font-extrabold shadow-sm ${color}`}
+            title={`${labels[result] ?? result} · pertandingan ${i + 1} dari rangkaian form`}
           >
             {result}
           </span>
@@ -80,7 +89,7 @@ export default function Standings() {
         <TableRow className="border-border">
           <TableHead className="w-12 text-center">#</TableHead>
           <TableHead>Team</TableHead>
-          <TableHead className="text-center">Form</TableHead>
+          <TableHead className="min-w-[188px] text-center">Form 6 laga terakhir</TableHead>
           <TableHead className="text-right">P</TableHead>
           <TableHead className="text-right">W</TableHead>
           <TableHead className="text-right">D</TableHead>
@@ -129,17 +138,17 @@ export default function Standings() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Standings</h1>
-          <p className="text-muted-foreground text-sm">League tables from Supabase.</p>
+          <p className="text-sm text-muted-foreground">Pilih liga dan musim dari dropdown. Kolom Form menampilkan enam hasil terakhir dengan label warna yang jelas.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
           <Input
             placeholder="Search team..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full sm:w-48"
+            className="w-full bg-white sm:w-48"
           />
           <Select value={leagueSlug} onValueChange={setLeagueSlug}>
-            <SelectTrigger className="w-full sm:w-52">
+            <SelectTrigger className="w-full bg-white sm:w-52">
               <SelectValue placeholder="All Leagues" />
             </SelectTrigger>
             <SelectContent>
@@ -149,13 +158,25 @@ export default function Standings() {
               ))}
             </SelectContent>
           </Select>
-          <Input
-            placeholder="Season (e.g. 2024-25)"
-            value={season}
-            onChange={(e) => setSeason(e.target.value)}
-            className="w-full sm:w-44"
-          />
+          <Select value={season} onValueChange={setSeason}>
+            <SelectTrigger className="w-full bg-white sm:w-44" aria-label="Pilih musim">
+              <SelectValue placeholder="Pilih musim" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={getUpcomingSeason()}>{getUpcomingSeason()} · berjalan</SelectItem>
+              <SelectItem value={previousSeason(getUpcomingSeason())}>{previousSeason(getUpcomingSeason())} · lalu</SelectItem>
+              <SelectItem value={previousSeason(previousSeason(getUpcomingSeason()))}>{previousSeason(previousSeason(getUpcomingSeason()))}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-border bg-white px-4 py-3 text-xs text-muted-foreground shadow-sm">
+        <span className="font-semibold text-foreground">Cara membaca form:</span>
+        <span className="flex items-center gap-1.5"><span className="flex h-6 w-6 items-center justify-center rounded border border-emerald-300 bg-emerald-100 font-extrabold text-emerald-800">W</span> Menang</span>
+        <span className="flex items-center gap-1.5"><span className="flex h-6 w-6 items-center justify-center rounded border border-amber-300 bg-amber-100 font-extrabold text-amber-800">D</span> Seri</span>
+        <span className="flex items-center gap-1.5"><span className="flex h-6 w-6 items-center justify-center rounded border border-red-300 bg-red-100 font-extrabold text-red-700">L</span> Kalah</span>
+        <span className="ml-auto">Diurutkan sesuai urutan data enam laga terakhir dari penyedia.</span>
       </div>
 
       {isLoading ? (

@@ -82802,6 +82802,8 @@ function explainInsertRatio(fetched, inserted) {
 }
 
 // src/routes/config.ts
+init_ai_analysis();
+init_llm_contract();
 var STALE_RUN_SECONDS = STALE_SYNC_RUN_SECONDS;
 var SYNC_HISTORY_LIMIT = 12;
 var SYNC_RUN_COLUMNS = [
@@ -82899,6 +82901,8 @@ router3.get("/catalog", (_req, res) => {
 router3.get("/config", async (_req, res) => {
   try {
     const cfg = await getOrCreateConfig();
+    const storedPersona = typeof cfg.ai_persona === "string" ? cfg.ai_persona : "";
+    const usesStoredPersona = storedPersona.trim().length > 20;
     res.json({
       id: cfg.id,
       leagues: cfg.leagues,
@@ -82908,6 +82912,13 @@ router3.get("/config", async (_req, res) => {
       scanDays: Number(cfg.scan_days ?? 11),
       aiPersona: cfg.ai_persona ?? null,
       agentInstructions: cfg.agent_instructions ?? null,
+      /* Persona yang benar-benar berjalan tidak selalu sama dengan isi kolom
+         DB: DB kosong/singkat memakai fallback kode, lalu instruksi tambahan
+         dan Kontrak V5 selalu ditempel terakhir oleh ai-analysis. Settings
+         harus menampilkan rantai efektif ini, bukan menebak label versi lama. */
+      effectiveAiPersona: usesStoredPersona ? storedPersona : DEFAULT_SYSTEM_INSTRUCTION,
+      personaSource: usesStoredPersona ? "database" : "default",
+      v5ContractSuffix: V5_CONTRACT_SUFFIX.trim(),
       updatedAt: cfg.updated_at ?? null
     });
   } catch (err) {

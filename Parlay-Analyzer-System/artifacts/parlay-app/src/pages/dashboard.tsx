@@ -3,10 +3,6 @@ import { addDays, formatISO, startOfDay } from "date-fns";
 import {
   useGetConfig,
   useGetSyncStatus,
-  useGetSettlementSummary,
-  useGetAutomationStatus,
-  useGetParlayComposition,
-  useGetAnalysisStatus,
   useListSupabaseParlays,
   useListSupabaseFixtures,
   useGetHealth,
@@ -30,11 +26,6 @@ import {
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { SyncTransparencyPanel } from "@/components/sync-transparency-panel";
-import { SettlementTransparencyPanel } from "@/components/settlement-transparency-panel";
-import { ParlayCompositionPanel } from "@/components/parlay-composition-panel";
-import { AnalysisStatusPanel } from "@/components/analysis-status-panel";
-import { AutomationStatusPanel } from "@/components/automation-status-panel";
 import { formatLeagueName } from "@/utils/format-league";
 import { useAdminPassword, clearStoredAdminPassword } from "@/hooks/use-admin-password";
 import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
@@ -62,10 +53,6 @@ function HealthBadge({ status }: { status: string }) {
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const { data: syncStatus, isLoading: isSyncLoading } = useGetSyncStatus();
-  const { data: settlementSummary, isLoading: isSettlementLoading } = useGetSettlementSummary();
-  const { data: automationStatus, isLoading: isAutomationLoading } = useGetAutomationStatus();
-  const { data: parlayComposition, isLoading: isCompositionLoading } = useGetParlayComposition();
-  const { data: analysisStatus, isLoading: isAnalysisLoading } = useGetAnalysisStatus();
   const { data: config } = useGetConfig();
   const scanDays = config?.scanDays ?? 11;
   const { data: parlays, isLoading: isParlaysLoading } = useListSupabaseParlays({ status: "active" });
@@ -504,30 +491,19 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* Panel transparansi sync — menjawab pertanyaan "apakah sync benar-benar
-          terjadi, apa yang ditarik, dan apa yang gagal". Datanya dari
-          `sync_runs` yang sebelumnya tidak pernah diambil. */}
-      <SyncTransparencyPanel status={syncStatus} isLoading={isSyncLoading} />
-
-      <SettlementTransparencyPanel summary={settlementSummary} isLoading={isSettlementLoading} />
-
-      {/* Panel komposisi parlay — mesin yang MEMILIH 3–5 leg dari puluhan
-          kandidat, bukan menggabungkan leg yang dikirim manusia. Menampilkan
-          prosesnya (kandidat, kombinasi diuji, korelasi) supaya hasilnya bisa
-          diperiksa, bukan dipercaya begitu saja. */}
-      <ParlayCompositionPanel composition={parlayComposition} isLoading={isCompositionLoading} />
-
-      {/* Panel analisis AI — menjawab "kapan prediksi terakhir lahir dan berapa
-          yang menunggu". Tanpa ini, analisis yang mati di tengah jalan hanya
-          terlihat sebagai "tidak ada prediksi baru", yang tidak bisa dibedakan
-          dari "tidak ada pertandingan". */}
-      <AnalysisStatusPanel status={analysisStatus} isLoading={isAnalysisLoading} />
-
-      {/* Panel jadwal otomatis — menjawab "tugas mana yang tidak akan pernah
-          berjalan sendiri". Penarikan skor sudah ada kodenya, tetapi hanya
-          dijadwalkan node-cron yang mati di Vercel; tanpa panel ini kegagalan
-          itu tidak terlihat di layar mana pun. */}
-      <AutomationStatusPanel status={automationStatus} isLoading={isAutomationLoading} />
+      <Card className="border-primary/20 bg-primary/5 shadow-none">
+        <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm leading-relaxed">
+            <div className="font-semibold">Butuh memeriksa bukti prosesnya?</div>
+            <p className="text-muted-foreground">
+              Panel sync, analisis, komposisi parlay, settlement, dan otomasi sekarang terpusat di menu Transparansi Sistem agar Dashboard tetap ringkas.
+            </p>
+          </div>
+          <Button asChild variant="outline" className="shrink-0 bg-white">
+            <a href="/transparency">Buka Transparansi</a>
+          </Button>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="col-span-1 bg-card border-border">

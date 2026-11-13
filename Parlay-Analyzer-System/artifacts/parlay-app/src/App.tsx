@@ -8,11 +8,10 @@ import Dashboard from "@/pages/dashboard";
 import Fixtures from "@/pages/fixtures";
 import Teams from "@/pages/teams";
 import Standings from "@/pages/standings";
-import Upload from "@/pages/upload";
-import Parlays from "@/pages/parlays";
 import SettingsPage from "@/pages/settings";
-import RiskCenter from "@/pages/risk-center";
 import AILearning from "@/pages/ai-learning";
+import Transparency from "@/pages/transparency";
+import AICenter from "@/pages/ai-center";
 
 const queryClient = new QueryClient();
 
@@ -21,13 +20,21 @@ function Router() {
     <Layout>
       <Switch>
         <Route path="/" component={Dashboard} />
+        <Route path="/transparency" component={Transparency} />
         <Route path="/fixtures" component={Fixtures} />
         <Route path="/teams" component={Teams} />
         <Route path="/standings" component={Standings} />
-        <Route path="/parlays" component={Parlays} />
-        <Route path="/upload" component={Upload} />
+        <Route path="/ai-center">
+          <AICenter defaultTab="predictions" />
+        </Route>
+        {/* Tautan lama tetap hidup, tetapi kini membuka pusat AI terpadu. */}
+        <Route path="/risk-center">
+          <AICenter defaultTab="predictions" />
+        </Route>
+        <Route path="/parlays">
+          <AICenter defaultTab="parlays" />
+        </Route>
         <Route path="/settings" component={SettingsPage} />
-        <Route path="/risk-center" component={RiskCenter} />
         <Route path="/ai-learning" component={AILearning} />
         <Route component={NotFound} />
       </Switch>
