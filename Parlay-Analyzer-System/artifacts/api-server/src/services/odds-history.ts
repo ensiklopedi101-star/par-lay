@@ -50,3 +50,38 @@ export function latestOddsByMarket<T extends OddsSnapshotIdentity>(rows: T[]): T
     (a, b) => capturedTime(b.captured_at) - capturedTime(a.captured_at),
   );
 }
+
+export const SUPABASE_PAGE_SIZE = 1000;
+
+/**
+ * Ambil SEMUA baris dari query PostgREST lewat paginasi `.range()`.
+ *
+ * PostgREST memotong respons di 1000 baris (max-rows), diam-diam. Query
+ * batch tanpa `.range()` karena itu hanya pernah melihat 1000 baris
+ * pertama — pada scan 13 Nov 2026 (161 fixture, puluhan ribu baris
+ * odds_history) 1000 baris pertama hanya mencakup 23 match, sehingga
+ * 137 fixture dinyatakan "menunggu odds" padahal snapshot segarnya ada.
+ * `fetchPage` menerima rentang [from, to] inklusif dan wajib mengurutkan
+ * hasilnya secara stabil supaya halaman tidak tumpang tindih.
+ */
+export async function collectPagedRows<T>(
+  fetchPage: (
+    from: number,
+    to: number,
+  ) => Promise<{ data: T[] | null; error: unknown }>,
+  pageSize: number = SUPABASE_PAGE_SIZE,
+  maxPages = 100,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    const from = page * pageSize;
+    const { data, error } = await fetchPage(from, from + pageSize - 1);
+    if (error) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    const batch = data ?? [];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  return rows;
+}

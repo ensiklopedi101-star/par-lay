@@ -51998,9 +51998,25 @@ function latestOddsByMarket(rows) {
     (a, b) => capturedTime(b.captured_at) - capturedTime(a.captured_at)
   );
 }
+async function collectPagedRows(fetchPage, pageSize = SUPABASE_PAGE_SIZE2, maxPages = 100) {
+  const rows = [];
+  for (let page = 0; page < maxPages; page++) {
+    const from = page * pageSize;
+    const { data, error } = await fetchPage(from, from + pageSize - 1);
+    if (error) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    const batch = data ?? [];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  return rows;
+}
+var SUPABASE_PAGE_SIZE2;
 var init_odds_history = __esm({
   "src/services/odds-history.ts"() {
     "use strict";
+    SUPABASE_PAGE_SIZE2 = 1e3;
   }
 });
 
@@ -85981,6 +85997,7 @@ function calculateKelly(odds, probWin) {
 // src/routes/analyze.ts
 init_parlay_builder();
 init_odds_history();
+init_market_odds_readiness();
 var import_node_crypto2 = require("node:crypto");
 var router7 = (0, import_express7.Router)();
 var batchJobs = /* @__PURE__ */ new Map();
@@ -86102,10 +86119,19 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
     (existing.data ?? []).filter(hasUsableSelectedMarket).map((row) => String(row.fixture_id))
   );
   const pendingFixtures = fixtures.filter((fixture) => !existingSet.has(String(fixture.fixture_id)));
-  const oddsResult = pendingFixtures.length > 0 ? await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", pendingFixtures.map((fixture) => String(fixture.fixture_id))) : { data: [], error: null };
-  if (oddsResult.error) {
-    throw new Error(`Failed to load odds snapshots: ${oddsResult.error.message}`);
+  const freshCutoffIso = new Date(Date.now() - MAX_VERIFIED_ODDS_AGE_MS).toISOString();
+  let oddsData = [];
+  if (pendingFixtures.length > 0) {
+    try {
+      oddsData = await collectPagedRows(async (from, to) => {
+        const { data, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", pendingFixtures.map((fixture) => String(fixture.fixture_id))).gte("captured_at", freshCutoffIso).order("match_id", { ascending: true }).order("bookmaker", { ascending: true }).order("market_type", { ascending: true }).order("captured_at", { ascending: true }).range(from, to);
+        return { data: data ?? [], error };
+      });
+    } catch (error) {
+      throw new Error(`Failed to load odds snapshots: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
+  const oddsResult = { data: oddsData, error: null };
   const oddsByFixture = /* @__PURE__ */ new Map();
   for (const row of latestOddsByMarket(oddsResult.data ?? [])) {
     const key = String(row.match_id);
@@ -86116,7 +86142,7 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
       odds_1: row.odds_1,
       odds_2: row.odds_2,
       odds_draw: row.odds_draw,
-      captured_at: row.captured_at
+      captured_at: row.captured_at ?? void 0
     });
     oddsByFixture.set(key, rows);
   }
@@ -87115,6 +87141,8 @@ init_reanalysis();
 // src/services/auto-analysis.ts
 init_supabase_client();
 init_logger();
+init_odds_history();
+init_market_odds_readiness();
 var DEFAULT_BUDGET_MS = 38e3;
 var ESTIMATED_MS_PER_FIXTURE = 15e3;
 async function findFixturesAwaitingAnalysis(options = {}) {
@@ -87142,9 +87170,16 @@ async function findFixturesAwaitingAnalysis(options = {}) {
       );
     }).map((row) => Number(row.fixture_id))
   );
-  const { data: oddsRows } = await client.from("odds_history").select("match_id").in("match_id", ids.map((id) => String(id))).limit(2e3);
+  const freshCutoffIso = new Date(Date.now() - MAX_VERIFIED_ODDS_AGE_MS).toISOString();
+  const oddsRows = await collectPagedRows(async (from, to) => {
+    const { data, error: error2 } = await client.from("odds_history").select("match_id").in("match_id", ids.map((id) => String(id))).gte("captured_at", freshCutoffIso).order("match_id", { ascending: true }).range(from, to);
+    return { data: data ?? [], error: error2 };
+  }).catch((error2) => {
+    logger.warn({ error: error2 }, "AUTO-ANALYSIS: lookup odds segar gagal; semua fixture dianggap belum punya odds");
+    return [];
+  });
   const withOddsSet = new Set(
-    (oddsRows ?? []).map((row) => Number(row.match_id))
+    oddsRows.map((row) => Number(row.match_id))
   );
   const pending = rows.filter((f) => !done.has(Number(f.fixture_id)));
   const priced = pending.filter((f) => withOddsSet.has(Number(f.fixture_id)));
