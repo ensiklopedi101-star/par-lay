@@ -208,8 +208,57 @@ ada bukti berarti memindahkan risiko dari "tidak pernah bertaruh" ke "bertaruh t
 dasar". Setelah ~50 seleksi terkumpul, bandingkan `p_final` vs hasil nyata (Brier),
 lalu naikkan ke `enforced`.
 
-Yang **belum** dikerjakan: menulis `prediction_selections` dari jalur LLM (P3) dan
-menaikkan gerbang ke `enforced` (P1). Keduanya menunggu data bayangan di atas.
+Yang **belum** dikerjakan: menaikkan gerbang ke `enforced` (P1). Itu menunggu
+data bayangan di atas.
+
+### P3 — selesai dibangun (13 Nov 2026)
+
+| Komponen | File | Isi |
+|---|---|---|
+| Builder baris v1 | `lib/llm-ledger.ts` | Semua market (ML/BTTS/Totals/AH) dari satu bookmaker, `market_key` identik dengan engine quant, `p_final` = blend 0.35·model + 0.65·pasar, baris tanpa probabilitas model yang sah **tidak ditulis** |
+| Writer v1 | `services/llm-shadow.ts` + hook di `ai-analysis.ts` | Upsert `model_version = 1` setelah quant shadow; gagal tidak pernah mematahkan analisis |
+| Laporan bukti | `lib/ledger-report.ts` | Memakai ulang `summarizeLedger` + `fitBlendWeight`: Brier, BSS vs pasar, ECE, CLV + t-stat, w*, per versi & per family, dan 5 gerbang Fase 3 |
+| Endpoint | `GET /api/learning/ledger` | Read-only; vonis di bawah ambang sampel wajib `insufficient` |
+
+Karena `market_key` v1 sama dengan v2, job Fase 2 yang sudah ada
+(`closing`, `outcomes`) otomatis mengisi `odds_close` dan `outcome` baris v1
+tanpa perubahan. Tes: 317 lulus (11 baru untuk P3).
+
+### P5 & P6 — selesai dibangun (13 Nov 2026)
+
+**P5 (matematika parlay):** jalur lama `calculateParlayMetrics` masih memakai
+perkalian independen murni, sementara composer quant sudah memakai Monte
+Carlo korelasi — dua matematika untuk tiket yang sama. Sekarang keduanya
+memakai `analyzeParlay`, ditambah stake tingkat tiket:
+
+| Komponen | Isi |
+|---|---|
+| `ticketStakePlan` (`lib/quant/parlay.ts`) | ¼ Kelly dari `pDecision` & odds gabungan, σ tiket = akar jumlah kuadrat σ leg (cap 0.15), cap keras 2%; EV pesimis ≤ 0 → stake 0 |
+| `calculateParlayMetrics` (`parlay-builder.ts`) | `winProbability = pDecision`, + `pCorrelated`, `evPessimistic`, `breakEvenBias`, `ticketStake` (field lama dipertahankan) |
+| Penyimpanan | migrasi `20261113_parlay_ticket_stake.sql` (sudah diterapkan): `parlays.stake_pct / ev_pessimistic / p_correlated`, diisi builder & composer |
+
+**P6 (persona):** `PERSONA_V5` sudah ada sejak lama tetapi tidak pernah
+dipakai, dan persona produksi di DB masih v4 yang meminta `ev_percent` dan
+stake sampai 5% (melanggar cap Fase 0). Karena persona bisa diganti dari
+panel tanpa deploy, solusinya bukan mengedit teks DB:
+
+| Komponen | Isi |
+|---|---|
+| `V5_CONTRACT_SUFFIX` (`llm-contract.ts`) | Ditempel **terakhir** pada system instruction apa pun: model dilarang melaporkan EV/stake, probability tetap wajib, dan hanya boleh mengusulkan `lambda_adjustment` berbukti |
+| `extractLambdaAdjustment` | Mengambil adjustment dari JSON respons, men-sanitasi (±12%, bukti ≥ 10 karakter wajib; tanpa bukti dibuang → null) |
+| Wiring `ai-analysis.ts` | Adjustment diteruskan ke `shadowLogQuantAnalysis` (sebelumnya selalu `null`) dan disimpan di snapshot untuk audit; persona bawaan tidak lagi meminta EV/stake |
+
+Tes total: **326 lulus** (9 baru: parlay stake/korelasi, kontrak V5 &
+ekstraktor, metrik tiket).
+
+**Yang belum terjadi (bukan kode):** ledger produksi masih 0 baris dan
+`ai_predictions` terakhir 2026-10-25. Pemicu terjadwal adalah cron-job.org
+(bukan GitHub — jadwal workflow sudah dimatikan, lihat `CRON_JOBS.md`).
+Bukti 13 Nov: sync terbukti jalan lewat cron (`odds_history` terakhir hari
+ini), tetapi ada 64 fixture berharga yang belum dianalisis — jadi job
+`action=analyze` di cron-job.org yang belum jalan/belum terdaftar. Satu
+eksekusi analyze yang berhasil langsung membuat
+`prediction_selections > 0`; diagnosis lengkapnya di `CRON_JOBS.md`.
 
 ## 9. Pagar yang tidak boleh dilanggar
 

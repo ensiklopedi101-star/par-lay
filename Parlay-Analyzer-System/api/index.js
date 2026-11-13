@@ -15788,14 +15788,14 @@ var require_object_inspect = __commonJS({
     var gPO = (typeof Reflect === "function" ? Reflect.getPrototypeOf : Object.getPrototypeOf) || ([].__proto__ === Array.prototype ? function(O) {
       return O.__proto__;
     } : null);
-    function addNumericSeparator(num2, str) {
-      if (num2 === Infinity || num2 === -Infinity || num2 !== num2 || num2 && num2 > -1e3 && num2 < 1e3 || $test.call(/e/, str)) {
+    function addNumericSeparator(num3, str) {
+      if (num3 === Infinity || num3 === -Infinity || num3 !== num3 || num3 && num3 > -1e3 && num3 < 1e3 || $test.call(/e/, str)) {
         return str;
       }
       var sepRegex = /[0-9](?=(?:[0-9]{3})+(?![0-9]))/g;
-      if (typeof num2 === "number") {
-        var int = num2 < 0 ? -$floor(-num2) : $floor(num2);
-        if (int !== num2) {
+      if (typeof num3 === "number") {
+        var int = num3 < 0 ? -$floor(-num3) : $floor(num3);
+        if (int !== num3) {
           var intStr = String(int);
           var dec = $slice.call(str, intStr.length + 1);
           return $replace.call(intStr, sepRegex, "$&_") + "." + $replace.call($replace.call(dec, /([0-9]{3})/g, "$&_"), /_$/, "");
@@ -20363,7 +20363,7 @@ var require_route = __commonJS({
     var debug = require_src()("router:route");
     var Layer = require_layer();
     var { METHODS } = require("node:http");
-    var slice = Array.prototype.slice;
+    var slice2 = Array.prototype.slice;
     var flatten = Array.prototype.flat;
     var methods = METHODS.map((method) => method.toLowerCase());
     module2.exports = Route;
@@ -20437,7 +20437,7 @@ var require_route = __commonJS({
       }
     };
     Route.prototype.all = function all(handler2) {
-      const callbacks = flatten.call(slice.call(arguments), Infinity);
+      const callbacks = flatten.call(slice2.call(arguments), Infinity);
       if (callbacks.length === 0) {
         throw new TypeError("argument handler is required");
       }
@@ -20455,7 +20455,7 @@ var require_route = __commonJS({
     };
     methods.forEach(function(method) {
       Route.prototype[method] = function(handler2) {
-        const callbacks = flatten.call(slice.call(arguments), Infinity);
+        const callbacks = flatten.call(slice2.call(arguments), Infinity);
         if (callbacks.length === 0) {
           throw new TypeError("argument handler is required");
         }
@@ -20487,7 +20487,7 @@ var require_router = __commonJS({
     var Route = require_route();
     var debug = require_src()("router");
     var deprecate = require_depd()("router");
-    var slice = Array.prototype.slice;
+    var slice2 = Array.prototype.slice;
     var flatten = Array.prototype.flat;
     var methods = METHODS.map((method) => method.toLowerCase());
     module2.exports = Router16;
@@ -20670,7 +20670,7 @@ var require_router = __commonJS({
           path = handler2;
         }
       }
-      const callbacks = flatten.call(slice.call(arguments, offset), Infinity);
+      const callbacks = flatten.call(slice2.call(arguments, offset), Infinity);
       if (callbacks.length === 0) {
         throw new TypeError("argument handler is required");
       }
@@ -20707,7 +20707,7 @@ var require_router = __commonJS({
     methods.concat("all").forEach(function(method) {
       Router16.prototype[method] = function(path) {
         const route = this.route(path);
-        route[method].apply(route, slice.call(arguments, 1));
+        route[method].apply(route, slice2.call(arguments, 1));
         return this;
       };
     });
@@ -20889,7 +20889,7 @@ var require_application = __commonJS({
     var resolve = require("node:path").resolve;
     var once = require_once();
     var Router16 = require_router();
-    var slice = Array.prototype.slice;
+    var slice2 = Array.prototype.slice;
     var flatten = Array.prototype.flat;
     var app2 = exports2 = module2.exports = {};
     var trustProxyDefaultSymbol = "@@symbol:trust_proxy_default";
@@ -20976,7 +20976,7 @@ var require_application = __commonJS({
           path = fn;
         }
       }
-      var fns = flatten.call(slice.call(arguments, offset), Infinity);
+      var fns = flatten.call(slice2.call(arguments, offset), Infinity);
       if (fns.length === 0) {
         throw new TypeError("app.use() requires a middleware function");
       }
@@ -21065,13 +21065,13 @@ var require_application = __commonJS({
           return this.set(path);
         }
         var route = this.route(path);
-        route[method].apply(route, slice.call(arguments, 1));
+        route[method].apply(route, slice2.call(arguments, 1));
         return this;
       };
     });
     app2.all = function all(path) {
       var route = this.route(path);
-      var args = slice.call(arguments, 1);
+      var args = slice2.call(arguments, 1);
       for (var i = 0; i < methods.length; i++) {
         route[methods[i]].apply(route, args);
       }
@@ -21115,7 +21115,7 @@ var require_application = __commonJS({
     };
     app2.listen = function listen() {
       var server = http.createServer(this);
-      var args = slice.call(arguments);
+      var args = slice2.call(arguments);
       if (typeof args[args.length - 1] === "function") {
         var done = args[args.length - 1] = once(args[args.length - 1]);
         server.once("error", done);
@@ -26520,14 +26520,14 @@ var require_tools = __commonJS({
       }
       return point < 32 ? JSON.stringify(str) : '"' + result2 + '"';
     }
-    function asJson(obj, msg, num2, time) {
+    function asJson(obj, msg, num3, time) {
       if (asJsonChan.hasSubscribers === false) {
-        return _asJson.call(this, obj, msg, num2, time);
+        return _asJson.call(this, obj, msg, num3, time);
       }
       const store = { instance: this, arguments };
-      return asJsonChan.traceSync(_asJson, store, this, obj, msg, num2, time);
+      return asJsonChan.traceSync(_asJson, store, this, obj, msg, num3, time);
     }
-    function _asJson(obj, msg, num2, time) {
+    function _asJson(obj, msg, num3, time) {
       const stringify2 = this[stringifySym];
       const stringifySafe = this[stringifySafeSym];
       const stringifiers = this[stringifiersSym];
@@ -26537,7 +26537,7 @@ var require_tools = __commonJS({
       const formatters = this[formattersSym];
       const messageKey = this[messageKeySym];
       const errorKey = this[errorKeySym];
-      let data = this[lsCacheSym][num2] + time;
+      let data = this[lsCacheSym][num3] + time;
       data = data + chindings;
       let value;
       if (formatters.log) {
@@ -27163,7 +27163,7 @@ var require_proto = __commonJS({
     function defaultMixinMergeStrategy(mergeObject, mixinObject) {
       return Object.assign(mixinObject, mergeObject);
     }
-    function write(_obj, msg, num2) {
+    function write(_obj, msg, num3) {
       const t = this[timeSym]();
       const mixin = this[mixinSym];
       const errorKey = this[errorKeySym];
@@ -27185,12 +27185,12 @@ var require_proto = __commonJS({
         }
       }
       if (mixin) {
-        obj = mixinMergeStrategy(obj, mixin(obj, num2, this));
+        obj = mixinMergeStrategy(obj, mixin(obj, num3, this));
       }
-      const s = this[asJsonSym](obj, msg, num2, t);
+      const s = this[asJsonSym](obj, msg, num3, t);
       const stream = this[streamSym];
       if (stream[needsMetadataGsym] === true) {
-        stream.lastLevel = num2;
+        stream.lastLevel = num3;
         stream.lastObj = obj;
         stream.lastMsg = msg;
         stream.lastTime = t.slice(this[timeSliceIndexSym]);
@@ -54672,16 +54672,16 @@ function groupEquivalentTeamStatsRows(rows) {
       }
     }
     const mergedGroups = /* @__PURE__ */ new Map();
-    groups.forEach((group, index) => {
+    groups.forEach((group2, index) => {
       const root = findRoot(index);
       const merged = mergedGroups.get(root) ?? { names: [], rows: [] };
-      merged.names.push(...group.names);
-      merged.rows.push(...group.rows);
+      merged.names.push(...group2.names);
+      merged.rows.push(...group2.rows);
       mergedGroups.set(root, merged);
     });
-    for (const group of mergedGroups.values()) {
-      const merged = mergeTeamStatsRows(group.rows);
-      const displayNames = group.names.map((name) => canonicalTeamName(name, leagueSlug)).sort((a, b) => teamNameTokensForSort(b) - teamNameTokensForSort(a) || b.length - a.length);
+    for (const group2 of mergedGroups.values()) {
+      const merged = mergeTeamStatsRows(group2.rows);
+      const displayNames = group2.names.map((name) => canonicalTeamName(name, leagueSlug)).sort((a, b) => teamNameTokensForSort(b) - teamNameTokensForSort(a) || b.length - a.length);
       if (displayNames[0]) merged.team_name = displayNames[0];
       result2.push(merged);
     }
@@ -54713,6 +54713,11 @@ var init_team_stats_merge = __esm({
 });
 
 // src/lib/market-odds-readiness.ts
+function resolveOddsMaxAgeHours(raw = process.env.ODDS_MAX_AGE_HOURS) {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_ODDS_MAX_AGE_HOURS;
+  return Math.min(24, Math.max(1, parsed));
+}
 function normalizedText(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -54893,12 +54898,14 @@ function resolveMarketOdds(market, rows, options = {}) {
   }
   return result("verified", "Odds provider cocok dengan market, sisi pilihan, line, dan batas freshness.", common);
 }
-var MAX_VERIFIED_ODDS_AGE_MS;
+var DEFAULT_ODDS_MAX_AGE_HOURS, ODDS_MAX_AGE_HOURS, MAX_VERIFIED_ODDS_AGE_MS;
 var init_market_odds_readiness = __esm({
   "src/lib/market-odds-readiness.ts"() {
     "use strict";
     init_odds_market();
-    MAX_VERIFIED_ODDS_AGE_MS = 3 * 60 * 60 * 1e3;
+    DEFAULT_ODDS_MAX_AGE_HOURS = 3;
+    ODDS_MAX_AGE_HOURS = resolveOddsMaxAgeHours();
+    MAX_VERIFIED_ODDS_AGE_MS = ODDS_MAX_AGE_HOURS * 60 * 60 * 1e3;
   }
 });
 
@@ -54929,107 +54936,118 @@ var init_team_stats_freshness = __esm({
   }
 });
 
-// src/services/model-discovery.ts
-function modelName(name) {
-  return name.replace(/^models\//, "");
+// src/lib/stats-integrity.ts
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-async function listSupportedGeminiModels(apiKey) {
-  new GoogleGenerativeAI(apiKey);
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
-  );
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error?.message ?? `Gemini models.list failed (${response.status})`);
-  return (body.models ?? []).filter((model) => model.supportedGenerationMethods?.includes("generateContent")).map((model) => modelName(model.name)).filter(Boolean);
+function isMeaningful(value) {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.length > 0;
+  if (isRecord2(value)) return Object.keys(value).length > 0;
+  return false;
 }
-async function getGeminiModel(apiKey) {
-  if (!supportedModelsPromise) {
-    supportedModelsPromise = listSupportedGeminiModels(apiKey).catch((error) => {
-      supportedModelsPromise = null;
-      throw error;
-    });
+function statBlockText(block2) {
+  if (!isRecord2(block2)) return "";
+  const chunks = [];
+  for (const [key, value] of Object.entries(block2)) {
+    chunks.push(key, value == null ? "" : String(value));
   }
-  const models = await supportedModelsPromise;
-  const preferred = [
-    process.env["GEMINI_MODEL"],
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash"
-  ].filter((value) => Boolean(value));
-  const selected = preferred.find((candidate) => models.includes(candidate)) ?? models.find((candidate) => /flash/i.test(candidate)) ?? models[0];
-  if (!selected) throw new Error("Gemini returned no model supporting generateContent");
-  logger.info({ model: selected, supportedModelCount: models.length }, "Selected Gemini generateContent model");
-  return selected;
+  return chunks.join(" ").toLowerCase();
 }
-var supportedModelsPromise;
-var init_model_discovery = __esm({
-  "src/services/model-discovery.ts"() {
+function findContradictoryColumns(row) {
+  const found = [];
+  for (const rule of CONTRADICTION_RULES) {
+    const block2 = row[rule.column];
+    if (!isMeaningful(block2)) continue;
+    const text = statBlockText(block2);
+    if (!text) continue;
+    if (rule.misleading.test(text) && !rule.expected.test(text)) {
+      found.push({
+        column: rule.column,
+        belongsTo: rule.belongsTo,
+        sample: isRecord2(block2) ? String(Object.values(block2).find((value) => typeof value === "string") ?? "").slice(0, 60) : ""
+      });
+    }
+  }
+  return found;
+}
+function parsePercent(raw) {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw !== "string") return null;
+  const match = raw.match(/-?\d+(?:[.,]\d+)?/);
+  if (!match) return null;
+  const value = Number(match[0].replace(",", "."));
+  return Number.isFinite(value) ? value : null;
+}
+function over25FromForm(form) {
+  if (!isRecord2(form)) return null;
+  for (const [key, value] of Object.entries(form)) {
+    if (!OVER_25_KEY.test(key.trim())) continue;
+    const parsed = parsePercent(value);
+    if (parsed != null && parsed >= 0 && parsed <= 100) return parsed;
+  }
+  return null;
+}
+function over25FromBlock(block2) {
+  if (!isRecord2(block2)) return null;
+  const candidates2 = ["Over 2.5", "%", "Over"];
+  for (const key of candidates2) {
+    const value = block2[key];
+    if (value == null) continue;
+    const parsed = parsePercent(value);
+    if (parsed != null && parsed >= 0 && parsed <= 100) return parsed;
+  }
+  return null;
+}
+function normalizeStatsRow(row) {
+  const stats = { ...row };
+  const removed = findContradictoryColumns(row);
+  for (const hit of removed) delete stats[hit.column];
+  const derived = [];
+  const staleOver = !isMeaningful(stats.stats_over_25);
+  const staleUnder = !isMeaningful(stats.stats_under);
+  const over = staleOver || staleUnder ? over25FromBlock(stats.stats_over_25) ?? over25FromForm(stats.stats_team_form) : null;
+  if (over != null) {
+    if (staleOver) {
+      stats.stats_over_25 = {
+        "Over 2.5": `${over}%`,
+        "%": `${over}%`,
+        "Derived From": "stats_team_form"
+      };
+      derived.push("stats_over_25");
+    }
+    if (staleUnder) {
+      const under = Number((100 - over).toFixed(1));
+      stats.stats_under = {
+        "Under 2.5": `${under}%`,
+        "Derived From": "100 - stats_team_form[Over 2.5]"
+      };
+      derived.push("stats_under");
+    }
+  }
+  return { stats, removed, derived };
+}
+var CONTRADICTION_RULES, OVER_25_KEY;
+var init_stats_integrity = __esm({
+  "src/lib/stats-integrity.ts"() {
     "use strict";
-    init_dist5();
-    init_logger();
-    supportedModelsPromise = null;
-  }
-});
-
-// src/lib/quant/devig.ts
-function overround(odds) {
-  return odds.reduce((sum, o) => sum + 1 / o, 0) - 1;
-}
-function assertOdds(odds) {
-  if (odds.length < 2) throw new Error("De-vig butuh minimal 2 outcome.");
-  for (const o of odds) {
-    if (!Number.isFinite(o) || o <= 1) throw new Error(`Odds tidak valid: ${o}`);
-  }
-}
-function proportional(odds) {
-  const inv = odds.map((o) => 1 / o);
-  const total = inv.reduce((a, b) => a + b, 0);
-  return inv.map((v) => v / total);
-}
-function bisect(f, lo, hi, iterations = 80) {
-  let a = lo;
-  let b = hi;
-  const fa = f(a);
-  for (let i = 0; i < iterations; i++) {
-    const mid = (a + b) / 2;
-    const fm = f(mid);
-    if (Math.sign(fm) === Math.sign(fa)) a = mid;
-    else b = mid;
-  }
-  return (a + b) / 2;
-}
-function devig(odds, method = "shin") {
-  assertOdds(odds);
-  const margin = overround(odds);
-  const base = { overround: margin, method };
-  if (margin <= 1e-9 || method === "proportional") {
-    return { ...base, probs: proportional(odds), usedMethod: "proportional" };
-  }
-  const inv = odds.map((o) => 1 / o);
-  if (method === "power") {
-    const f = (k2) => inv.reduce((s, v) => s + Math.pow(v, k2), 0) - 1;
-    const k = bisect(f, 1, 25);
-    const probs = inv.map((v) => Math.pow(v, k));
-    const total = probs.reduce((a, b) => a + b, 0);
-    return { ...base, probs: probs.map((p) => p / total), usedMethod: "power", k };
-  }
-  const B = inv.reduce((a, b) => a + b, 0);
-  const shinProbs = (z) => inv.map(
-    (pi) => (Math.sqrt(z * z + 4 * (1 - z) * pi * pi / B) - z) / (2 * (1 - z))
-  );
-  const g = (z) => shinProbs(z).reduce((a, b) => a + b, 0) - 1;
-  const hi = 0.45;
-  if (g(0) > 0 && g(hi) < 0) {
-    const z = bisect(g, 0, hi);
-    const probs = shinProbs(z);
-    const total = probs.reduce((a, b) => a + b, 0);
-    return { ...base, probs: probs.map((p) => p / total), usedMethod: "shin", z };
-  }
-  return { ...base, probs: proportional(odds), usedMethod: "proportional" };
-}
-var init_devig = __esm({
-  "src/lib/quant/devig.ts"() {
-    "use strict";
+    CONTRADICTION_RULES = [
+      {
+        column: "stats_goals_scored",
+        misleading: /conceded/i,
+        expected: /scored/i,
+        belongsTo: "stats_goals_conceded"
+      },
+      {
+        column: "stats_goals_conceded",
+        misleading: /\bscored\b/i,
+        expected: /conceded/i,
+        belongsTo: "stats_goals_scored"
+      }
+    ];
+    OVER_25_KEY = /^over\s*2[.,]5(\s*%|\s*goals)?$/i;
   }
 });
 
@@ -55192,6 +55210,508 @@ var init_poisson = __esm({
   }
 });
 
+// src/lib/match-context.ts
+function parseStatNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/'/g, "");
+  const match = cleaned.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function parsePercent2(value) {
+  const raw = parseStatNumber(value);
+  if (raw == null) return null;
+  const isPercentText = typeof value === "string" && value.includes("%");
+  const scaled = isPercentText || raw > 1 ? raw / 100 : raw;
+  return clamp(scaled, 0, 1);
+}
+function parseRate(value) {
+  const raw = parseStatNumber(value);
+  if (raw == null) return null;
+  return raw >= 0 && raw < 20 ? raw : null;
+}
+function block(row, key) {
+  const value = row?.[key];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value;
+}
+function pick(source, keys) {
+  for (const key of keys) {
+    if (source[key] !== void 0 && source[key] !== null) return source[key];
+  }
+  return void 0;
+}
+function parseTeamRates(row) {
+  const xg = block(row, "stats_xg");
+  const scored = block(row, "stats_goals_scored");
+  const conceded = block(row, "stats_goals_conceded");
+  const btts = block(row, "stats_btts");
+  const fts = block(row, "stats_fts");
+  const form = block(row, "stats_team_form");
+  const shots = block(row, "stats_shots");
+  const ht = block(row, "stats_ht");
+  const matches = parseStatNumber(pick(xg, ["MP"])) ?? parseStatNumber(pick(form, ["MP"]));
+  return {
+    matches,
+    goalsFor: parseRate(pick(scored, ["Per Match", "per_match"])) ?? parseStatNumber(pick(xg, ["GF"])),
+    goalsAgainst: parseRate(pick(conceded, ["Per Match", "per_match"])) ?? parseStatNumber(pick(xg, ["GA"])),
+    goalsForHome: parseRate(pick(scored, ["Home", "home"])),
+    goalsForAway: parseRate(pick(scored, ["Away", "away"])),
+    goalsAgainstHome: parseRate(pick(conceded, ["Home", "home"])),
+    goalsAgainstAway: parseRate(pick(conceded, ["Away", "away"])),
+    xgFor: parseRate(pick(xg, ["xG", "XG"])),
+    xgAgainst: parseRate(pick(xg, ["xGA"])),
+    xgResidual: parseStatNumber(pick(xg, ["xG vs Actual", "xG vs actual"])),
+    btts: parsePercent2(pick(btts, ["BTTS %"])),
+    bttsHome: parsePercent2(pick(btts, ["Home %"])),
+    bttsAway: parsePercent2(pick(btts, ["Away %"])),
+    fts: parsePercent2(pick(fts, ["FTS %"])),
+    ftsHome: parsePercent2(pick(fts, ["Home %"])),
+    shotsOver105: parsePercent2(pick(shots, ["Over 10.5"])),
+    formPoints: parseStatNumber(pick(form, ["Pts"])),
+    formMatches: parseStatNumber(pick(form, ["MP"])),
+    formPpg: parseStatNumber(pick(form, ["PPG"])),
+    last6: typeof form["Last 6"] === "string" ? form["Last 6"] : null,
+    htWin: parsePercent2(pick(ht, ["Win %"]))
+  };
+}
+function shrink(ratio, matches, k = SHRINK_MATCHES) {
+  const n = matches && matches > 0 ? matches : 0;
+  return (n * ratio + k * 1) / (n + k);
+}
+function estimateLambdas(home, away, league = DEFAULT_LEAGUE) {
+  const teamAvg = Math.max(0.2, (league.homeGoals + league.awayGoals) / 2);
+  const blend = (xg, actual, fallback) => {
+    if (xg != null && actual != null) return XG_WEIGHT * xg + (1 - XG_WEIGHT) * actual;
+    return xg ?? actual ?? fallback;
+  };
+  const attackHomeRatio = blend(home.xgFor, home.goalsForHome, home.goalsFor ?? teamAvg) / teamAvg;
+  const defenseHomeRatio = blend(home.xgAgainst, home.goalsAgainstHome, home.goalsAgainst ?? teamAvg) / teamAvg;
+  const attackAwayRatio = blend(away.xgFor, away.goalsForAway, away.goalsFor ?? teamAvg) / teamAvg;
+  const defenseAwayRatio = blend(away.xgAgainst, away.goalsAgainstAway, away.goalsAgainst ?? teamAvg) / teamAvg;
+  const attackHome = shrink(attackHomeRatio, home.matches);
+  const defenseHome = shrink(defenseHomeRatio, home.matches);
+  const attackAway = shrink(attackAwayRatio, away.matches);
+  const defenseAway = shrink(defenseAwayRatio, away.matches);
+  const n = Math.max(0, Math.min(home.matches ?? 0, away.matches ?? 0));
+  return {
+    lambdaHome: clamp(league.homeGoals * attackHome * defenseAway, 0.2, 4.5),
+    lambdaAway: clamp(league.awayGoals * attackAway * defenseHome, 0.15, 4),
+    reliability: n / (n + SHRINK_MATCHES),
+    attackHome,
+    defenseHome,
+    attackAway,
+    defenseAway
+  };
+}
+function jointProbability(matrix, tests) {
+  let total = 0;
+  for (let h = 0; h <= matrix.maxGoals; h += 1) {
+    for (let a = 0; a <= matrix.maxGoals; a += 1) {
+      if (tests.every((test) => test(h, a))) total += matrix.m[h][a];
+    }
+  }
+  return total;
+}
+function marketProbabilities(matrix) {
+  const result2 = matchResultProbs(matrix);
+  const btts = bttsProb(matrix);
+  const over25 = winShare(totalsOutcome(matrix, 2.5, "over"));
+  const over15 = winShare(totalsOutcome(matrix, 1.5, "over"));
+  const over35 = winShare(totalsOutcome(matrix, 3.5, "over"));
+  const flat = [];
+  for (let h = 0; h <= 5; h += 1) {
+    for (let a = 0; a <= 5; a += 1) flat.push({ score: `${h}-${a}`, p: matrix.m[h][a] });
+  }
+  return {
+    homeWin: result2.home,
+    draw: result2.draw,
+    awayWin: result2.away,
+    over25,
+    under25: 1 - over25,
+    bttsYes: btts.yes,
+    bttsNo: btts.no,
+    over15,
+    over35,
+    topScores: flat.sort((x, y) => y.p - x.p).slice(0, 3)
+  };
+}
+function correlationFindings(matrix) {
+  const m = marketProbabilities(matrix);
+  const over25 = (h, a) => h + a > 2.5;
+  const btts = (h, a) => h > 0 && a > 0;
+  const homeWin = (h, a) => h > a;
+  const under25 = (h, a) => h + a < 2.5;
+  const pairs = [
+    {
+      pair: "Over 2.5 + BTTS",
+      tests: [over25, btts],
+      p1: m.over25,
+      p2: m.bttsYes,
+      note: "dua market paling sering digabung; perkalian biasa melebihkan risiko"
+    },
+    {
+      pair: "Tuan rumah menang + Over 2.5",
+      tests: [homeWin, over25],
+      p1: m.homeWin,
+      p2: m.over25,
+      note: "kemenangan besar biasanya menghasilkan banyak gol"
+    },
+    {
+      pair: "BTTS + Tuan rumah menang",
+      tests: [btts, homeWin],
+      p1: m.bttsYes,
+      p2: m.homeWin,
+      note: "tuan rumah menang sambil kebobolan tetap very mungkin"
+    },
+    {
+      pair: "Under 2.5 + BTTS No",
+      tests: [under25, (h, a) => h === 0 || a === 0],
+      p1: m.under25,
+      p2: m.bttsNo,
+      note: "pola khas laga tertutup; korelasinya positif"
+    }
+  ];
+  return pairs.map(({ pair, tests, p1, p2, note }) => {
+    const joint = jointProbability(matrix, tests);
+    const independent = p1 * p2;
+    return {
+      pair,
+      joint,
+      independent,
+      ratio: independent > 0 ? joint / independent : 0,
+      note
+    };
+  });
+}
+function modelProbabilityForSelection(matrix, markets, label) {
+  const text = String(label ?? "").trim();
+  if (!text) return { probability: null, family: null, note: "Market tidak dipilih." };
+  const lower = text.toLowerCase();
+  if (lower === "home win") return { probability: markets.homeWin, family: "ML", note: null };
+  if (lower === "away win") return { probability: markets.awayWin, family: "ML", note: null };
+  if (lower === "draw") return { probability: markets.draw, family: "ML", note: null };
+  if (lower === "btts yes") return { probability: markets.bttsYes, family: "BTTS", note: null };
+  if (lower === "btts no") return { probability: markets.bttsNo, family: "BTTS", note: null };
+  const totals = lower.match(/^(over|under)\s+(\d+(?:\.\d+)?)/);
+  if (totals) {
+    const side = totals[1] === "over" ? "over" : "under";
+    const line = Number(totals[2]);
+    if (!Number.isFinite(line)) {
+      return { probability: null, family: "Totals", note: "Line totals tidak valid." };
+    }
+    return {
+      probability: winShare(totalsOutcome(matrix, line, side)),
+      family: "Totals",
+      note: null
+    };
+  }
+  const handicap = lower.match(/^asian handicap\s+(home|away)\s+([+-]?\d+(?:\.\d+)?)/);
+  if (handicap) {
+    const side = handicap[1] === "home" ? "home" : "away";
+    const line = Number(handicap[2]);
+    if (!Number.isFinite(line)) {
+      return { probability: null, family: "AH", note: "Line handicap tidak valid." };
+    }
+    return {
+      probability: winShare(handicapOutcome(matrix, line, side)),
+      family: "AH",
+      note: null
+    };
+  }
+  if (lower.startsWith("ht ")) {
+    return {
+      probability: null,
+      family: "HT",
+      note: "Model gol saat ini tidak memodelkan babak pertama; HT tidak diberi probabilitas."
+    };
+  }
+  return {
+    probability: null,
+    family: null,
+    note: `Label market "${text}" tidak dapat dipetakan ke matriks skor.`
+  };
+}
+function buildMatchContext(input) {
+  const home = parseTeamRates(input.homeStats);
+  const away = parseTeamRates(input.awayStats);
+  const leagueIsDefault = !input.league;
+  const league = input.league ?? DEFAULT_LEAGUE;
+  const lambdas = estimateLambdas(home, away, league);
+  const matrix = scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway);
+  const markets = marketProbabilities(matrix);
+  const correlation = correlationFindings(matrix);
+  const dataGaps = [];
+  const signals = [];
+  if (leagueIsDefault) {
+    dataGaps.push("Rata-rata gol liga tidak tersedia; dipakai default 1.45/1.15.");
+  }
+  if (home.matches == null || away.matches == null) {
+    dataGaps.push("Jumlah laga musim berjalan tidak terbaca; kekuatan tim tidak bisa di-shrink.");
+  }
+  if (home.xgFor == null || away.xgFor == null) {
+    dataGaps.push("xG tidak lengkap; kekuatan dihitung dari gol aktual (lebih bising).");
+  }
+  if (home.goalsForHome == null || away.goalsForAway == null) {
+    dataGaps.push("Split kandang/tandang tidak tersedia; \u03BB memakai rata-rata musim.");
+  }
+  signals.push(
+    `\u03BB model: ${num(lambdas.lambdaHome)} \u2013 ${num(lambdas.lambdaAway)} (keandalan data ${pct(lambdas.reliability)}).`
+  );
+  signals.push(
+    `Serang kandang ${input.homeTeam} = ${num(lambdas.attackHome)}\xD7 rata-rata liga; bertahan tandang ${input.awayTeam} = ${num(lambdas.defenseAway)}\xD7 rata-rata.`
+  );
+  signals.push(
+    `Serang tandang ${input.awayTeam} = ${num(lambdas.attackAway)}\xD7; bertahan kandang ${input.homeTeam} = ${num(lambdas.defenseHome)}\xD7.`
+  );
+  if (home.goalsForHome != null && home.goalsForAway != null) {
+    const gap = home.goalsForHome - home.goalsForAway;
+    signals.push(
+      `Split ${input.homeTeam}: ${num(home.goalsForHome)} gol/laga di kandang vs ${num(home.goalsForAway)} di tandang (selisih ${num(gap)}).`
+    );
+  }
+  if (away.goalsAgainstHome != null && away.goalsAgainstAway != null) {
+    signals.push(
+      `Kebobolan ${input.awayTeam}: ${num(away.goalsAgainstHome)} di kandang vs ${num(away.goalsAgainstAway)} di tandang.`
+    );
+  }
+  if (home.bttsHome != null && away.bttsAway != null) {
+    signals.push(
+      `BTTS: ${input.homeTeam} ${pct(home.bttsHome)} di kandang, ${input.awayTeam} ${pct(away.bttsAway)} di tandang.`
+    );
+  }
+  for (const [name, rates] of [
+    [input.homeTeam, home],
+    [input.awayTeam, away]
+  ]) {
+    if (rates.xgResidual != null && Math.abs(rates.xgResidual) >= 0.3) {
+      const arah = rates.xgResidual > 0 ? "di atas" : "di bawah";
+      const implikasi = rates.xgResidual > 0 ? "waspadai penurunan" : "potensi kenaikan";
+      signals.push(
+        `Residual xG ${name}: ${num(rates.xgResidual)} gol ${arah} xG \u2014 ${implikasi} (penyelesaian belum berkelanjutan).`
+      );
+    }
+  }
+  if (home.formPpg != null && away.formPpg != null) {
+    signals.push(
+      `Form: ${input.homeTeam} ${num(home.formPpg)} PPG, ${input.awayTeam} ${num(away.formPpg)} PPG${home.last6 ? ` (home: ${home.last6})` : ""}.`
+    );
+  }
+  if (input.restDays) {
+    const { home: restH, away: restA } = input.restDays;
+    if (restH != null && restA != null) {
+      const diff = restH - restA;
+      signals.push(
+        `Istirahat: ${input.homeTeam} ${restH} hari, ${input.awayTeam} ${restA} hari${Math.abs(diff) >= 2 ? ` (selisih ${Math.abs(diff)} hari)` : ""}.`
+      );
+    } else if (restH != null || restA != null) {
+      signals.push(`Istirahat: home ${restH ?? "?"} hari, away ${restA ?? "?"} hari.`);
+    }
+  }
+  if (input.standings?.home?.position != null && input.standings?.away?.position != null) {
+    signals.push(
+      `Klasemen: ${input.homeTeam} #${input.standings.home.position}, ${input.awayTeam} #${input.standings.away.position}.`
+    );
+  }
+  return {
+    home,
+    away,
+    league,
+    leagueIsDefault,
+    lambdas,
+    matrix,
+    markets,
+    signals,
+    correlation,
+    dataGaps
+  };
+}
+function formatMatchContextBlock(ctx, homeTeam, awayTeam) {
+  const m = ctx.markets;
+  const lines = [];
+  lines.push("");
+  lines.push("--- MODEL PERTANDINGAN (dihitung kode, bukan opini) ---");
+  lines.push(
+    `Probabilitas turunan: 1X2 ${pct(m.homeWin)} / ${pct(m.draw)} / ${pct(m.awayWin)} | Over 2.5 ${pct(m.over25)} | BTTS ${pct(m.bttsYes)}`
+  );
+  lines.push(
+    `Skor paling mungkin: ${m.topScores.map((s) => `${s.score} (${pct(s.p)})`).join(", ")}`
+  );
+  lines.push(`Sinyal:`);
+  for (const signal of ctx.signals) lines.push(`  \u2022 ${signal}`);
+  const related = ctx.correlation.filter((item) => item.ratio >= 1.15).sort((a, b) => b.ratio - a.ratio).slice(0, 3);
+  if (related.length > 0) {
+    lines.push("Korelasi market (joint vs perkalian independen):");
+    for (const item of related) {
+      lines.push(
+        `  \u2022 ${item.pair}: ${pct(item.joint)} vs ${pct(item.independent)} (${item.ratio.toFixed(2)}\xD7) \u2014 jangan perlakukan sebagai dua taruhan terpisah.`
+      );
+    }
+  }
+  if (ctx.dataGaps.length > 0) {
+    lines.push(`Data hilang: ${ctx.dataGaps.join(" ")}`);
+  }
+  lines.push(
+    "ATURAN: gunakan angka di atas sebagai dasar; jangan menghitung ulang probabilitas sendiri. Pertimbangkan konteks (berita, motivasi, jadwal) sebagai penyesuaian kecil, bukan pengganti."
+  );
+  return lines.join("\n");
+}
+var DEFAULT_LEAGUE, SHRINK_MATCHES, XG_WEIGHT, clamp, pct, num;
+var init_match_context = __esm({
+  "src/lib/match-context.ts"() {
+    "use strict";
+    init_poisson();
+    DEFAULT_LEAGUE = { homeGoals: 1.45, awayGoals: 1.15 };
+    SHRINK_MATCHES = 6;
+    XG_WEIGHT = 0.6;
+    clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+    pct = (value) => `${(value * 100).toFixed(1)}%`;
+    num = (value) => value.toFixed(2);
+  }
+});
+
+// src/lib/betting-math.ts
+function impliedProbabilities(odds) {
+  return odds.map((value) => VALID_ODDS(value) ? 1 / value : 0);
+}
+function devigMultiplicative(odds) {
+  const raw = impliedProbabilities(odds);
+  const total = raw.reduce((sum, value) => sum + value, 0);
+  const usable = raw.filter((value) => value > 0).length;
+  if (usable < 2 || total <= 0) return null;
+  return {
+    method: "multiplicative",
+    fair: raw.map((value) => value / total),
+    overround: total - 1,
+    booksum: total
+  };
+}
+function devigAdditive(odds) {
+  const raw = impliedProbabilities(odds);
+  const usable = raw.filter((value) => value > 0).length;
+  const total = raw.reduce((sum2, value) => sum2 + value, 0);
+  if (usable < 2 || total <= 0) return null;
+  const margin = (total - 1) / usable;
+  const fair = raw.map((value) => value > 0 ? value - margin : 0);
+  if (fair.some((value) => value < 0)) return null;
+  const sum = fair.reduce((acc, value) => acc + value, 0);
+  if (sum <= 0) return null;
+  return {
+    method: "additive",
+    fair: fair.map((value) => value / sum),
+    overround: total - 1,
+    booksum: total
+  };
+}
+function shinProbabilities(raw, total, z) {
+  return raw.map((value) => {
+    if (value <= 0) return 0;
+    const discriminant = z * z + 4 * (1 - z) * (value * value / total);
+    const root = Math.sqrt(Math.max(0, discriminant));
+    return (root - z) / (2 * (1 - z));
+  });
+}
+function devigShin(odds) {
+  const raw = impliedProbabilities(odds);
+  const total = raw.reduce((sum2, value) => sum2 + value, 0);
+  const usable = raw.filter((value) => value > 0).length;
+  if (usable < 2 || total <= 0) return null;
+  if (total <= 1.0000001) return devigMultiplicative(odds);
+  const sumAt = (z2) => shinProbabilities(raw, total, z2).reduce((acc, value) => acc + value, 0);
+  let low = 0;
+  let high = 0.999999;
+  for (let i = 0; i < 200; i += 1) {
+    const mid = (low + high) / 2;
+    if (sumAt(mid) > 1) low = mid;
+    else high = mid;
+  }
+  const z = (low + high) / 2;
+  const fair = shinProbabilities(raw, total, z);
+  const sum = fair.reduce((acc, value) => acc + value, 0);
+  if (!Number.isFinite(sum) || sum <= 0) return null;
+  return {
+    method: "shin",
+    fair: fair.map((value) => value / sum),
+    overround: total - 1,
+    booksum: total
+  };
+}
+function devigAll(odds) {
+  return [devigMultiplicative(odds), devigAdditive(odds), devigShin(odds)].filter((result2) => result2 != null);
+}
+function worstCaseFairProbability(odds, index) {
+  const results = devigAll(odds);
+  if (results.length === 0) return null;
+  const values = results.map((result2) => result2.fair[index]).filter((value) => typeof value === "number" && Number.isFinite(value));
+  if (values.length === 0) return null;
+  return Math.min(...values);
+}
+function expectedValue(probability, odds) {
+  if (!Number.isFinite(probability) || !Number.isFinite(odds) || odds <= 1) return 0;
+  return probability * odds - 1;
+}
+function conservativeEv(probability, odds, sigma = 0.05) {
+  const adjusted = Math.max(0, probability - Math.max(0, sigma));
+  return expectedValue(adjusted, odds);
+}
+function blendProbability(modelProbability, marketFairProbability, modelWeight = 0.35) {
+  if (!Number.isFinite(modelProbability)) return marketFairProbability;
+  if (!Number.isFinite(marketFairProbability)) return modelProbability;
+  const weight = Math.min(1, Math.max(0, modelWeight));
+  return weight * modelProbability + (1 - weight) * marketFairProbability;
+}
+var VALID_ODDS;
+var init_betting_math = __esm({
+  "src/lib/betting-math.ts"() {
+    "use strict";
+    VALID_ODDS = (value) => typeof value === "number" && Number.isFinite(value) && value > 1;
+  }
+});
+
+// src/services/model-discovery.ts
+function modelName(name) {
+  return name.replace(/^models\//, "");
+}
+async function listSupportedGeminiModels(apiKey) {
+  new GoogleGenerativeAI(apiKey);
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
+  );
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error?.message ?? `Gemini models.list failed (${response.status})`);
+  return (body.models ?? []).filter((model) => model.supportedGenerationMethods?.includes("generateContent")).map((model) => modelName(model.name)).filter(Boolean);
+}
+async function getGeminiModel(apiKey) {
+  if (!supportedModelsPromise) {
+    supportedModelsPromise = listSupportedGeminiModels(apiKey).catch((error) => {
+      supportedModelsPromise = null;
+      throw error;
+    });
+  }
+  const models = await supportedModelsPromise;
+  const preferred = [
+    process.env["GEMINI_MODEL"],
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash"
+  ].filter((value) => Boolean(value));
+  const selected = preferred.find((candidate) => models.includes(candidate)) ?? models.find((candidate) => /flash/i.test(candidate)) ?? models[0];
+  if (!selected) throw new Error("Gemini returned no model supporting generateContent");
+  logger.info({ model: selected, supportedModelCount: models.length }, "Selected Gemini generateContent model");
+  return selected;
+}
+var supportedModelsPromise;
+var init_model_discovery = __esm({
+  "src/services/model-discovery.ts"() {
+    "use strict";
+    init_dist5();
+    init_logger();
+    supportedModelsPromise = null;
+  }
+});
+
 // src/lib/quant/strength.ts
 function shrunkRatio(observedPerMatch, xgPerMatch, leagueTeamAvg, n, prior, K, xgWeight) {
   const blended = xgPerMatch != null && Number.isFinite(xgPerMatch) ? xgWeight * xgPerMatch + (1 - xgWeight) * observedPerMatch : observedPerMatch;
@@ -55208,8 +55728,8 @@ function modelLambdas(home, away, league, opts = {}) {
   const defA = shrunkRatio(away.goalsAgainst, away.xgAgainst, teamAvg, away.matches, away.priorDefense ?? 1, K, xgW);
   const minN = Math.max(0, Math.min(home.matches, away.matches));
   return {
-    lambdaHome: clamp(league.homeGoals * atkH * defA, 0.2, 4.5),
-    lambdaAway: clamp(league.awayGoals * atkA * defH, 0.15, 4),
+    lambdaHome: clamp2(league.homeGoals * atkH * defA, 0.2, 4.5),
+    lambdaAway: clamp2(league.awayGoals * atkA * defH, 0.15, 4),
     reliability: minN / (minN + K)
   };
 }
@@ -55228,17 +55748,139 @@ function sanitizeLlmAdjustment(raw) {
   const h = Number(r.lambda_home_mult ?? r.lambdaHomeMult);
   const a = Number(r.lambda_away_mult ?? r.lambdaAwayMult);
   return {
-    lambdaHomeMult: Number.isFinite(h) ? clamp(h, lo, hi) : 1,
-    lambdaAwayMult: Number.isFinite(a) ? clamp(a, lo, hi) : 1,
+    lambdaHomeMult: Number.isFinite(h) ? clamp2(h, lo, hi) : 1,
+    lambdaAwayMult: Number.isFinite(a) ? clamp2(a, lo, hi) : 1,
     evidence
   };
 }
-var clamp, MAX_LLM_LAMBDA_ADJUST;
+var clamp2, MAX_LLM_LAMBDA_ADJUST;
 var init_strength = __esm({
   "src/lib/quant/strength.ts"() {
     "use strict";
-    clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+    clamp2 = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
     MAX_LLM_LAMBDA_ADJUST = 0.12;
+  }
+});
+
+// src/lib/quant/llm-contract.ts
+function jsonObjectsIn(text) {
+  const out = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(text.slice(i, j + 1));
+            if (parsed && typeof parsed === "object") out.push(parsed);
+          } catch {
+          }
+          i = j;
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+function extractLambdaAdjustment(text) {
+  for (const obj of jsonObjectsIn(text)) {
+    const raw = obj["lambda_adjustment"] ?? obj["lambdaAdjustment"] ?? null;
+    const candidate = raw && typeof raw === "object" ? raw : obj;
+    const hasLambdaKeys = "lambda_home_mult" in candidate || "lambdaHomeMult" in candidate;
+    if (!hasLambdaKeys) continue;
+    const clean = sanitizeLlmAdjustment(candidate);
+    const isNeutral = clean.lambdaHomeMult === 1 && clean.lambdaAwayMult === 1;
+    return isNeutral && clean.evidence.length === 0 ? null : clean;
+  }
+  return null;
+}
+var V5_CONTRACT_SUFFIX;
+var init_llm_contract = __esm({
+  "src/lib/quant/llm-contract.ts"() {
+    "use strict";
+    init_strength();
+    V5_CONTRACT_SUFFIX = `
+\u2550\u2550\u2550 KONTRAK V5 (WAJIB, mengalahkan instruksi sebelumnya bila bertentangan) \u2550\u2550\u2550
+1. DILARANG melaporkan EV, ev_percent, stake, atau ukuran taruhan dalam bentuk apa pun. EV dan stake SELALU dihitung kode dari probabilitas dan odds provider. Bila Anda menulis angka EV/stake, angka itu diabaikan.
+2. "probability" pada selection tetap wajib (0 < p < 1): itu penilaian probabilitas Anda untuk market terpilih, BUKAN confidence dan BUKAN probabilitas implisit bandar. Confidence hanya keterangan.
+3. Sertakan objek "lambda_adjustment" pada JSON yang sama, mengikuti PERSONA_V5: Anda hanya boleh mengusulkan pengali lambda_home_mult / lambda_away_mult dalam 0.88\u20131.12 berdasarkan informasi material (cedera, line-up, rotasi, skorsing, motivasi ekstrem) dan WAJIB menyertakan "evidence" berisi {type, detail \u2265 10 karakter, source_url}. Tanpa bukti yang dapat diverifikasi, gunakan 1.00 untuk keduanya dan evidence kosong \u2014 pengali tanpa bukti akan dibuang oleh kode.
+4. Keputusan akhir (AMBIL/NO BET, stake, komposisi parlay) bukan wewenang Anda. Susun kandidat terbaik menurut penilaian Anda; mesin yang memutuskan.`;
+  }
+});
+
+// src/lib/quant/devig.ts
+function overround(odds) {
+  return odds.reduce((sum, o) => sum + 1 / o, 0) - 1;
+}
+function assertOdds(odds) {
+  if (odds.length < 2) throw new Error("De-vig butuh minimal 2 outcome.");
+  for (const o of odds) {
+    if (!Number.isFinite(o) || o <= 1) throw new Error(`Odds tidak valid: ${o}`);
+  }
+}
+function proportional(odds) {
+  const inv = odds.map((o) => 1 / o);
+  const total = inv.reduce((a, b) => a + b, 0);
+  return inv.map((v) => v / total);
+}
+function bisect(f, lo, hi, iterations = 80) {
+  let a = lo;
+  let b = hi;
+  const fa = f(a);
+  for (let i = 0; i < iterations; i++) {
+    const mid = (a + b) / 2;
+    const fm = f(mid);
+    if (Math.sign(fm) === Math.sign(fa)) a = mid;
+    else b = mid;
+  }
+  return (a + b) / 2;
+}
+function devig(odds, method = "shin") {
+  assertOdds(odds);
+  const margin = overround(odds);
+  const base = { overround: margin, method };
+  if (margin <= 1e-9 || method === "proportional") {
+    return { ...base, probs: proportional(odds), usedMethod: "proportional" };
+  }
+  const inv = odds.map((o) => 1 / o);
+  if (method === "power") {
+    const f = (k2) => inv.reduce((s, v) => s + Math.pow(v, k2), 0) - 1;
+    const k = bisect(f, 1, 25);
+    const probs = inv.map((v) => Math.pow(v, k));
+    const total = probs.reduce((a, b) => a + b, 0);
+    return { ...base, probs: probs.map((p) => p / total), usedMethod: "power", k };
+  }
+  const B = inv.reduce((a, b) => a + b, 0);
+  const shinProbs = (z) => inv.map(
+    (pi) => (Math.sqrt(z * z + 4 * (1 - z) * pi * pi / B) - z) / (2 * (1 - z))
+  );
+  const g = (z) => shinProbs(z).reduce((a, b) => a + b, 0) - 1;
+  const hi = 0.45;
+  if (g(0) > 0 && g(hi) < 0) {
+    const z = bisect(g, 0, hi);
+    const probs = shinProbs(z);
+    const total = probs.reduce((a, b) => a + b, 0);
+    return { ...base, probs: probs.map((p) => p / total), usedMethod: "shin", z };
+  }
+  return { ...base, probs: proportional(odds), usedMethod: "proportional" };
+}
+var init_devig = __esm({
+  "src/lib/quant/devig.ts"() {
+    "use strict";
   }
 });
 
@@ -55254,11 +55896,40 @@ function blendLambdas(market, model, w) {
 function defaultModelWeight(reliability, cap = DEFAULT_MAX_MODEL_WEIGHT) {
   return Math.min(cap, Math.max(0, cap * reliability));
 }
-var DEFAULT_MAX_MODEL_WEIGHT;
+function fitBlendWeight(samples) {
+  const valid = samples.filter(
+    (s) => Number.isFinite(s.pModel) && Number.isFinite(s.pMarket) && (s.outcome === 0 || s.outcome === 1)
+  );
+  if (valid.length < 30) return null;
+  const ll = (w) => valid.reduce((sum, s) => {
+    const p = clampP(sigmoid(w * logit(clampP(s.pModel)) + (1 - w) * logit(clampP(s.pMarket))));
+    return sum - (s.outcome === 1 ? Math.log(p) : Math.log(1 - p));
+  }, 0) / valid.length;
+  const curve = [];
+  let best = { w: 0, logLoss: Infinity };
+  for (let i = 0; i <= 20; i++) {
+    const w = i / 20;
+    const l = ll(w);
+    curve.push({ w, logLoss: l });
+    if (l < best.logLoss) best = { w, logLoss: l };
+  }
+  return {
+    weight: best.w,
+    logLossAtWeight: best.logLoss,
+    logLossMarketOnly: ll(0),
+    logLossModelOnly: ll(1),
+    n: valid.length,
+    curve
+  };
+}
+var DEFAULT_MAX_MODEL_WEIGHT, logit, sigmoid, clampP;
 var init_blend = __esm({
   "src/lib/quant/blend.ts"() {
     "use strict";
     DEFAULT_MAX_MODEL_WEIGHT = 0.3;
+    logit = (p) => Math.log(p / (1 - p));
+    sigmoid = (x) => 1 / (1 + Math.exp(-x));
+    clampP = (p) => Math.min(0.995, Math.max(5e-3, p));
   }
 });
 
@@ -55427,7 +56098,7 @@ var init_pipeline = __esm({
 });
 
 // src/lib/quant/adapter.ts
-function parseStatNumber(value) {
+function parseStatNumber2(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
   const cleaned = value.replace(/['"`]/g, "").replace(/,/g, ".").match(/-?\d+(?:\.\d+)?/);
@@ -55435,9 +56106,9 @@ function parseStatNumber(value) {
   const n = Number(cleaned[0]);
   return Number.isFinite(n) ? n : null;
 }
-function perMatch(block) {
-  if (!block) return null;
-  return parseStatNumber(block["Per Match"]) ?? parseStatNumber(block["Goals Scored"]) ?? parseStatNumber(block["Goals Conceded"]);
+function perMatch(block2) {
+  if (!block2) return null;
+  return parseStatNumber2(block2["Per Match"]) ?? parseStatNumber2(block2["Goals Scored"]) ?? parseStatNumber2(block2["Goals Conceded"]);
 }
 function toTeamRates(row) {
   const warnings = [];
@@ -55446,7 +56117,7 @@ function toTeamRates(row) {
   }
   const scored = row.stats_goals_scored ?? null;
   const conceded = row.stats_goals_conceded ?? null;
-  const matches = parseStatNumber(scored?.["MP"]) ?? parseStatNumber(conceded?.["MP"]) ?? 0;
+  const matches = parseStatNumber2(scored?.["MP"]) ?? parseStatNumber2(conceded?.["MP"]) ?? 0;
   let goalsFor = perMatch(scored);
   let goalsAgainst = perMatch(conceded);
   if (goalsFor != null && scored?.["Per Match"] != null && String(scored["Per Match"]).toLowerCase().includes("conceded")) {
@@ -55464,8 +56135,8 @@ function toTeamRates(row) {
     matches,
     goalsFor: goalsFor ?? 0,
     goalsAgainst: goalsAgainst ?? 0,
-    xgFor: parseStatNumber(row.stats_xg?.["xG"]),
-    xgAgainst: parseStatNumber(row.stats_xg?.["xGA"]),
+    xgFor: parseStatNumber2(row.stats_xg?.["xG"]),
+    xgAgainst: parseStatNumber2(row.stats_xg?.["xGA"]),
     priorAttack: null,
     priorDefense: null
   };
@@ -55521,19 +56192,19 @@ function preferCanonicalRow(rows) {
 }
 function resolveTeamRow(rows, teamName) {
   const warnings = [];
-  const candidates = rows.filter((r) => sameTeamName(String(r.team_name ?? ""), teamName));
-  if (candidates.length === 0) {
+  const candidates2 = rows.filter((r) => sameTeamName(String(r.team_name ?? ""), teamName));
+  if (candidates2.length === 0) {
     return { row: null, warnings: [`tim "${teamName}" tidak ada di data liga`] };
   }
-  if (candidates.length > 1) {
-    const names = candidates.map((r) => String(r.team_name)).join(" / ");
-    warnings.push(`tim "${teamName}" punya ${candidates.length} entri (${names}); dipakai sampel terbesar`);
-    const group = findDuplicateTeams(candidates)[0];
-    if (group?.conflicting) {
+  if (candidates2.length > 1) {
+    const names = candidates2.map((r) => String(r.team_name)).join(" / ");
+    warnings.push(`tim "${teamName}" punya ${candidates2.length} entri (${names}); dipakai sampel terbesar`);
+    const group2 = findDuplicateTeams(candidates2)[0];
+    if (group2?.conflicting) {
       warnings.push(`entri duplikat untuk "${teamName}" saling bertentangan \u2014 hasil model tidak dapat dipercaya`);
     }
   }
-  const chosen = preferCanonicalRow(candidates);
+  const chosen = preferCanonicalRow(candidates2);
   return { row: chosen, warnings };
 }
 function computeLeagueAverages(rows) {
@@ -55541,9 +56212,9 @@ function computeLeagueAverages(rows) {
   const home = [];
   const away = [];
   for (const row of rows) {
-    const block = row.stats_goals_scored;
-    const h = parseStatNumber(block?.["Home"]);
-    const a = parseStatNumber(block?.["Away"]);
+    const block2 = row.stats_goals_scored;
+    const h = parseStatNumber2(block2?.["Home"]);
+    const a = parseStatNumber2(block2?.["Away"]);
     if (h != null && h > 0) home.push(h);
     if (a != null && a > 0) away.push(a);
   }
@@ -55554,9 +56225,9 @@ function computeLeagueAverages(rows) {
     );
     return { averages: null, teamsUsed, warnings };
   }
-  const mean = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
-  const homeGoals = mean(home);
-  const awayGoals = mean(away);
+  const mean2 = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
+  const homeGoals = mean2(home);
+  const awayGoals = mean2(away);
   if (awayGoals > homeGoals * 1.25) {
     warnings.push(
       `rata-rata gol tandang (${awayGoals.toFixed(2)}) melebihi tuan rumah (${homeGoals.toFixed(2)}) \u2014 kemungkinan kolom tertukar`
@@ -55584,23 +56255,23 @@ function buildOddsInput(structured) {
   if (!bookmaker) {
     return { odds1x2: null, totals: [], ah: [], btts: null, bookmaker: null, warnings: ["tidak ada odds 1X2 dari bookmaker mana pun"] };
   }
-  const pick = (rows) => rows.filter((r) => r.bookmaker === bookmaker);
-  const mw = pick(structured.matchWinner).find((r) => validOdds(r.home) && validOdds(r.draw) && validOdds(r.away));
+  const pick2 = (rows) => rows.filter((r) => r.bookmaker === bookmaker);
+  const mw = pick2(structured.matchWinner).find((r) => validOdds(r.home) && validOdds(r.draw) && validOdds(r.away));
   const odds1x2 = mw && validOdds(mw.home) && validOdds(mw.draw) && validOdds(mw.away) ? { home: mw.home, draw: mw.draw, away: mw.away } : null;
   if (!odds1x2) warnings.push(`bookmaker ${bookmaker} tidak menyediakan 1X2 lengkap`);
   const totals = [];
-  for (const r of pick(structured.overUnder)) {
+  for (const r of pick2(structured.overUnder)) {
     if (validOdds(r.over) && validOdds(r.under) && Number.isFinite(r.line)) {
       totals.push({ line: Number(r.line), overOdds: r.over, underOdds: r.under });
     }
   }
   const ah = [];
-  for (const r of pick(structured.asianHandicap)) {
+  for (const r of pick2(structured.asianHandicap)) {
     if (validOdds(r.home) && validOdds(r.away) && Number.isFinite(r.line)) {
       ah.push({ line: Number(r.line), homeOdds: r.home, awayOdds: r.away });
     }
   }
-  const bttsRow = pick(structured.btts).find((r) => validOdds(r.yes) && validOdds(r.no));
+  const bttsRow = pick2(structured.btts).find((r) => validOdds(r.yes) && validOdds(r.no));
   const btts = bttsRow && validOdds(bttsRow.yes) && validOdds(bttsRow.no) ? { yes: bttsRow.yes, no: bttsRow.no } : null;
   const dedupe = (xs) => {
     const seen = /* @__PURE__ */ new Set();
@@ -55772,6 +56443,166 @@ var init_quant_shadow = __esm({
     init_adapter();
     init_strength();
     QUANT_MODEL_VERSION = 2;
+  }
+});
+
+// src/lib/llm-ledger.ts
+function marketKeyForLabel(label, lineHint) {
+  const text = String(label ?? "").trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  if (lower === "home win") return "ML:home";
+  if (lower === "draw") return "ML:draw";
+  if (lower === "away win") return "ML:away";
+  if (lower === "btts yes") return "BTTS:yes";
+  if (lower === "btts no") return "BTTS:no";
+  const totals = lower.match(/^(over|under)\s+(\d+(?:\.\d+)?)/);
+  if (totals) return `TOT:${totals[1]}:${fmtLine(Number(totals[2]))}`;
+  const handicap = lower.match(/^asian handicap\s+(home|away)\s+([+-]?\d+(?:\.\d+)?)/);
+  if (handicap) return `AH:${handicap[1]}:${fmtLine(Number(handicap[2]))}`;
+  if (lineHint != null && Number.isFinite(lineHint)) {
+    if (lower === "over") return `TOT:over:${fmtLine(lineHint)}`;
+    if (lower === "under") return `TOT:under:${fmtLine(lineHint)}`;
+  }
+  return null;
+}
+function candidates(odds) {
+  const out = [];
+  const mw = odds.matchWinner.find((r) => validOdds2(r.home) && validOdds2(r.draw) && validOdds2(r.away));
+  const book = mw?.bookmaker ?? odds.btts[0]?.bookmaker ?? odds.overUnder[0]?.bookmaker ?? null;
+  const sameBook = (rows) => {
+    if (!book) return rows;
+    const filtered = rows.filter((r) => r.bookmaker === book);
+    return filtered.length > 0 ? filtered : rows;
+  };
+  if (mw) {
+    const marketOdds = [mw.home, mw.draw, mw.away];
+    out.push(
+      { key: "ML:home", family: "ML", line: null, odds: mw.home, label: "Home Win", marketOdds, index: 0, bookmaker: mw.bookmaker ?? null },
+      { key: "ML:draw", family: "ML", line: null, odds: mw.draw, label: "Draw", marketOdds, index: 1, bookmaker: mw.bookmaker ?? null },
+      { key: "ML:away", family: "ML", line: null, odds: mw.away, label: "Away Win", marketOdds, index: 2, bookmaker: mw.bookmaker ?? null }
+    );
+  }
+  const btts = sameBook(odds.btts).find((r) => validOdds2(r.yes) && validOdds2(r.no));
+  if (btts) {
+    const marketOdds = [btts.yes, btts.no];
+    out.push(
+      { key: "BTTS:yes", family: "BTTS", line: null, odds: btts.yes, label: "BTTS Yes", marketOdds, index: 0, bookmaker: btts.bookmaker ?? null },
+      { key: "BTTS:no", family: "BTTS", line: null, odds: btts.no, label: "BTTS No", marketOdds, index: 1, bookmaker: btts.bookmaker ?? null }
+    );
+  }
+  const seenTotals = /* @__PURE__ */ new Set();
+  for (const r of sameBook(odds.overUnder)) {
+    if (!validOdds2(r.over) || !validOdds2(r.under) || r.line == null || !Number.isFinite(r.line)) continue;
+    if (seenTotals.has(r.line)) continue;
+    seenTotals.add(r.line);
+    const marketOdds = [r.over, r.under];
+    out.push(
+      { key: `TOT:over:${fmtLine(r.line)}`, family: "Totals", line: r.line, odds: r.over, label: `Over ${r.line}`, marketOdds, index: 0, bookmaker: r.bookmaker ?? null },
+      { key: `TOT:under:${fmtLine(r.line)}`, family: "Totals", line: r.line, odds: r.under, label: `Under ${r.line}`, marketOdds, index: 1, bookmaker: r.bookmaker ?? null }
+    );
+  }
+  const seenAh = /* @__PURE__ */ new Set();
+  for (const r of sameBook(odds.asianHandicap)) {
+    if (!validOdds2(r.home) || !validOdds2(r.away) || r.line == null || !Number.isFinite(r.line)) continue;
+    if (seenAh.has(r.line)) continue;
+    seenAh.add(r.line);
+    const marketOdds = [r.home, r.away];
+    out.push(
+      { key: `AH:home:${fmtLine(r.line)}`, family: "AH", line: r.line, odds: r.home, label: `Asian Handicap Home ${r.line}`, marketOdds, index: 0, bookmaker: r.bookmaker ?? null },
+      { key: `AH:away:${fmtLine(-r.line)}`, family: "AH", line: -r.line, odds: r.away, label: `Asian Handicap Away ${-r.line}`, marketOdds, index: 1, bookmaker: r.bookmaker ?? null }
+    );
+  }
+  return out;
+}
+function buildLlmSelectionRows(input) {
+  const rows = [];
+  const skipped = [];
+  const betKey = marketKeyForLabel(input.betLabel, input.betLine);
+  for (const c of candidates(input.odds)) {
+    const model = modelProbabilityForSelection(input.matrix, input.markets, c.label);
+    if (model.probability == null || !(model.probability > 0 && model.probability < 1)) {
+      skipped.push({ key: c.key, reason: model.note ?? "probabilitas model tidak tersedia" });
+      continue;
+    }
+    const pMarket = worstCaseFairProbability(c.marketOdds, c.index);
+    const pFinal = pMarket != null ? blendProbability(model.probability, pMarket, LLM_MODEL_WEIGHT) : model.probability;
+    rows.push({
+      fixture_id: String(input.fixtureId),
+      analysed_at: input.analysedAt,
+      model_version: LLM_MODEL_VERSION,
+      market_key: c.key,
+      family: c.family,
+      line: c.line,
+      odds: c.odds,
+      p_final: Number(pFinal.toFixed(6)),
+      p_market_fair: pMarket == null ? null : Number(pMarket.toFixed(6)),
+      p_model_only: Number(model.probability.toFixed(6)),
+      ev: Number(expectedValue(pFinal, c.odds).toFixed(6)),
+      ev_conservative: Number(conservativeEv(pFinal, c.odds, LLM_SIGMA).toFixed(6)),
+      was_bet: betKey != null && betKey === c.key,
+      bookmaker: c.bookmaker
+    });
+  }
+  return { rows, skipped };
+}
+var LLM_MODEL_VERSION, LLM_MODEL_WEIGHT, LLM_SIGMA, validOdds2, fmtLine;
+var init_llm_ledger = __esm({
+  "src/lib/llm-ledger.ts"() {
+    "use strict";
+    init_betting_math();
+    init_match_context();
+    LLM_MODEL_VERSION = 1;
+    LLM_MODEL_WEIGHT = 0.35;
+    LLM_SIGMA = 0.05;
+    validOdds2 = (x) => typeof x === "number" && Number.isFinite(x) && x > 1;
+    fmtLine = (n) => String(n);
+  }
+});
+
+// src/services/llm-shadow.ts
+async function shadowLogLlmAnalysis(input) {
+  try {
+    const { rows, skipped } = buildLlmSelectionRows({
+      fixtureId: input.fixtureId,
+      analysedAt: input.analysedAt,
+      matrix: input.matrix,
+      markets: input.markets,
+      odds: input.odds,
+      betLabel: input.betLabel,
+      betLine: input.betLine
+    });
+    if (rows.length === 0) {
+      logger.debug(
+        { fixtureId: input.fixtureId, skipped },
+        "[LLM-SHADOW] tidak ada market yang bisa dicatat"
+      );
+      return { logged: 0, skipped: skipped.length };
+    }
+    const { error } = await supabase.from("prediction_selections").upsert(rows, { onConflict: "fixture_id,model_version,market_key" });
+    if (error) {
+      logger.warn(
+        { error, fixtureId: input.fixtureId },
+        "[LLM-SHADOW] gagal menulis prediction_selections v1"
+      );
+      return { logged: 0, skipped: skipped.length };
+    }
+    logger.info(
+      { fixtureId: input.fixtureId, selections: rows.length, modelVersion: LLM_MODEL_VERSION },
+      "[LLM-SHADOW] selections dicatat"
+    );
+    return { logged: rows.length, skipped: skipped.length };
+  } catch (err) {
+    logger.warn({ err, fixtureId: input.fixtureId }, "[LLM-SHADOW] gagal total");
+    return { logged: 0, skipped: 0 };
+  }
+}
+var init_llm_shadow = __esm({
+  "src/services/llm-shadow.ts"() {
+    "use strict";
+    init_supabase_client();
+    init_logger();
+    init_llm_ledger();
   }
 });
 
@@ -56787,9 +57618,10 @@ function hasSaneStatValues(value, key) {
     return true;
   }
   if (typeof value !== "string") return true;
+  const allowsAboveHundred = allowsNegative;
   const percentageValues = [...value.matchAll(/(-?\d+(?:\.\d+)?)\s*%/g)].map((match) => Number(match[1]));
   if (percentageValues.some(
-    (percentage) => !Number.isFinite(percentage) || percentage > 100 || !allowsNegative && percentage < 0
+    (percentage) => !Number.isFinite(percentage) || !allowsAboveHundred && percentage > 100 || !allowsNegative && percentage < 0
   )) {
     return false;
   }
@@ -56832,7 +57664,7 @@ function assessOddsAvailability(rows) {
   const latestCapturedAt = usableRows.map((row) => row.captured_at).filter((value) => Boolean(value)).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
   const latestCapturedTime = latestCapturedAt ? new Date(latestCapturedAt).getTime() : Number.NaN;
   const latestAge = Date.now() - latestCapturedTime;
-  const isStale = !Number.isFinite(latestCapturedTime) || latestAge < 0 || latestAge > ODDS_MAX_AGE_HOURS * 60 * 60 * 1e3;
+  const isStale = !Number.isFinite(latestCapturedTime) || latestAge < 0 || latestAge > ODDS_MAX_AGE_HOURS2 * 60 * 60 * 1e3;
   return {
     status: isStale ? "stale" : "valid",
     latestCapturedAt,
@@ -56961,20 +57793,20 @@ function normalizeTeamForMatch(name, leagueSlug) {
 }
 function leagueSlugCandidates(leagueSlug) {
   const slug = leagueSlug.trim().toLowerCase();
-  const candidates = /* @__PURE__ */ new Set([slug]);
+  const candidates2 = /* @__PURE__ */ new Set([slug]);
   if (slug.endsWith("-laliga")) {
-    candidates.add(slug.replace(/-laliga$/, "-la-liga"));
+    candidates2.add(slug.replace(/-laliga$/, "-la-liga"));
   }
   if (slug.endsWith("-la-liga")) {
-    candidates.add(slug.replace(/-la-liga$/, "-laliga"));
+    candidates2.add(slug.replace(/-la-liga$/, "-laliga"));
   }
   if (slug.includes("republic-of-korea")) {
-    candidates.add(slug.replace("republic-of-korea", "south-korea"));
+    candidates2.add(slug.replace("republic-of-korea", "south-korea"));
   }
   if (slug.includes("south-korea")) {
-    candidates.add(slug.replace("south-korea", "republic-of-korea"));
+    candidates2.add(slug.replace("south-korea", "republic-of-korea"));
   }
-  return Array.from(candidates).filter(Boolean);
+  return Array.from(candidates2).filter(Boolean);
 }
 function seasonStart(season) {
   const match = String(season ?? "").match(/\b(20\d{2})\b/);
@@ -57018,30 +57850,50 @@ async function findTeamStats(teamName, leagueSlug) {
   const grouped = /* @__PURE__ */ new Map();
   for (const row of matchingRows) {
     const key = String(row.season ?? "");
-    const group = grouped.get(key) ?? [];
-    group.push(row);
-    grouped.set(key, group);
+    const group2 = grouped.get(key) ?? [];
+    group2.push(row);
+    grouped.set(key, group2);
   }
-  const mergedMatches = Array.from(grouped.values()).map((rows) => mergeTeamStatsRows(rows)).sort((a, b) => seasonStart(b.season) - seasonStart(a.season));
-  const best = mergedMatches[0];
+  const integrityRemoved = [];
+  const normalizedMatches = Array.from(grouped.values()).map((rows) => {
+    const merged = mergeTeamStatsRows(rows);
+    const { stats, removed, derived } = normalizeStatsRow(merged);
+    for (const hit of removed) integrityRemoved.push(`${hit.column}\u2192${hit.belongsTo}`);
+    if (removed.length > 0) {
+      logger.warn(
+        { teamName, leagueSlug, season: merged.season, removed },
+        "[STATS-INTEGRITY] blok bertentangan dengan kolom tujuan \u2014 dibuang"
+      );
+    }
+    if (derived.length > 0) {
+      logger.info(
+        { teamName, leagueSlug, season: merged.season, derived },
+        "[STATS-INTEGRITY] blok turunan diisi dari stats_team_form"
+      );
+    }
+    return stats;
+  }).sort((a, b) => seasonStart(b.season) - seasonStart(a.season));
+  const best = normalizedMatches[0];
   if (!best) return {};
   const currentYear = (/* @__PURE__ */ new Date()).getFullYear();
-  const currentRows = mergedMatches.filter((row) => seasonIncludesYear(row.season, currentYear));
+  const currentRows = normalizedMatches.filter((row) => seasonIncludesYear(row.season, currentYear));
   const current = currentRows[0];
   const baseline = best;
   const matchesPlayed = matchesPlayedFromStats(current);
-  if (current && matchesPlayed >= 6) return current;
+  const integrity = integrityRemoved.length > 0 ? { removedColumns: Array.from(new Set(integrityRemoved)) } : void 0;
+  const tag = (value) => integrity ? { ...value, _integrity: integrity } : value;
+  if (current && matchesPlayed >= 6) return tag(current);
   if (current && baseline !== current) {
-    return { current_season: current, baseline_reference: baseline, _meta: "COMBINED" };
+    return tag({ current_season: current, baseline_reference: baseline, _meta: "COMBINED" });
   }
   if (baseline) {
-    return {
+    return tag({
       current_season: current ? "DATA_UNAVAILABLE" : "DATA_UNAVAILABLE",
       baseline_reference: baseline,
       _meta: "BASELINE_ONLY"
-    };
+    });
   }
-  return {};
+  return integrity ? { _integrity: integrity } : {};
 }
 async function fetchHeadToHead(homeTeam, awayTeam, leagueName, leagueSlug) {
   try {
@@ -57060,20 +57912,95 @@ async function fetchHeadToHead(homeTeam, awayTeam, leagueName, leagueSlug) {
     return [];
   }
 }
+function fairProbabilityForLabel(label, odds, line) {
+  if (!label) return null;
+  const lower = label.trim().toLowerCase();
+  const withLine = (rows) => {
+    if (rows.length === 0) return null;
+    if (line == null) return rows[0];
+    return rows.find((row) => row.line != null && Math.abs(row.line - line) < 1e-9) ?? null;
+  };
+  if (lower === "home win" || lower === "away win" || lower === "draw") {
+    const row = odds.matchWinner[0];
+    if (!row) return null;
+    const index = lower === "home win" ? 0 : lower === "draw" ? 1 : 2;
+    return worstCaseFairProbability([row.home ?? null, row.draw ?? null, row.away ?? null], index);
+  }
+  if (lower === "btts yes" || lower === "btts no") {
+    const row = odds.btts[0];
+    if (!row) return null;
+    return worstCaseFairProbability([row.yes ?? null, row.no ?? null], lower === "btts yes" ? 0 : 1);
+  }
+  if (/^(over|under)\s/.test(lower)) {
+    const row = withLine(odds.overUnder);
+    if (!row) return null;
+    return worstCaseFairProbability([row.over ?? null, row.under ?? null], lower.startsWith("over") ? 0 : 1);
+  }
+  if (lower.startsWith("asian handicap")) {
+    const row = withLine(odds.asianHandicap);
+    if (!row) return null;
+    const isHome = lower.includes("home");
+    return worstCaseFairProbability([row.home ?? null, row.away ?? null], isHome ? 0 : 1);
+  }
+  return null;
+}
+async function resolveLeagueAverages(leagueSlug) {
+  const key = leagueSlug.trim().toLowerCase();
+  const cached = leagueAverageCache.get(key);
+  if (cached && Date.now() - cached.at < LEAGUE_AVERAGE_TTL_MS) return cached.value;
+  try {
+    const { data, error } = await supabase.from("team_season_stats").select("team_name, season, stats_goals_scored, stats_goals_conceded").eq("league_slug", leagueSlug).order("season", { ascending: false }).limit(400);
+    if (error || !data || data.length === 0) {
+      leagueAverageCache.set(key, { at: Date.now(), value: null });
+      return null;
+    }
+    const latestSeason = data[0].season;
+    const rows = data.filter(
+      (row) => row.season === latestSeason
+    );
+    const home = [];
+    const away = [];
+    for (const row of rows) {
+      const rates = parseTeamRates(row);
+      if (rates.goalsForHome != null) home.push(rates.goalsForHome);
+      if (rates.goalsForAway != null) away.push(rates.goalsForAway);
+    }
+    if (home.length < 8 || away.length < 8) {
+      leagueAverageCache.set(key, { at: Date.now(), value: null });
+      return null;
+    }
+    const mean2 = (values) => values.reduce((sum, value2) => sum + value2, 0) / values.length;
+    const value = {
+      homeGoals: Number(mean2(home).toFixed(3)),
+      awayGoals: Number(mean2(away).toFixed(3))
+    };
+    leagueAverageCache.set(key, { at: Date.now(), value });
+    return value;
+  } catch (error) {
+    logger.warn({ error, leagueSlug }, "[MATCH-CONTEXT] Gagal menghitung rata-rata liga");
+    leagueAverageCache.set(key, { at: Date.now(), value: null });
+    return null;
+  }
+}
 function buildStandingContext(teamName, data) {
   try {
     const stats = data.current_season && typeof data.current_season === "object" ? data.current_season : data;
     if (!Object.keys(stats).length) return null;
     const form = stats.stats_team_form ?? {};
-    const toNum = (v) => {
-      const n = typeof v === "string" ? Number(v) : Number(v ?? 0);
-      return Number.isFinite(n) ? n : 0;
+    const toNullableNum = (v) => {
+      if (v == null || v === "") return null;
+      const n = typeof v === "string" ? Number(v.replace(/%/g, "")) : Number(v);
+      return Number.isFinite(n) ? n : null;
     };
+    const position = toNullableNum(form.Pos ?? form.position ?? form.Position);
+    const points = toNullableNum(form.Pts ?? form.points);
+    const played = toNullableNum(form.MP ?? form.played);
+    if (position == null && points == null && played == null) return null;
     return {
       team: String(stats.team_name ?? teamName),
-      position: toNum(form.Pos),
-      points: toNum(form.Pts),
-      played: toNum(form.MP),
+      position,
+      points,
+      played,
       form: String(form["Last 6"] ?? form["last_6"] ?? "")
     };
   } catch {
@@ -57082,7 +58009,11 @@ function buildStandingContext(teamName, data) {
 }
 function formatHeadToHeadBlock(fixtures) {
   if (fixtures.length === 0) return "";
-  const lines = ["\n--- RIVALITAS LANGSUNG (HEAD-TO-HEAD) ---"];
+  const lines = [
+    "\n--- RIVALITAS LANGSUNG (HEAD-TO-HEAD) ---",
+    "  [CATATAN: maksimal 5 laga, skuad bisa berubah. Pakai sebagai konteks gaya/tempo,",
+    "   BUKAN sebagai dasar probabilitas. Jangan menaikkan keyakinan hanya karena tren H2H.]"
+  ];
   for (const f of fixtures) {
     const date = new Date(f.fixture_date).toLocaleDateString("id-ID");
     lines.push(
@@ -57093,9 +58024,12 @@ function formatHeadToHeadBlock(fixtures) {
 }
 function formatStandingContextBlock(label, ctx) {
   if (!ctx) return "";
+  const position = ctx.position == null ? "N/A" : String(ctx.position);
+  const points = ctx.points == null ? "N/A" : String(ctx.points);
+  const played = ctx.played == null ? "N/A" : String(ctx.played);
   return `
 --- ${label} ---
-  Posisi: ${ctx.position} | Poin: ${ctx.points} | Main: ${ctx.played} | Form (Last 6): ${ctx.form || "N/A"}`;
+  Posisi: ${position} | Poin: ${points} | Main: ${played} | Form (Last 6): ${ctx.form || "N/A"}`;
 }
 function extractStructuredOdds(rows) {
   const result2 = { matchWinner: [], halfTime: [], overUnder: [], asianHandicap: [], btts: [], other: [] };
@@ -57298,7 +58232,7 @@ ${relationalBlock}
 2. Pilih tepat satu market dari snapshot provider. Totals dan Asian Handicap wajib cocok dengan
    line yang persis; jika line tidak tersedia atau berbeda, gunakan NO_BET.
 3. Tulis probability nyata eksplisit dalam rentang 0 sampai 1. Confidence 0-10 tidak boleh dipakai sebagai probability.
-4. Hitung ulang EV dengan odds snapshot selection: (probability \xD7 odds) - 1. Jika hasilnya <= 0, gunakan NO_BET.
+4. JANGAN menghitung EV \u2014 kode menghitungnya dari probability dan odds snapshot. Bila Anda tidak bisa memberi probability yang bertanggung jawab, gunakan NO_BET.
 5. Keluarkan market terstruktur: market_type salah satu ML/HT/Totals/AH/BTTS; outcome sesuai market;
    line harus line angka provider yang persis untuk Totals/AH dan null untuk market lain.
 6. JSON selections hanya boleh merekomendasikan pertandingan ${homeTeam} vs ${awayTeam}; jangan menggabungkan fixture lain.`;
@@ -57475,7 +58409,7 @@ async function analyzeFixture(fixtureId, context) {
   const structuredOdds = extractStructuredOdds(oddsRows);
   const oddsAvailability = assessOddsAvailability(oddsRows);
   if (oddsAvailability.status !== "valid") {
-    const reason = oddsAvailability.status === "stale" ? `Snapshot odds terakhir lebih lama dari ${ODDS_MAX_AGE_HOURS} jam; AI menunggu odds terbaru.` : "Odds provider belum tersedia untuk fixture ini.";
+    const reason = oddsAvailability.status === "stale" ? `Snapshot odds terakhir lebih lama dari ${ODDS_MAX_AGE_HOURS2} jam; AI menunggu odds terbaru.` : "Odds provider belum tersedia untuk fixture ini.";
     logger.info({ fixtureId, oddsStatus: oddsAvailability.status }, "[AI-ANALYSIS] Menunggu data odds; AI tidak dipanggil");
     throw new OddsUnavailableError(reason);
   }
@@ -57492,12 +58426,26 @@ async function analyzeFixture(fixtureId, context) {
   ]);
   const homeStandings = buildStandingContext(homeTeam, homeStats);
   const awayStandings = buildStandingContext(awayTeam, awayStats);
+  const leagueAverages = await resolveLeagueAverages(leagueSlug);
+  const matchContext = buildMatchContext({
+    homeTeam,
+    awayTeam,
+    homeStats,
+    awayStats,
+    league: leagueAverages,
+    standings: {
+      home: homeStandings ? { position: homeStandings.position, points: homeStandings.points } : null,
+      away: awayStandings ? { position: awayStandings.position, points: awayStandings.points } : null
+    }
+  });
+  const matchContextBlock = formatMatchContextBlock(matchContext, homeTeam, awayTeam);
   const trendBlock = formatOddsMovementTrend(movementRows);
   const lessonsBlock = formatLessonsBlock(lessons);
   const relationalBlock = [
     formatHeadToHeadBlock(h2h),
     formatStandingContextBlock("KLASEMEN HOME", homeStandings),
-    formatStandingContextBlock("KLASEMEN AWAY", awayStandings)
+    formatStandingContextBlock("KLASEMEN AWAY", awayStandings),
+    matchContextBlock
   ].join("\n");
   const STAT_KEYS = REQUIRED_STAT_KEYS;
   console.log(`
@@ -57519,8 +58467,13 @@ async function analyzeFixture(fixtureId, context) {
     const missingAway = awayStatsQuality.missingKeys.join(", ") || "none";
     console.log(`[AI-ANALYSIS] DITOLAK \u2014 stats belum lengkap. Home missing: ${missingHome}; Away missing: ${missingAway}
 `);
+    const describeIntegrity = (team, stats) => {
+      const integrity = stats._integrity;
+      const removed = integrity?.removedColumns ?? [];
+      return removed.length > 0 ? ` ${team}: blok rusak dibuang (${removed.join(", ")}) \u2014 impor ulang kolom itu.` : "";
+    };
     throw new StatsEmptyError(
-      `Data statistik belum lengkap. ${homeTeam}: ${missingHome}. ${awayTeam}: ${missingAway}.`
+      `Data statistik belum lengkap. ${homeTeam}: ${missingHome}. ${awayTeam}: ${missingAway}.` + describeIntegrity(homeTeam, homeStats) + describeIntegrity(awayTeam, awayStats)
     );
   }
   if (!homeStatsFreshness.valid || !awayStatsFreshness.valid) {
@@ -57539,7 +58492,10 @@ async function analyzeFixture(fixtureId, context) {
     persona,
     agentInstructions ? `INSTRUKSI TAMBAHAN:
 ${agentInstructions}` : null,
-    aiConfig.learningPromptAddendum || null
+    aiConfig.learningPromptAddendum || null,
+    /* P6: kontrak V5 selalu terakhir, apa pun persona dari DB — lihat
+       V5_CONTRACT_SUFFIX di lib/quant/llm-contract.ts. */
+    V5_CONTRACT_SUFFIX
   ].filter((section) => Boolean(section)).join("\n\n");
   console.log(`[AI-ANALYSIS] Persona sumber: ${persona === DEFAULT_SYSTEM_INSTRUCTION ? "DEFAULT (fallback)" : "SUPABASE (kustom)"}`);
   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, relationalBlock, homeStats, awayStats);
@@ -57606,6 +58562,22 @@ ${repaired.text}`;
   const selectedOddsMatchMode = oddsMatch?.status ?? "unmatched";
   const selectedOddsCapturedAt = oddsMatch?.capturedAt ?? oddsAvailability.latestCapturedAt;
   const evAtAnalysis = recommendation.evPercent / 100;
+  const llmLambdaAdjustment = extractLambdaAdjustment(predictionText);
+  const modelSelection = modelProbabilityForSelection(
+    matchContext.matrix,
+    matchContext.markets,
+    parsedRecommendation.marketBet
+  );
+  const marketFairProbability = fairProbabilityForLabel(
+    parsedRecommendation.marketBet,
+    structuredOdds,
+    oddsMatch?.matchedLine ?? oddsMatch?.line ?? null
+  );
+  const pModelOnly = modelSelection.probability;
+  const pFinal = pModelOnly != null && marketFairProbability != null ? blendProbability(pModelOnly, marketFairProbability, 0.35) : pModelOnly ?? marketFairProbability ?? null;
+  const verifiedSelectionOdds = verifiedOdds != null && verifiedOdds > 1 ? verifiedOdds : recommendation.odds > 1 ? recommendation.odds : null;
+  const modelEv = pFinal != null && verifiedSelectionOdds != null ? expectedValue(pFinal, verifiedSelectionOdds) : null;
+  const modelEvConservative = pFinal != null && verifiedSelectionOdds != null ? conservativeEv(pFinal, verifiedSelectionOdds, 0.05) : null;
   console.log(`[AI-ANALYSIS] Respons ${aiResult.provider}/${aiResult.model} diterima (${predictionText.length} karakter).`);
   const analyzedAt = (/* @__PURE__ */ new Date()).toISOString();
   const evaluationSnapshot = {
@@ -57631,9 +58603,42 @@ ${repaired.text}`;
       confidence: recommendation.confidence,
       evPercent: recommendation.evPercent,
       evAtAnalysis,
-      rejectionReason: rejectionReason ?? null
+      rejectionReason: rejectionReason ?? null,
+      model: {
+        marketProbability: pModelOnly == null ? null : Number(pModelOnly.toFixed(4)),
+        marketFairProbability: marketFairProbability == null ? null : Number(marketFairProbability.toFixed(4)),
+        finalProbability: pFinal == null ? null : Number(pFinal.toFixed(4)),
+        ev: modelEv == null ? null : Number(modelEv.toFixed(4)),
+        evConservative: modelEvConservative == null ? null : Number(modelEvConservative.toFixed(4)),
+        note: modelSelection.note,
+        gateMode: "shadow"
+      }
     },
     input: {
+      derived: {
+        lambdas: {
+          home: Number(matchContext.lambdas.lambdaHome.toFixed(3)),
+          away: Number(matchContext.lambdas.lambdaAway.toFixed(3)),
+          reliability: Number(matchContext.lambdas.reliability.toFixed(3))
+        },
+        leagueAverages: matchContext.league,
+        leagueIsDefault: matchContext.leagueIsDefault,
+        markets: {
+          homeWin: Number(matchContext.markets.homeWin.toFixed(4)),
+          draw: Number(matchContext.markets.draw.toFixed(4)),
+          awayWin: Number(matchContext.markets.awayWin.toFixed(4)),
+          over25: Number(matchContext.markets.over25.toFixed(4)),
+          bttsYes: Number(matchContext.markets.bttsYes.toFixed(4))
+        },
+        signals: matchContext.signals,
+        correlation: matchContext.correlation.map((item) => ({
+          pair: item.pair,
+          joint: Number(item.joint.toFixed(4)),
+          independent: Number(item.independent.toFixed(4)),
+          ratio: Number(item.ratio.toFixed(3))
+        })),
+        dataGaps: matchContext.dataGaps
+      },
       odds: {
         provider: "Odds-API",
         status: oddsAvailability.status,
@@ -57652,7 +58657,9 @@ ${repaired.text}`;
       standings: { home: homeStandings, away: awayStandings },
       headToHead: h2h,
       oddsMovement: movementRows,
-      ragLessons: lessons
+      ragLessons: lessons,
+      /* P6: adjustment yang benar-benar dipakai engine quant (null = dibuang/tidak ada). */
+      llmLambdaAdjustment
     },
     dataQuality: {
       stats: { home: homeStatsQuality, away: awayStatsQuality },
@@ -57685,8 +58692,22 @@ ${repaired.text}`;
       market_bet: recommendation.marketBet,
       best_market: recommendation.marketBet,
       best_odds: recommendation.odds > 1 ? recommendation.odds : null,
-      expected_value: evAtAnalysis,
-      ev_at_analysis: evAtAnalysis,
+      /* Vektor probabilitas model (satu matriks skor, semua market koheren).
+         Sebelumnya kolom ini selalu kosong sehingga kalibrasi mustahil. */
+      prob_home_win: Number(matchContext.markets.homeWin.toFixed(4)),
+      prob_draw: Number(matchContext.markets.draw.toFixed(4)),
+      prob_away_win: Number(matchContext.markets.awayWin.toFixed(4)),
+      prob_over25: Number(matchContext.markets.over25.toFixed(4)),
+      prob_under25: Number(matchContext.markets.under25.toFixed(4)),
+      prob_btts_yes: Number(matchContext.markets.bttsYes.toFixed(4)),
+      prob_btts_no: Number(matchContext.markets.bttsNo.toFixed(4)),
+      /* Probabilitas & EV hasil hitung kode untuk seleksi yang dipilih.
+         p_market_fair = de-vig kasus terburuk; p_final = 0.35·model + 0.65·pasar. */
+      p_model_only: pModelOnly == null ? null : Number(pModelOnly.toFixed(4)),
+      p_market_fair: marketFairProbability == null ? null : Number(marketFairProbability.toFixed(4)),
+      p_final: pFinal == null ? null : Number(pFinal.toFixed(4)),
+      expected_value: modelEv != null ? Number(modelEv.toFixed(4)) : evAtAnalysis,
+      ev_at_analysis: modelEv != null ? Number(modelEv.toFixed(4)) : evAtAnalysis,
       confidence_score: recommendation.confidence,
       manual_context: {
         ...evaluationSnapshot,
@@ -57720,13 +58741,12 @@ ${repaired.text}`;
       leagueSlug,
       structuredOdds,
       /*
-       * The current prompt asks the model for prose plus a probability, not the
-       * PERSONA_V5 λ-adjustment contract, so there is no evidence-backed
-       * adjustment to pass yet. null means "no adjustment" — the engine runs on
-       * market + team statistics alone, which is exactly the baseline we want
-       * to measure in the shadow log.
+       * P6: kontrak V5 kini meminta "lambda_adjustment" berbukti di JSON
+       * yang sama. extractLambdaAdjustment men-sanitasi (±12%, wajib bukti);
+       * null berarti model tidak memberi penyesuaian yang layak, dan engine
+       * berjalan dari pasar + statistik saja — baseline yang memang diukur.
        */
-      llmAdjustment: null
+      llmAdjustment: llmLambdaAdjustment
     });
     if (shadow.logged > 0) {
       logger.info(
@@ -57736,6 +58756,25 @@ ${repaired.text}`;
     }
   } catch (shadowError) {
     logger.warn({ shadowError, fixtureId }, "[AI-ANALYSIS] Quant shadow log dilewati");
+  }
+  try {
+    const llmShadow = await shadowLogLlmAnalysis({
+      fixtureId,
+      analysedAt: analyzedAt,
+      matrix: matchContext.matrix,
+      markets: matchContext.markets,
+      odds: structuredOdds,
+      betLabel: parsedRecommendation.marketBet,
+      betLine: oddsMatch?.matchedLine ?? oddsMatch?.line ?? null
+    });
+    if (llmShadow.logged > 0) {
+      logger.info(
+        { fixtureId, selections: llmShadow.logged, skipped: llmShadow.skipped },
+        "[AI-ANALYSIS] LLM shadow log (P3) tersimpan"
+      );
+    }
+  } catch (llmShadowError) {
+    logger.warn({ llmShadowError, fixtureId }, "[AI-ANALYSIS] LLM shadow log dilewati");
   }
   return {
     fixture_id: fixtureId,
@@ -57750,6 +58789,10 @@ ${repaired.text}`;
     probability: recommendation.probability,
     ev_percent: recommendation.evPercent,
     ev_at_analysis: evAtAnalysis,
+    model_p_final: pFinal,
+    model_ev: modelEv,
+    model_ev_conservative: modelEvConservative,
+    model_probability_note: modelSelection.note,
     odds_status: oddsAvailability.status,
     odds_captured_at: selectedOddsCapturedAt,
     readiness_status: readinessStatus,
@@ -57770,7 +58813,7 @@ ${repaired.text}`;
     }
   };
 }
-var DEFAULT_SYSTEM_INSTRUCTION, REQUIRED_STAT_KEYS, OPTIONAL_STAT_KEYS, ODDS_MAX_AGE_HOURS, OddsUnavailableError, PredictionAlreadyExistsError, STATS_COLUMNS, StatsEmptyError, sleep2;
+var DEFAULT_SYSTEM_INSTRUCTION, REQUIRED_STAT_KEYS, OPTIONAL_STAT_KEYS, ODDS_MAX_AGE_HOURS2, OddsUnavailableError, PredictionAlreadyExistsError, STATS_COLUMNS, LEAGUE_AVERAGE_TTL_MS, leagueAverageCache, StatsEmptyError, sleep2;
 var init_ai_analysis = __esm({
   "src/services/ai-analysis.ts"() {
     "use strict";
@@ -57782,8 +58825,13 @@ var init_ai_analysis = __esm({
     init_market_odds_readiness();
     init_team_stats_freshness();
     init_odds_history();
+    init_stats_integrity();
+    init_match_context();
+    init_betting_math();
     init_model_discovery();
+    init_llm_contract();
     init_quant_shadow();
+    init_llm_shadow();
     init_odds_fetcher();
     init_prompt_learning();
     init_learning_policy();
@@ -57818,19 +58866,19 @@ FORMAT OUTPUT WAJIB (JSON + teks):
 ## \u{1F3AF} ANALISIS SINGKAT (3-4 kalimat)
 Ringkasan: siapa yang punya edge, pasar mana yang bergerak, dan konfirmasi statistik.
 
-## \u{1F4B9} ANALISIS EV (per pasaran)
-Pasaran | Prob. Nyata | Implisit Bandar | EV | Tren Konfirmasi | Verdict
---- | --- | --- | --- | --- | ---
-1X2 Home | XX% | XX% | +X% | Searah | VALUE / NO VALUE
+## \u{1F4B9} PERBANDINGAN PASARAN (per pasaran)
+Pasaran | Prob. Penilaian Anda | Implisit Bandar | Tren Konfirmasi | Verdict
+--- | --- | --- | --- | ---
+1X2 Home | XX% | XX% | Searah | VALUE / NO VALUE
 ... (semua pasaran)
+CATATAN P6: JANGAN menghitung atau melaporkan EV dalam bentuk apa pun \u2014 EV selalu dihitung kode dari probabilitas Anda dan odds provider. Tabel ini membandingkan probabilitas, bukan EV.
 
 ## \u{1F3AF} REKOMENDASI AKHIR
 - Pasaran terpilih: [nama pasaran]
-- Keputusan: **AMBIL** atau **NO BET**
-- Odds minimum value: X.XX
-- Confidence Score: X/10
-- Stake saran: Unit % (gunakan stake 1-3% per bet, maks 5% jika confidence > 9.5)
+- Keputusan kandidat: **AMBIL** atau **NO BET** (keputusan final di mesin)
+- Confidence Score: X/10 (keterangan saja, bukan gerbang)
 - Justifikasi: 2-3 kalimat
+- DILARANG memberi saran stake/ukuran taruhan. Stake dihitung kode (fractional Kelly, cap 2%).
 
 ## \u26A1 KODE PARLAY (JSON)
 OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
@@ -57848,10 +58896,10 @@ OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
       "probability": 0.58,
       "confidence": 8.5,
       "odds": 1.85,
-      "ev_percent": 8.2,
       "rationale": "Regresi 11 laci mengonfirmasi xG gabungan 3.12. Terjadi sharp money drop 0.12 pada Over, mengindikasikan arus dana besar terkonfirmasi."
    }
-  ]
+  ],
+  "lambda_adjustment": {"lambda_home_mult": 1.00, "lambda_away_mult": 1.00, "evidence": []}
 }
 
 VALIDATION GATE:
@@ -57862,7 +58910,7 @@ VALIDATION GATE:
   outcome harus home/draw/away, over/under, atau yes/no sesuai market; line harus angka persis dari provider
   untuk Totals/AH dan null untuk market lain. Jangan mengarang nama market atau line.
 - Probability wajib eksplisit, 0 < probability < 1, dan bukan confidence atau probabilitas implisit.
-- Hitung ulang EV = (probability \xD7 odds provider) - 1. Gunakan "NO_BET" bila EV tidak positif,
+- JANGAN menghitung EV (kode yang menghitungnya dari probability \xD7 odds provider). Gunakan "NO_BET" bila
   probability tidak valid, market/line tidak cocok, atau data terlalu tipis untuk dinilai.
 
 Field "probability" adalah probabilitas nyata untuk selection dalam angka 0-1, bukan confidence dan bukan probabilitas implisit bandar. Field ini wajib untuk selection selain NO_BET.
@@ -57901,7 +58949,7 @@ KOMPOSISI PARLAY (bila lebih dari satu selection tersedia):
       "stats_over_35",
       "stats_ht"
     ];
-    ODDS_MAX_AGE_HOURS = MAX_VERIFIED_ODDS_AGE_MS / (60 * 60 * 1e3);
+    ODDS_MAX_AGE_HOURS2 = MAX_VERIFIED_ODDS_AGE_MS / (60 * 60 * 1e3);
     OddsUnavailableError = class extends Error {
       constructor(message = "Data odds belum tersedia untuk fixture ini.") {
         super(message);
@@ -57915,6 +58963,8 @@ KOMPOSISI PARLAY (bila lebih dari satu selection tersedia):
       }
     };
     STATS_COLUMNS = "stats_xg, stats_fts, stats_btts, stats_goals_conceded, stats_goals_scored, stats_shots, stats_over_25, stats_over_35, stats_under, stats_team_form, stats_ht, season, team_name, league_slug, updated_at";
+    LEAGUE_AVERAGE_TTL_MS = 6 * 60 * 60 * 1e3;
+    leagueAverageCache = /* @__PURE__ */ new Map();
     StatsEmptyError = class extends Error {
       constructor(message) {
         super(message);
@@ -57925,36 +58975,248 @@ KOMPOSISI PARLAY (bila lebih dari satu selection tersedia):
   }
 });
 
+// src/lib/quant/parlay.ts
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = a + 1831565813 >>> 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function normInv(p) {
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+  const pl = 0.02425;
+  const q0 = Math.min(1 - 1e-12, Math.max(1e-12, p));
+  if (q0 < pl) {
+    const q2 = Math.sqrt(-2 * Math.log(q0));
+    return (((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
+  }
+  if (q0 > 1 - pl) {
+    const q2 = Math.sqrt(-2 * Math.log(1 - q0));
+    return -(((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
+  }
+  const q = q0 - 0.5;
+  const r = q * q;
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+function pairwiseCorrelation(a, b) {
+  let rho = 0.02;
+  if (a.league && a.league === b.league) rho += 0.03;
+  if (a.date && a.date === b.date) rho += 0.02;
+  const ta = a.marketFamily === "Totals" || a.marketFamily === "BTTS";
+  const tb = b.marketFamily === "Totals" || b.marketFamily === "BTTS";
+  if (ta && tb) rho += 0.05;
+  return Math.min(0.25, rho);
+}
+function cholesky(matrix) {
+  const n = matrix.length;
+  let scale = 1;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const L = Array.from({ length: n }, () => new Array(n).fill(0));
+    let ok = true;
+    for (let i = 0; i < n && ok; i++) {
+      for (let j = 0; j <= i; j++) {
+        const off = i === j ? matrix[i][j] : matrix[i][j] * scale;
+        let sum = off;
+        for (let k = 0; k < j; k++) sum -= L[i][k] * L[j][k];
+        if (i === j) {
+          if (sum <= 1e-10) {
+            ok = false;
+            break;
+          }
+          L[i][j] = Math.sqrt(sum);
+        } else L[i][j] = sum / L[j][j];
+      }
+    }
+    if (ok) return L;
+    scale *= 0.5;
+  }
+  return Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : 0));
+}
+function ticketStakePlan(result2, legSigmas = [], opts = {}) {
+  const sigma = Math.min(
+    0.15,
+    Math.sqrt(legSigmas.reduce((s, x) => s + (Number.isFinite(x) ? x : 0.03) ** 2, 0)) || 0.03
+  );
+  const plan = stakePlan({
+    p: result2.pDecision,
+    odds: result2.combinedOdds,
+    sigma,
+    fraction: opts.fraction ?? 0.25,
+    maxStakePct: opts.maxStakePct ?? 2
+  });
+  if (result2.evPessimistic <= 0) {
+    return {
+      ...plan,
+      stakePct: 0,
+      noStake: true,
+      reason: "EV pesimis \u2264 0: tiket hanya untung bila tidak ada leg yang overestimasi. Stake 0."
+    };
+  }
+  if (plan.stakePct <= 0) {
+    return { ...plan, noStake: true, reason: "Kelly setelah pengurangan \u03C3 memberi 0: tidak ada edge yang bisa dibeli." };
+  }
+  return {
+    ...plan,
+    noStake: false,
+    reason: `\xBC Kelly dari p tiket ${(result2.pDecision * 100).toFixed(1)}% @ ${result2.combinedOdds.toFixed(2)}, cap 2% \u2192 stake ${plan.stakePct.toFixed(2)}% bankroll.`
+  };
+}
+function analyzeParlay(legs, opts = {}) {
+  if (legs.length < 1) throw new Error("Parlay butuh minimal 1 leg.");
+  const sims = opts.sims ?? 4e4;
+  const sigma = opts.sigma ?? 0.03;
+  const probs = legs.map((l) => Math.min(0.995, Math.max(5e-3, l.p)));
+  const combinedOdds = opts.offeredOdds ?? legs.reduce((acc, l) => acc * l.odds, 1);
+  const pIndependent = probs.reduce((acc, p) => acc * p, 1);
+  const n = legs.length;
+  const corr = Array.from(
+    { length: n },
+    (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : pairwiseCorrelation(legs[i], legs[j]))
+  );
+  const L = cholesky(corr);
+  const thresholds = probs.map((p) => normInv(p));
+  const rnd = mulberry32(opts.seed ?? 20260101);
+  const gauss = () => {
+    const u1 = Math.max(1e-12, rnd());
+    const u2 = rnd();
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  };
+  let hits = 0;
+  const z = new Array(n).fill(0);
+  for (let s = 0; s < sims; s++) {
+    for (let i = 0; i < n; i++) z[i] = gauss();
+    let all = true;
+    for (let i = 0; i < n && all; i++) {
+      let x = 0;
+      for (let j = 0; j <= i; j++) x += L[i][j] * z[j];
+      if (x >= thresholds[i]) all = false;
+    }
+    if (all) hits++;
+  }
+  const pCorrelated = hits / sims;
+  const simStdErr = Math.sqrt(pCorrelated * (1 - pCorrelated) / sims);
+  const pPessimistic = probs.reduce((acc, p) => acc * Math.max(1e-3, p - sigma), 1);
+  const g = (delta) => probs.reduce((acc, p) => acc * Math.max(0, p - delta), 1) * combinedOdds - 1;
+  let breakEvenBias = 0;
+  if (g(0) > 0) {
+    let lo = 0;
+    let hi = Math.min(...probs);
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (g(mid) > 0) lo = mid;
+      else hi = mid;
+    }
+    breakEvenBias = lo;
+  } else {
+    breakEvenBias = -1;
+  }
+  const allMarket = legs.every((l) => l.pMarket != null && l.pMarket > 0);
+  const marketProd = allMarket ? legs.reduce((acc, l) => acc * l.pMarket, 1) : null;
+  return {
+    legs: n,
+    combinedOdds,
+    pIndependent,
+    pCorrelated,
+    simStdErr,
+    evIndependent: pIndependent * combinedOdds - 1,
+    evCorrelated: pCorrelated * combinedOdds - 1,
+    pDecision: Math.min(pIndependent, pCorrelated),
+    evDecision: Math.min(pIndependent, pCorrelated) * combinedOdds - 1,
+    pPessimistic,
+    evPessimistic: pPessimistic * combinedOdds - 1,
+    fairOddsCorrelated: pCorrelated > 0 ? 1 / pCorrelated : Infinity,
+    marginPaid: marketProd != null ? 1 - combinedOdds * marketProd : null,
+    breakEvenBias,
+    correlationMatrix: corr
+  };
+}
+var init_parlay = __esm({
+  "src/lib/quant/parlay.ts"() {
+    "use strict";
+    init_kelly();
+  }
+});
+
 // src/services/parlay-builder.ts
 function probabilityFor(candidate) {
   return Math.max(0.01, Math.min(0.99, candidate.probability));
 }
-function calculateParlayMetrics(candidates) {
-  const combinedOdds = candidates.reduce(
+function familyOf(candidate) {
+  const text = `${candidate.market} ${candidate.selection}`.toLowerCase();
+  if (text.includes("btts") || text.includes("both teams")) return "BTTS";
+  if (text.includes("over") || text.includes("under") || text.includes("total")) return "Totals";
+  if (text.includes("handicap") || text.includes("ah")) return "AH";
+  if (text.includes("ht") || text.includes("half")) return "HT";
+  return "ML";
+}
+function calculateParlayMetrics(candidates2) {
+  const combinedOdds = candidates2.reduce(
     (product, candidate) => product * Math.max(1.01, candidate.odds),
     1
   );
-  const winProbability = candidates.reduce(
-    (product, candidate) => product * probabilityFor(candidate),
-    1
-  );
-  const expectedValue = winProbability * combinedOdds - 1;
-  const confidenceValues = candidates.map((candidate) => candidate.confidence).filter((value) => value != null && Number.isFinite(value));
+  const confidenceValues = candidates2.map((candidate) => candidate.confidence).filter((value) => value != null && Number.isFinite(value));
   const avgConfidence = confidenceValues.length > 0 ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length : 0;
-  const confidenceRiskPenalty = confidenceValues.length > 0 ? Math.max(0, 8 - avgConfidence) * 4 : 0;
+  if (candidates2.length === 0) {
+    return {
+      combinedOdds: 1,
+      winProbability: 0,
+      expectedValue: -1,
+      avgConfidence: 0,
+      riskScore: 100,
+      riskLevel: "very_high",
+      pIndependent: 0,
+      pCorrelated: 0,
+      evPessimistic: -1,
+      breakEvenBias: -1,
+      marginPaid: null,
+      ticketStake: null
+    };
+  }
+  const legs = candidates2.map((candidate) => ({
+    p: probabilityFor(candidate),
+    odds: Math.max(1.01, candidate.odds),
+    league: candidate.league,
+    marketFamily: familyOf(candidate),
+    date: candidate.date
+  }));
+  const analysis = analyzeParlay(legs, { sims: 2e4, seed: 20260101 });
+  const stake = ticketStakePlan(analysis, legs.map(() => 0.03));
+  const winProbability = analysis.pDecision;
+  const expectedValue2 = analysis.evDecision;
+  const pessimisticPenalty = analysis.evPessimistic <= 0 ? 15 : 0;
   const riskScore = Math.min(
     100,
     Math.round(
-      (1 - winProbability) * 65 + Math.max(0, candidates.length - 2) * 6 + confidenceRiskPenalty + Math.max(0, combinedOdds - 8) * 1.5
+      (1 - winProbability) * 65 + Math.max(0, candidates2.length - 2) * 6 + pessimisticPenalty + Math.max(0, combinedOdds - 8) * 1.5
     )
   );
   const riskLevel = riskScore >= 75 ? "very_high" : riskScore >= 55 ? "high" : riskScore >= 30 ? "medium" : "low";
-  return { combinedOdds, winProbability, expectedValue, avgConfidence, riskScore, riskLevel };
+  return {
+    combinedOdds,
+    winProbability,
+    expectedValue: expectedValue2,
+    avgConfidence,
+    riskScore,
+    riskLevel,
+    pIndependent: analysis.pIndependent,
+    pCorrelated: analysis.pCorrelated,
+    evPessimistic: analysis.evPessimistic,
+    breakEvenBias: analysis.breakEvenBias,
+    marginPaid: analysis.marginPaid,
+    ticketStake: stake
+  };
 }
-async function createMergedParlay(candidates, sourceParlayIds, options = {}) {
+async function createMergedParlay(candidates2, sourceParlayIds, options = {}) {
   const rejected = [];
   const unique = /* @__PURE__ */ new Map();
-  for (const candidate of candidates) {
+  for (const candidate of candidates2) {
     const fixtureId = Number(candidate.fixtureId);
     if (!Number.isFinite(fixtureId)) continue;
     if (unique.has(String(fixtureId))) {
@@ -57996,6 +59258,9 @@ async function createMergedParlay(candidates, sourceParlayIds, options = {}) {
     combined_odds: metrics.combinedOdds,
     win_probability: metrics.winProbability,
     expected_value: metrics.expectedValue,
+    stake_pct: metrics.ticketStake?.stakePct ?? null,
+    ev_pessimistic: metrics.evPessimistic,
+    p_correlated: metrics.pCorrelated,
     risk_score: metrics.riskScore,
     avg_confidence: metrics.avgConfidence,
     status: "active",
@@ -58032,29 +59297,23 @@ async function createMergedParlay(candidates, sourceParlayIds, options = {}) {
   }
   return { parlayId: String(parlay.id), legs, ...metrics, rejected };
 }
-async function createParlayFromCandidates(candidates) {
+async function createParlayFromCandidates(candidates2) {
   const uniqueCandidates = Array.from(
-    new Map(candidates.map((candidate) => [String(candidate.fixtureId), candidate])).values()
+    new Map(candidates2.map((candidate) => [String(candidate.fixtureId), candidate])).values()
   ).slice(0, 5);
   if (uniqueCandidates.length < 2) return null;
-  const combinedOdds = uniqueCandidates.reduce(
-    (product, candidate) => product * Math.max(1.01, candidate.odds),
-    1
-  );
-  const winProbability = uniqueCandidates.reduce(
-    (product, candidate) => product * probabilityFor(candidate),
-    1
-  );
-  const expectedValue = winProbability * combinedOdds - 1;
-  const confidenceValues = uniqueCandidates.map((candidate) => candidate.confidence).filter((value) => value != null && Number.isFinite(value));
-  const avgConfidence = confidenceValues.length > 0 ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length : 0;
+  const metrics = calculateParlayMetrics(uniqueCandidates);
+  const { combinedOdds, winProbability, expectedValue: expectedValue2, avgConfidence } = metrics;
   const leagues = new Set(uniqueCandidates.map((candidate) => candidate.league).filter(Boolean));
   const { data: parlay, error: parlayError } = await supabase.from("parlays").insert({
     parlay_name: `AI Batch Parlay \u2014 ${(/* @__PURE__ */ new Date()).toLocaleDateString("id-ID")}`,
     legs_count: uniqueCandidates.length,
     combined_odds: combinedOdds,
     win_probability: winProbability,
-    expected_value: expectedValue,
+    expected_value: expectedValue2,
+    stake_pct: metrics.ticketStake?.stakePct ?? null,
+    ev_pessimistic: metrics.evPessimistic,
+    p_correlated: metrics.pCorrelated,
     avg_confidence: avgConfidence,
     status: "active",
     generated_by: "AI_BATCH",
@@ -58124,19 +59383,20 @@ var init_parlay_builder = __esm({
     "use strict";
     init_supabase_client();
     init_logger();
+    init_parlay();
   }
 });
 
 // src/lib/settlement-context.ts
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function parseManualContext(value) {
-  if (isRecord2(value)) return value;
+  if (isRecord3(value)) return value;
   if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value);
-      if (isRecord2(parsed)) return parsed;
+      if (isRecord3(parsed)) return parsed;
     } catch {
       return null;
     }
@@ -58889,7 +60149,7 @@ async function runRevalidation() {
     oddsByFixture.set(key, latestOddsByMarket(rows));
   }
   const updates = [];
-  const candidates = [];
+  const candidates2 = [];
   for (const prediction of upcoming) {
     summary.checked++;
     const fx = fixtureById.get(Number(prediction.fixture_id));
@@ -58911,7 +60171,7 @@ async function runRevalidation() {
         revalidation_status: "review",
         revalidation_note: `${currentOddsResolution.reason} Perlu refresh atau pengecekan manual sebelum kickoff.`
       });
-      candidates.push({
+      candidates2.push({
         predictionId: prediction.id,
         fixtureId: prediction.fixture_id,
         fixtureDate: fx.fixture_date,
@@ -58961,7 +60221,7 @@ async function runRevalidation() {
       reasons.push("Tidak ada pergerakan signifikan; prediksi masih valid.");
     }
     updates.push({ id: prediction.id, revalidation_status: status, revalidation_note: reasons.join(" ") });
-    candidates.push({
+    candidates2.push({
       predictionId: prediction.id,
       fixtureId: prediction.fixture_id,
       fixtureDate: fx.fixture_date,
@@ -58993,7 +60253,7 @@ async function runRevalidation() {
       }).eq("id", u.id)
     )
   );
-  summary.candidates = candidates;
+  summary.candidates = candidates2;
   logger.info(summary, "[REVALIDATION] Selesai");
   return summary;
 }
@@ -59155,7 +60415,7 @@ async function hasRecentRevision(predictionId, now) {
   }
   return Boolean(data?.length);
 }
-async function runTriggeredReanalysis(candidates, options = {}) {
+async function runTriggeredReanalysis(candidates2, options = {}) {
   const maxPerRun = Math.max(1, Math.min(20, options.maxPerRun ?? DEFAULT_MAX_PER_RUN));
   const summary = {
     considered: 0,
@@ -59167,7 +60427,7 @@ async function runTriggeredReanalysis(candidates, options = {}) {
     revisions: []
   };
   const targetIds = options.predictionIds ? new Set(options.predictionIds) : null;
-  const triggered = candidates.filter((candidate) => !targetIds || targetIds.has(candidate.predictionId)).filter((candidate) => options.force || isTrigger(candidate)).filter((candidate) => options.force || candidate.status !== "keep");
+  const triggered = candidates2.filter((candidate) => !targetIds || targetIds.has(candidate.predictionId)).filter((candidate) => options.force || isTrigger(candidate)).filter((candidate) => options.force || candidate.status !== "keep");
   summary.considered = triggered.length;
   let analyzedThisRun = 0;
   for (const candidate of triggered) {
@@ -69806,8 +71066,8 @@ var require_utils4 = __commonJS({
 var require_sbmh = __commonJS({
   "../../node_modules/.pnpm/streamsearch@1.1.0/node_modules/streamsearch/lib/sbmh.js"(exports2, module2) {
     "use strict";
-    function memcmp(buf1, pos1, buf2, pos2, num2) {
-      for (let i = 0; i < num2; ++i) {
+    function memcmp(buf1, pos1, buf2, pos2, num3) {
+      for (let i = 0; i < num3; ++i) {
         if (buf1[pos1 + i] !== buf2[pos2 + i])
           return false;
       }
@@ -75527,7 +76787,7 @@ var require_typedarray = __commonJS({
           }
         };
         ctor.prototype.subarray = function(start, end) {
-          function clamp2(v, min2, max) {
+          function clamp3(v, min2, max) {
             return v < min2 ? min2 : v > max ? max : v;
           }
           start = ECMAScript.ToInt32(start);
@@ -75544,8 +76804,8 @@ var require_typedarray = __commonJS({
           if (end < 0) {
             end = this.length + end;
           }
-          start = clamp2(start, 0, this.length);
-          end = clamp2(end, 0, this.length);
+          start = clamp3(start, 0, this.length);
+          end = clamp3(end, 0, this.length);
           var len = end - start;
           if (len < 0) {
             len = 0;
@@ -75909,145 +77169,6 @@ var require_multer = __commonJS({
   }
 });
 
-// src/lib/quant/parlay.ts
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = a + 1831565813 >>> 0;
-    let t = a;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-function normInv(p) {
-  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
-  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
-  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
-  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
-  const pl = 0.02425;
-  const q0 = Math.min(1 - 1e-12, Math.max(1e-12, p));
-  if (q0 < pl) {
-    const q2 = Math.sqrt(-2 * Math.log(q0));
-    return (((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
-  }
-  if (q0 > 1 - pl) {
-    const q2 = Math.sqrt(-2 * Math.log(1 - q0));
-    return -(((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
-  }
-  const q = q0 - 0.5;
-  const r = q * q;
-  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
-}
-function pairwiseCorrelation(a, b) {
-  let rho = 0.02;
-  if (a.league && a.league === b.league) rho += 0.03;
-  if (a.date && a.date === b.date) rho += 0.02;
-  const ta = a.marketFamily === "Totals" || a.marketFamily === "BTTS";
-  const tb = b.marketFamily === "Totals" || b.marketFamily === "BTTS";
-  if (ta && tb) rho += 0.05;
-  return Math.min(0.25, rho);
-}
-function cholesky(matrix) {
-  const n = matrix.length;
-  let scale = 1;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const L = Array.from({ length: n }, () => new Array(n).fill(0));
-    let ok = true;
-    for (let i = 0; i < n && ok; i++) {
-      for (let j = 0; j <= i; j++) {
-        const off = i === j ? matrix[i][j] : matrix[i][j] * scale;
-        let sum = off;
-        for (let k = 0; k < j; k++) sum -= L[i][k] * L[j][k];
-        if (i === j) {
-          if (sum <= 1e-10) {
-            ok = false;
-            break;
-          }
-          L[i][j] = Math.sqrt(sum);
-        } else L[i][j] = sum / L[j][j];
-      }
-    }
-    if (ok) return L;
-    scale *= 0.5;
-  }
-  return Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : 0));
-}
-function analyzeParlay(legs, opts = {}) {
-  if (legs.length < 1) throw new Error("Parlay butuh minimal 1 leg.");
-  const sims = opts.sims ?? 4e4;
-  const sigma = opts.sigma ?? 0.03;
-  const probs = legs.map((l) => Math.min(0.995, Math.max(5e-3, l.p)));
-  const combinedOdds = opts.offeredOdds ?? legs.reduce((acc, l) => acc * l.odds, 1);
-  const pIndependent = probs.reduce((acc, p) => acc * p, 1);
-  const n = legs.length;
-  const corr = Array.from(
-    { length: n },
-    (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : pairwiseCorrelation(legs[i], legs[j]))
-  );
-  const L = cholesky(corr);
-  const thresholds = probs.map((p) => normInv(p));
-  const rnd = mulberry32(opts.seed ?? 20260101);
-  const gauss = () => {
-    const u1 = Math.max(1e-12, rnd());
-    const u2 = rnd();
-    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-  };
-  let hits = 0;
-  const z = new Array(n).fill(0);
-  for (let s = 0; s < sims; s++) {
-    for (let i = 0; i < n; i++) z[i] = gauss();
-    let all = true;
-    for (let i = 0; i < n && all; i++) {
-      let x = 0;
-      for (let j = 0; j <= i; j++) x += L[i][j] * z[j];
-      if (x >= thresholds[i]) all = false;
-    }
-    if (all) hits++;
-  }
-  const pCorrelated = hits / sims;
-  const simStdErr = Math.sqrt(pCorrelated * (1 - pCorrelated) / sims);
-  const pPessimistic = probs.reduce((acc, p) => acc * Math.max(1e-3, p - sigma), 1);
-  const g = (delta) => probs.reduce((acc, p) => acc * Math.max(0, p - delta), 1) * combinedOdds - 1;
-  let breakEvenBias = 0;
-  if (g(0) > 0) {
-    let lo = 0;
-    let hi = Math.min(...probs);
-    for (let i = 0; i < 60; i++) {
-      const mid = (lo + hi) / 2;
-      if (g(mid) > 0) lo = mid;
-      else hi = mid;
-    }
-    breakEvenBias = lo;
-  } else {
-    breakEvenBias = -1;
-  }
-  const allMarket = legs.every((l) => l.pMarket != null && l.pMarket > 0);
-  const marketProd = allMarket ? legs.reduce((acc, l) => acc * l.pMarket, 1) : null;
-  return {
-    legs: n,
-    combinedOdds,
-    pIndependent,
-    pCorrelated,
-    simStdErr,
-    evIndependent: pIndependent * combinedOdds - 1,
-    evCorrelated: pCorrelated * combinedOdds - 1,
-    pDecision: Math.min(pIndependent, pCorrelated),
-    evDecision: Math.min(pIndependent, pCorrelated) * combinedOdds - 1,
-    pPessimistic,
-    evPessimistic: pPessimistic * combinedOdds - 1,
-    fairOddsCorrelated: pCorrelated > 0 ? 1 / pCorrelated : Infinity,
-    marginPaid: marketProd != null ? 1 - combinedOdds * marketProd : null,
-    breakEvenBias,
-    correlationMatrix: corr
-  };
-}
-var init_parlay = __esm({
-  "src/lib/quant/parlay.ts"() {
-    "use strict";
-  }
-});
-
 // src/lib/quant/composition.ts
 var composition_exports = {};
 __export(composition_exports, {
@@ -76059,10 +77180,10 @@ __export(composition_exports, {
   screenCandidates: () => screenCandidates,
   toParlayLegRows: () => toParlayLegRows
 });
-function screenCandidates(candidates) {
+function screenCandidates(candidates2) {
   const rejected = [];
   const byFixture = /* @__PURE__ */ new Map();
-  for (const candidate of candidates) {
+  for (const candidate of candidates2) {
     const { selection } = candidate;
     if (!Number.isInteger(candidate.fixtureId)) {
       rejected.push({ ...ident(candidate), reason: "fixtureId bukan bilangan bulat" });
@@ -76125,7 +77246,7 @@ function toParlayLeg(candidate) {
     date: candidate.date ?? void 0
   };
 }
-function buildParlayComposition(candidates, options = {}) {
+function buildParlayComposition(candidates2, options = {}) {
   const notes = [];
   const minLegs = Math.max(ALLOW_TWO_LEG_PARLAY ? 2 : MIN_LEGS, options.minLegs ?? MIN_LEGS);
   const maxLegs = Math.min(MAX_LEGS, Math.max(minLegs, options.maxLegs ?? MAX_LEGS));
@@ -76142,7 +77263,7 @@ function buildParlayComposition(candidates, options = {}) {
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
     notes: []
   };
-  const { eligible, rejected } = screenCandidates(candidates);
+  const { eligible, rejected } = screenCandidates(candidates2);
   const base = { ...empty, eligible: eligible.length, rejected };
   if (eligible.length < minLegs) {
     base.notes.push(
@@ -80831,11 +81952,11 @@ function extractLine2(value) {
   const last = Number(matches[matches.length - 1]);
   return Number.isFinite(last) ? last : null;
 }
-function validOdds2(value) {
+function validOdds3(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 1;
 }
 function fairFromOdds(odds) {
-  if (odds.length < 2 || !odds.every(validOdds2)) return null;
+  if (odds.length < 2 || !odds.every(validOdds3)) return null;
   try {
     const result2 = devig(odds, "shin");
     if (!result2.probs.every((p) => Number.isFinite(p) && p > 0 && p < 1)) return null;
@@ -80894,7 +82015,7 @@ function computeClosingPrices(marketKeys, snapshotRows, kickoff) {
         ]);
         const index2 = want.side === "home" ? 0 : want.side === "draw" ? 1 : 2;
         const odds = index2 === 0 ? row.homeOdds : index2 === 1 ? row.drawOdds : row.awayOdds;
-        if (probs && validOdds2(odds)) {
+        if (probs && validOdds3(odds)) {
           found = { row, probs, odds };
           void marketKeyId;
           break;
@@ -80903,7 +82024,7 @@ function computeClosingPrices(marketKeys, snapshotRows, kickoff) {
         const probs = fairFromOdds([row.overOdds, row.underOdds]);
         const index2 = want.side === "over" ? 0 : 1;
         const odds = index2 === 0 ? row.overOdds : row.underOdds;
-        if (probs && validOdds2(odds)) {
+        if (probs && validOdds3(odds)) {
           found = { row, probs, odds };
           break;
         }
@@ -80911,7 +82032,7 @@ function computeClosingPrices(marketKeys, snapshotRows, kickoff) {
         const probs = fairFromOdds([row.bttsYes, row.bttsNo]);
         const index2 = want.side === "yes" ? 0 : 1;
         const odds = index2 === 0 ? row.bttsYes : row.bttsNo;
-        if (probs && validOdds2(odds)) {
+        if (probs && validOdds3(odds)) {
           found = { row, probs, odds };
           break;
         }
@@ -80919,7 +82040,7 @@ function computeClosingPrices(marketKeys, snapshotRows, kickoff) {
         const probs = fairFromOdds([row.homeOdds, row.awayOdds]);
         const index2 = want.side === "home" ? 0 : 1;
         const odds = index2 === 0 ? row.homeOdds : row.awayOdds;
-        if (probs && validOdds2(odds)) {
+        if (probs && validOdds3(odds)) {
           found = { row, probs, odds };
           break;
         }
@@ -81685,7 +82806,7 @@ var SYNC_RUN_COLUMNS = [
   "error_message",
   "created_at"
 ].join(", ");
-function num(value) {
+function num2(value) {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : 0;
 }
@@ -81696,11 +82817,11 @@ function toSyncRunSummary(input) {
   const startMs = new Date(startedAt).getTime();
   const endMs = finishedAt ? new Date(finishedAt).getTime() : NaN;
   const durationMs = Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : null;
-  const eventsFetched = num(row["events_fetched"]);
-  const eventsInserted = num(row["events_inserted"]);
+  const eventsFetched = num2(row["events_fetched"]);
+  const eventsInserted = num2(row["events_inserted"]);
   const leagues = Array.isArray(row["leagues"]) ? row["leagues"] : [];
   return {
-    id: row["id"] != null ? num(row["id"]) : null,
+    id: row["id"] != null ? num2(row["id"]) : null,
     status: row["status"] ?? "unknown",
     startedAt,
     finishedAt,
@@ -81709,9 +82830,9 @@ function toSyncRunSummary(input) {
     leagueCount: leagues.length,
     eventsFetched,
     eventsInserted,
-    oddsFetched: num(row["odds_fetched"]),
-    errors: num(row["errors"]),
-    rateLimitedSeconds: num(row["rate_limited_seconds"]),
+    oddsFetched: num2(row["odds_fetched"]),
+    errors: num2(row["errors"]),
+    rateLimitedSeconds: num2(row["rate_limited_seconds"]),
     errorMessage: row["error_message"] ?? null,
     insertRatio: eventsFetched > 0 ? eventsInserted / eventsFetched : null,
     insertReason: explainInsertRatio(eventsFetched, eventsInserted)
@@ -83875,7 +84996,7 @@ init_logger();
 init_team_name_cleaner();
 init_team_stats_merge();
 init_supabase_client();
-function parsePercent(val) {
+function parsePercent3(val) {
   if (val === null || val === void 0 || val === "") return null;
   const s = String(val).trim();
   const m = s.match(/^([\d.]+)\s*%$/);
@@ -83891,13 +85012,13 @@ function parseFloatOrNull(val) {
 function normalizeHeader(h) {
   return h.trim().replace(/^\uFEFF/, "").toLowerCase().replace(/\s+/g, " ");
 }
-function findColumn(headers, candidates) {
+function findColumn(headers, candidates2) {
   const n = headers.map(normalizeHeader);
-  for (const c of candidates) {
+  for (const c of candidates2) {
     const idx = n.indexOf(c.toLowerCase());
     if (idx !== -1) return headers[idx];
   }
-  for (const c of candidates) {
+  for (const c of candidates2) {
     const h = headers.find(
       (h2) => normalizeHeader(h2).includes(c.toLowerCase())
     );
@@ -84043,13 +85164,13 @@ function detectOverUnder(headers) {
     const underMatch = norm.match(/under\s*(\d\.\d)/);
     const overMatch = norm.match(/over\s*(\d\.\d)/);
     if (underMatch) {
-      const num2 = parseFloat(underMatch[1]);
-      if (num2 > 5.5) continue;
+      const num3 = parseFloat(underMatch[1]);
+      if (num3 > 5.5) continue;
       const key = `under_${underMatch[1].replace(".", "")}_pct`;
       map[key] = h;
     } else if (overMatch) {
-      const num2 = parseFloat(overMatch[1]);
-      if (num2 > 5.5) continue;
+      const num3 = parseFloat(overMatch[1]);
+      if (num3 > 5.5) continue;
       const key = `over_${overMatch[1].replace(".", "")}_pct`;
       map[key] = h;
     }
@@ -84062,8 +85183,8 @@ function detectShots(headers) {
     const norm = normalizeHeader(h);
     const m = norm.match(/over\s*(\d\.\d)/);
     if (m) {
-      const num2 = parseFloat(m[1]);
-      if (num2 >= 10.5) {
+      const num3 = parseFloat(m[1]);
+      if (num3 >= 10.5) {
         const key = `shots_over_${m[1].replace(".", "")}_pct`;
         map[key] = h;
       }
@@ -84165,17 +85286,17 @@ async function parseSeasonCsv(buffer, leagueSlug, season) {
     if (cols.xptsCol) row.xpts = parseFloatOrNull(raw[cols.xptsCol]);
     if (cols.actualPtsCol) row.actual_pts = parseFloatOrNull(raw[cols.actualPtsCol]);
     if (cols.xpVsActualCol) row.xp_vs_actual = parseFloatOrNull(raw[cols.xpVsActualCol]);
-    if (cols.ftsPctCol) row.fts_pct = parsePercent(raw[cols.ftsPctCol]);
-    if (cols.ftsHomePctCol) row.fts_home_pct = parsePercent(raw[cols.ftsHomePctCol]);
-    if (cols.ftsAwayPctCol) row.fts_away_pct = parsePercent(raw[cols.ftsAwayPctCol]);
-    if (cols.htWinPctCol) row.ht_win_pct = parsePercent(raw[cols.htWinPctCol]);
-    if (cols.htDrawPctCol) row.ht_draw_pct = parsePercent(raw[cols.htDrawPctCol]);
-    if (cols.htLossPctCol) row.ht_loss_pct = parsePercent(raw[cols.htLossPctCol]);
+    if (cols.ftsPctCol) row.fts_pct = parsePercent3(raw[cols.ftsPctCol]);
+    if (cols.ftsHomePctCol) row.fts_home_pct = parsePercent3(raw[cols.ftsHomePctCol]);
+    if (cols.ftsAwayPctCol) row.fts_away_pct = parsePercent3(raw[cols.ftsAwayPctCol]);
+    if (cols.htWinPctCol) row.ht_win_pct = parsePercent3(raw[cols.htWinPctCol]);
+    if (cols.htDrawPctCol) row.ht_draw_pct = parsePercent3(raw[cols.htDrawPctCol]);
+    if (cols.htLossPctCol) row.ht_loss_pct = parsePercent3(raw[cols.htLossPctCol]);
     for (const [key, header] of Object.entries(overUnder)) {
-      row[key] = parsePercent(raw[header]);
+      row[key] = parsePercent3(raw[header]);
     }
     for (const [key, header] of Object.entries(shots)) {
-      row[key] = parsePercent(raw[header]);
+      row[key] = parsePercent3(raw[header]);
     }
     rows.push(row);
   }
@@ -84720,13 +85841,73 @@ var import_node_crypto2 = require("node:crypto");
 var router7 = (0, import_express7.Router)();
 var batchJobs = /* @__PURE__ */ new Map();
 var MAX_BATCH_JOBS = 20;
-var MAX_BATCH_FIXTURES = 20;
+var MAX_BATCH_FIXTURES = 60;
+var BATCH_TIME_BUDGET_MS = (() => {
+  const raw = Number(process.env.SCAN_JOB_BUDGET_MS);
+  if (!Number.isFinite(raw) || raw <= 0) return 45e3;
+  return Math.min(55e3, Math.max(1e4, raw));
+})();
+var SCAN_JOB_TTL_MS = 6 * 60 * 60 * 1e3;
+var SCAN_JOB_STALE_MS = 3 * 60 * 1e3;
 function trimBatchJobs() {
   while (batchJobs.size > MAX_BATCH_JOBS) {
     const oldest = batchJobs.keys().next().value;
     if (!oldest) break;
     batchJobs.delete(oldest);
   }
+}
+function persistJob(job) {
+  job.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  void supabase.from("scan_jobs").upsert({
+    id: job.id,
+    status: job.status,
+    scan_days: job.scanDays,
+    total: job.total,
+    completed: job.completed,
+    current_match: job.currentMatch,
+    tickets: job.tickets,
+    pending: job.pending,
+    parlay_id: job.parlayId,
+    waiting_odds: job.waitingOdds,
+    error: job.error,
+    started_at: job.startedAt,
+    finished_at: job.finishedAt,
+    updated_at: job.updatedAt
+  }, { onConflict: "id" }).then(({ error }) => {
+    if (error) logger.warn({ error, jobId: job.id }, "BATCH SCANNER: gagal menyimpan snapshot job");
+  });
+}
+function hydrateJob(row) {
+  return {
+    id: String(row.id),
+    status: row.status ?? "failed",
+    scanDays: Number(row.scan_days ?? 0),
+    total: Number(row.total ?? 0),
+    completed: Number(row.completed ?? 0),
+    currentMatch: row.current_match ?? null,
+    tickets: Array.isArray(row.tickets) ? row.tickets : [],
+    pending: Array.isArray(row.pending) ? row.pending.map(Number) : [],
+    parlayId: row.parlay_id ?? null,
+    waitingOdds: Number(row.waiting_odds ?? 0),
+    error: row.error ?? null,
+    startedAt: String(row.started_at ?? (/* @__PURE__ */ new Date()).toISOString()),
+    updatedAt: String(row.updated_at ?? row.started_at ?? (/* @__PURE__ */ new Date()).toISOString()),
+    finishedAt: row.finished_at ?? null
+  };
+}
+async function loadJob(jobId) {
+  const cached = batchJobs.get(jobId);
+  if (cached) return cached;
+  const { data, error } = await supabase.from("scan_jobs").select("*").eq("id", jobId).gt("updated_at", new Date(Date.now() - SCAN_JOB_TTL_MS).toISOString()).maybeSingle();
+  if (error) {
+    logger.warn({ error, jobId }, "BATCH SCANNER: gagal membaca job tersimpan");
+    return null;
+  }
+  if (!data) return null;
+  const job = hydrateJob(data);
+  batchJobs.set(job.id, job);
+  trimBatchJobs();
+  return job;
 }
 function publicBatchJob(job) {
   return {
@@ -84740,15 +85921,27 @@ function publicBatchJob(job) {
     parlayLegs: job.tickets.filter((ticket) => ticket.is_parlay_leg).length,
     waitingOdds: job.tickets.filter((ticket) => ticket.status === "waiting_odds").length,
     noBet: job.tickets.filter((ticket) => ticket.status === "scanned" && ticket.selection === "NO_BET").length,
-    technicalReview: job.tickets.filter((ticket) => ticket.readiness_status === "technical_review").length,
-    tickets: job.status === "running" ? job.tickets : job.tickets,
+    /*
+     * `waiting_odds` TIDAK dihitung sebagai review teknis. Dulu tiket
+     * "menunggu odds" diberi readiness_status: technical_review, sehingga
+     * angka "Technical review" selalu sama dengan jumlah tiket dan tidak
+     * memberi informasi apa pun (audit 12 Nov: 133 tiket, 127 di antaranya
+     * hanya menunggu odds).
+     */
+    technicalReview: job.tickets.filter(
+      (ticket) => ticket.readiness_status === "technical_review" && ticket.status !== "waiting_odds"
+    ).length,
+    errors: job.tickets.filter((ticket) => ticket.status === "error").length,
+    pending: job.pending.length,
+    partial: job.status === "partial",
+    tickets: job.tickets,
     parlayId: job.parlayId,
     error: job.error,
     startedAt: job.startedAt,
     finishedAt: job.finishedAt
   };
 }
-async function runBatchJob(job, fixtures) {
+async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_BUDGET_MS, alreadyCounted = false) {
   const parlayCandidates = [];
   const existing = await supabase.from("ai_predictions").select("fixture_id, status, market_bet, best_market, best_odds").in("fixture_id", fixtures.map((fixture) => fixture.fixture_id));
   if (existing.error) {
@@ -84789,9 +85982,12 @@ async function runBatchJob(job, fixtures) {
   const toScan = pendingFixtures.filter((fixture) => !waitingFixtures.some((waiting) => waiting.fixture_id === fixture.fixture_id)).slice(0, MAX_BATCH_FIXTURES);
   const { persona, agentInstructions } = await loadAIConfig();
   const statsCache = /* @__PURE__ */ new Map();
-  job.total = waitingFixtures.length + toScan.length;
-  job.completed = waitingFixtures.length;
-  job.waitingOdds = waitingFixtures.length;
+  if (!alreadyCounted) {
+    job.total = job.total + waitingFixtures.length + toScan.length;
+  }
+  job.completed = job.completed + waitingFixtures.length;
+  job.waitingOdds = job.waitingOdds + waitingFixtures.length;
+  const completedBase = job.completed;
   for (const fx of waitingFixtures) {
     const oddsAvailability = assessOddsAvailability(oddsByFixture.get(String(fx.fixture_id)) ?? []);
     job.tickets.push({
@@ -84812,9 +86008,21 @@ async function runBatchJob(job, fixtures) {
       is_parlay_leg: false
     });
   }
+  persistJob(job);
   let backoffMs = 0;
   for (let index = 0; index < toScan.length; index++) {
     const fx = toScan[index];
+    if (Date.now() >= deadlineAt) {
+      job.pending = toScan.slice(index).map((fixture) => Number(fixture.fixture_id));
+      job.currentMatch = null;
+      job.status = "partial";
+      persistJob(job);
+      logger.info(
+        { jobId: job.id, processed: job.completed, total: job.total, pending: job.pending.length },
+        "BATCH SCANNER: anggaran waktu habis \u2014 sisa fixture disimpan untuk resume"
+      );
+      return;
+    }
     job.currentMatch = `${fx.home_team_name} vs ${fx.away_team_name}`;
     try {
       if (index > 0 && backoffMs > 0) {
@@ -84864,7 +86072,9 @@ async function runBatchJob(job, fixtures) {
         status: "scanned",
         readiness_status: result2.readiness_status,
         rejection_reason: result2.data_quality?.rejectionReason,
-        is_parlay_leg: isParlayLeg
+        is_parlay_leg: isParlayLeg,
+        probability: prob,
+        fixture_date: fx.fixture_date
       };
       job.tickets.push(ticket);
       if (isParlayLeg && prob != null) {
@@ -84925,11 +86135,35 @@ async function runBatchJob(job, fixtures) {
         is_parlay_leg: false
       });
     } finally {
-      job.completed = waitingFixtures.length + index + 1;
+      job.completed = completedBase + index + 1;
+      persistJob(job);
     }
   }
   job.currentMatch = null;
-  job.parlayId = await createParlayFromCandidates(parlayCandidates);
+  const fromTickets = job.tickets.filter(
+    (ticket) => ticket.is_parlay_leg && typeof ticket.probability === "number" && ticket.probability > 0 && ticket.probability < 1 && Number(ticket.odds) > 1 && Boolean(ticket.market)
+  ).map((ticket) => ({
+    predictionId: ticket.prediction_id,
+    fixtureId: Number(ticket.fixture_id),
+    homeTeam: ticket.home_team,
+    awayTeam: ticket.away_team,
+    league: ticket.league,
+    date: ticket.fixture_date ?? "",
+    market: ticket.market,
+    selection: ticket.selection,
+    odds: Number(ticket.odds),
+    confidence: Number(ticket.confidence),
+    probability: ticket.probability,
+    evPercent: Number(ticket.ev_percent)
+  }));
+  const candidateKey = (candidate) => `${candidate.fixtureId}::${String(candidate.market).toLowerCase()}`;
+  const mergedCandidates = /* @__PURE__ */ new Map();
+  for (const candidate of [...fromTickets, ...parlayCandidates]) {
+    if (!mergedCandidates.has(candidateKey(candidate))) {
+      mergedCandidates.set(candidateKey(candidate), candidate);
+    }
+  }
+  job.parlayId = await createParlayFromCandidates(Array.from(mergedCandidates.values()));
   const validTickets = job.tickets.filter(
     (ticket) => ticket.readiness_status === "bet_ready" && ticket.status === "scanned"
   );
@@ -84952,7 +86186,10 @@ async function runBatchJob(job, fixtures) {
 router7.post("/analyze/batch", requireAdmin, async (_req, res) => {
   try {
     logger.info("BATCH SCANNER: Request received");
-    const runningJob = Array.from(batchJobs.values()).find((job2) => job2.status === "running");
+    const freshCutoff = new Date(Date.now() - SCAN_JOB_STALE_MS).toISOString();
+    const runningJob = Array.from(batchJobs.values()).find(
+      (job2) => job2.status === "running" && new Date(job2.updatedAt ?? job2.startedAt).getTime() >= new Date(freshCutoff).getTime()
+    );
     if (runningJob) {
       res.status(409).json({
         error: "Batch scanner sedang berjalan",
@@ -84961,6 +86198,20 @@ router7.post("/analyze/batch", requireAdmin, async (_req, res) => {
         total: runningJob.total
       });
       return;
+    }
+    const { data: persistedRunning } = await supabase.from("scan_jobs").select("id, completed, total").eq("status", "running").gte("updated_at", freshCutoff).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+    if (persistedRunning?.id) {
+      res.status(409).json({
+        error: "Batch scanner sedang berjalan",
+        jobId: String(persistedRunning.id),
+        completed: Number(persistedRunning.completed ?? 0),
+        total: Number(persistedRunning.total ?? 0)
+      });
+      return;
+    }
+    for (const [id, job2] of batchJobs) {
+      const age = Date.now() - new Date(job2.updatedAt ?? job2.startedAt).getTime();
+      if (job2.status !== "running" && age > SCAN_JOB_TTL_MS) batchJobs.delete(id);
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const { data: config } = await supabase.from("scheduler_config").select("scan_days").limit(1).maybeSingle();
@@ -84982,10 +86233,12 @@ router7.post("/analyze/batch", requireAdmin, async (_req, res) => {
         completed: 0,
         currentMatch: null,
         tickets: [],
+        pending: [],
         parlayId: null,
         waitingOdds: 0,
         error: null,
         startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
         finishedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
       batchJobs.set(job2.id, job2);
@@ -85004,21 +86257,28 @@ router7.post("/analyze/batch", requireAdmin, async (_req, res) => {
       completed: 0,
       currentMatch: null,
       tickets: [],
+      pending: [],
       parlayId: null,
       waitingOdds: 0,
       error: null,
       startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       finishedAt: null
     };
     batchJobs.set(job.id, job);
     trimBatchJobs();
+    persistJob(job);
     void runBatchJob(job, fixtures).then(() => {
-      job.status = "completed";
-      job.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+      if (job.status === "running") {
+        job.status = "completed";
+        job.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+      }
+      persistJob(job);
     }).catch((err) => {
       job.status = "failed";
       job.error = err instanceof Error ? err.message : "Batch scanner failed";
       job.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+      persistJob(job);
       logger.error({ err, jobId: job.id }, "BATCH SCANNER failed");
     });
     res.status(202).json(publicBatchJob(job));
@@ -85028,13 +86288,65 @@ router7.post("/analyze/batch", requireAdmin, async (_req, res) => {
     res.status(500).json({ error: message });
   }
 });
-router7.get("/analyze/batch/:jobId", requireAdmin, (req, res) => {
-  const job = batchJobs.get(String(req.params.jobId));
-  if (!job) {
-    res.status(404).json({ error: "Batch job not found or expired" });
-    return;
+router7.get("/analyze/batch/:jobId", requireAdmin, async (req, res) => {
+  try {
+    const job = await loadJob(String(req.params.jobId));
+    if (!job) {
+      res.status(404).json({ error: "Batch job not found or expired" });
+      return;
+    }
+    res.json(publicBatchJob(job));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    logger.error({ err, jobId: req.params.jobId }, "BATCH SCANNER: gagal memuat status");
+    res.status(500).json({ error: message });
   }
-  res.json(publicBatchJob(job));
+});
+router7.post("/analyze/batch/:jobId/resume", requireAdmin, async (req, res) => {
+  try {
+    const job = await loadJob(String(req.params.jobId));
+    if (!job) {
+      res.status(404).json({ error: "Batch job not found or expired" });
+      return;
+    }
+    if (job.status === "running") {
+      res.status(409).json({ error: "Job masih berjalan", jobId: job.id });
+      return;
+    }
+    if (job.pending.length === 0) {
+      res.json(publicBatchJob(job));
+      return;
+    }
+    const pendingIds = [...job.pending];
+    const { data: fixtures, error } = await supabase.from("fixtures").select("fixture_id, home_team_name, away_team_name, league_name, fixture_date").in("fixture_id", pendingIds).order("fixture_date", { ascending: true });
+    if (error) {
+      res.status(500).json({ error: `Gagal memuat fixture lanjutan: ${error.message}` });
+      return;
+    }
+    job.status = "running";
+    job.pending = [];
+    job.error = null;
+    job.finishedAt = null;
+    persistJob(job);
+    res.status(202).json(publicBatchJob(job));
+    void runBatchJob(job, fixtures ?? [], Date.now() + BATCH_TIME_BUDGET_MS, true).then(() => {
+      if (job.status === "running") {
+        job.status = "completed";
+        job.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+      }
+      persistJob(job);
+    }).catch((err) => {
+      job.status = "failed";
+      job.error = err instanceof Error ? err.message : "Batch scanner failed";
+      job.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+      persistJob(job);
+      logger.error({ err, jobId: job.id }, "BATCH SCANNER resume failed");
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    logger.error({ err }, "BATCH SCANNER: resume gagal");
+    res.status(500).json({ error: message });
+  }
 });
 router7.post("/analyze/:fixtureId", requireAdmin, async (req, res) => {
   const fixtureId = String(req.params["fixtureId"] ?? "").trim();
@@ -85347,17 +86659,17 @@ function detectStatTypeContradiction(statType, statData) {
 }
 async function upsertTeamStat(leagueSlug, season, teamName, statType, statData, existingRows) {
   const cleanTeam = canonicalTeamName(teamName, leagueSlug);
-  const candidates = findEquivalentTeamStatsRows(
+  const candidates2 = findEquivalentTeamStatsRows(
     existingRows,
     cleanTeam,
     leagueSlug
   );
-  const displayTeam = preferredTeamDisplayName(cleanTeam, candidates, leagueSlug);
-  const target = candidates.find(
+  const displayTeam = preferredTeamDisplayName(cleanTeam, candidates2, leagueSlug);
+  const target = candidates2.find(
     (row) => String(row.team_name ?? "").trim().toLowerCase() === displayTeam.trim().toLowerCase()
-  ) ?? candidates[0];
+  ) ?? candidates2[0];
   const existingId = target?.id == null ? null : String(target.id);
-  const mergedExisting = mergeTeamStatsRows(candidates);
+  const mergedExisting = mergeTeamStatsRows(candidates2);
   const payload = {
     league_slug: leagueSlug,
     season,
@@ -86064,6 +87376,7 @@ init_team_name_cleaner();
 init_team_stats_merge();
 init_ai_analysis();
 init_team_stats_freshness();
+init_stats_integrity();
 var router10 = (0, import_express10.Router)();
 function canonicalLeague(value) {
   const canonical = value.toLowerCase().trim().replace(/[\/_\s]+/g, "-").replace(/-+/g, "-").replace(/^south-korea-/, "republic-of-korea-");
@@ -86122,20 +87435,56 @@ router10.get("/stats/health", async (_req, res) => {
       const key = canonicalLeague(slug);
       if (healthByKey.has(key)) continue;
       const rows = rowsByLeague.get(key) ?? [];
-      const latestUpdatedAt = latestDate(rows.map((row) => row.updated_at));
-      const quality = rows.map((row) => assessTeamStatsQuality(row));
-      const teamsComplete = quality.filter((entry) => entry.valid).length;
-      const ageDays = latestUpdatedAt ? Math.max(0, Math.floor((now - new Date(latestUpdatedAt).getTime()) / (24 * 60 * 60 * 1e3))) : null;
+      const rowsBySeason = /* @__PURE__ */ new Map();
+      for (const row of rows) {
+        const season = String(row.season ?? "");
+        const bucket = rowsBySeason.get(season) ?? [];
+        bucket.push(row);
+        rowsBySeason.set(season, bucket);
+      }
+      const seasonKeys = Array.from(rowsBySeason.keys()).sort((a, b) => b.localeCompare(a));
+      let contradictoryBlocks = 0;
+      let derivedBlocks = 0;
+      const bySeason = seasonKeys.map((season) => {
+        const seasonRows = rowsBySeason.get(season) ?? [];
+        let complete = 0;
+        for (const row of seasonRows) {
+          const contradictory = findContradictoryColumns(row);
+          contradictoryBlocks += contradictory.length;
+          if (contradictory.length === 0) {
+            const normalized = normalizeStatsRow(row);
+            derivedBlocks += normalized.derived.length;
+            if (assessTeamStatsQuality(normalized.stats).valid) complete += 1;
+          }
+        }
+        const latestUpdatedAt2 = latestDate(seasonRows.map((row) => row.updated_at));
+        return {
+          season,
+          rows: seasonRows.length,
+          teams: new Set(seasonRows.map((row) => row.team_name).filter(Boolean)).size,
+          complete,
+          incomplete: Math.max(0, seasonRows.length - complete),
+          latestUpdatedAt: latestUpdatedAt2,
+          ageDays: latestUpdatedAt2 ? Math.max(0, Math.floor((now - new Date(latestUpdatedAt2).getTime()) / (24 * 60 * 60 * 1e3))) : null,
+          status: complete === 0 ? "missing" : latestUpdatedAt2 && new Date(latestUpdatedAt2).getTime() >= staleCutoff ? "current" : "stale"
+        };
+      });
+      const latestSeason = bySeason[0];
+      const latestUpdatedAt = latestSeason?.latestUpdatedAt ?? null;
+      const ageDays = latestSeason?.ageDays ?? null;
       healthByKey.set(key, {
         slug,
         name: leagueLabel(slug),
         statsRows: rows.length,
         teamsCovered: new Set(rows.map((row) => row.team_name).filter(Boolean)).size,
-        teamsComplete,
-        teamsIncomplete: Math.max(0, rows.length - teamsComplete),
+        teamsComplete: latestSeason?.complete ?? 0,
+        teamsIncomplete: latestSeason ? Math.max(0, latestSeason.teams - latestSeason.complete) : 0,
         latestUpdatedAt,
         ageDays,
-        status: teamsComplete === 0 ? "missing" : latestUpdatedAt && new Date(latestUpdatedAt).getTime() >= staleCutoff ? "current" : "stale"
+        status: latestSeason?.status ?? "missing",
+        bySeason,
+        contradictoryBlocks,
+        derivedBlocks
       });
     }
     const { data: activeParlays, error: parlaysError } = await supabase.from("parlays").select("id, parlay_name, legs_count, created_at").eq("status", "active").gte("legs_count", 2).order("created_at", { ascending: false }).limit(20);
@@ -86342,14 +87691,14 @@ function predictionProbabilityFromContext(context) {
     }
     return current && typeof current === "object" && !Array.isArray(current) ? current : null;
   };
-  const candidates = [
+  const candidates2 = [
     root.probability,
     nested("recommendation")?.probability,
     nested("evaluation_snapshot", "recommendation")?.probability,
     nested("evaluationSnapshot", "recommendation")?.probability,
     nested("snapshot", "recommendation")?.probability
   ];
-  for (const candidate of candidates) {
+  for (const candidate of candidates2) {
     const value = typeof candidate === "string" && candidate.trim().endsWith("%") ? Number(candidate.trim().slice(0, -1)) / 100 : Number(candidate);
     if (Number.isFinite(value) && value > 0 && value < 1) return value;
   }
@@ -86368,10 +87717,11 @@ init_parlay_builder();
 init_supabase_client();
 init_logger();
 init_composition();
+init_parlay();
 var COMPOSER_GENERATED_BY = "QUANT_COMPOSER";
-async function composeAndSaveParlay(candidates, options = {}) {
+async function composeAndSaveParlay(candidates2, options = {}) {
   const client = options.client ?? supabase;
-  const composition = buildParlayComposition(candidates, {
+  const composition = buildParlayComposition(candidates2, {
     minLegs: options.minLegs,
     maxLegs: options.maxLegs,
     maxCandidates: options.maxCandidates,
@@ -86402,6 +87752,9 @@ async function composeAndSaveParlay(candidates, options = {}) {
     combined_odds: best.combinedOdds,
     win_probability: best.pDecision,
     expected_value: best.evDecision,
+    stake_pct: ticketStakePlan(best, best.legs.map(() => 0.03)).stakePct,
+    ev_pessimistic: best.evPessimistic,
+    p_correlated: best.pCorrelated,
     avg_confidence: null,
     status: "active",
     generated_by: COMPOSER_GENERATED_BY,
@@ -86462,7 +87815,7 @@ init_composition();
 
 // src/services/parlay-candidates.ts
 function candidatesFromSelectionRows(rows, fixtureMeta) {
-  const candidates = [];
+  const candidates2 = [];
   for (const row of rows) {
     const fixtureId = Number(row.fixture_id);
     if (!Number.isInteger(fixtureId)) continue;
@@ -86492,7 +87845,7 @@ function candidatesFromSelectionRows(rows, fixtureMeta) {
       rejectReasons: passing ? [] : ["EV konservatif \u2264 0"]
     };
     if (!passing) continue;
-    candidates.push({
+    candidates2.push({
       marketKey: row.market_key,
       fixtureId,
       league: meta.league,
@@ -86500,7 +87853,7 @@ function candidatesFromSelectionRows(rows, fixtureMeta) {
       selection
     });
   }
-  return candidates;
+  return candidates2;
 }
 
 // src/routes/parlays.ts
@@ -86689,10 +88042,10 @@ router12.get("/parlays/compose-preview", async (req, res) => {
         date: f.fixture_date ? f.fixture_date.slice(0, 10) : null
       });
     }
-    const candidates = candidatesFromSelectionRows(selectionRows, meta);
+    const candidates2 = candidatesFromSelectionRows(selectionRows, meta);
     const { buildParlayComposition: buildParlayComposition2 } = await Promise.resolve().then(() => (init_composition(), composition_exports));
     const limit = Number(req.query["maxCandidates"]) || void 0;
-    const composition = buildParlayComposition2(candidates, { maxCandidates: limit });
+    const composition = buildParlayComposition2(candidates2, { maxCandidates: limit });
     res.json({ ...composition, ledgerRows: selectionRows.length });
   } catch (err) {
     logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
@@ -87179,8 +88532,8 @@ router12.post("/parlays/merge", requireAdmin, async (req, res) => {
       });
       return;
     }
-    const candidates = readiness.legs.map((leg) => leg.candidate);
-    const result2 = await createMergedParlay(candidates, parlayIds);
+    const candidates2 = readiness.legs.map((leg) => leg.candidate);
+    const result2 = await createMergedParlay(candidates2, parlayIds);
     const stake = Number(req.body?.stake);
     const normalizedStake = Number.isFinite(stake) && stake > 0 ? stake : null;
     const response = normalizedStake == null ? result2 : {
@@ -87254,7 +88607,7 @@ router12.post("/parlays/from-predictions", requireAdmin, async (req, res) => {
       res.status(422).json({ error: "Prediksi AI harus memiliki fixture mendatang, market, odds, dan probabilitas eksplisit yang valid." });
       return;
     }
-    const candidates = [...aiCandidates];
+    const candidates2 = [...aiCandidates];
     const usedFixtureIds = new Set(aiCandidates.map((candidate) => Number(candidate.fixtureId)));
     for (const manual of manualLegs) {
       if (usedFixtureIds.has(manual.fixtureId)) {
@@ -87294,7 +88647,7 @@ router12.post("/parlays/from-predictions", requireAdmin, async (req, res) => {
       }
       const lineSuffix = manual.marketLine ? ` ${manual.marketLine}` : "";
       const selection = marketClass === "Totals" ? `${outcome.label}${lineSuffix}` : outcome.label;
-      candidates.push({
+      candidates2.push({
         fixtureId: manual.fixtureId,
         homeTeam: fixture.home_team_name,
         awayTeam: fixture.away_team_name,
@@ -87310,13 +88663,13 @@ router12.post("/parlays/from-predictions", requireAdmin, async (req, res) => {
       });
       usedFixtureIds.add(manual.fixtureId);
     }
-    if (candidates.length < 2) {
+    if (candidates2.length < 2) {
       res.status(422).json({ error: "Pilih minimal dua leg valid." });
       return;
     }
     const hasManualLegs = manualLegs.length > 0;
     const generatedBy = hasManualLegs ? aiCandidates.length > 0 ? "USER_MIXED" : "USER_MANUAL" : "AI_SELECTED";
-    const result2 = await createMergedParlay(candidates, [], {
+    const result2 = await createMergedParlay(candidates2, [], {
       generatedBy,
       namePrefix: hasManualLegs ? aiCandidates.length > 0 ? "Parlay Campuran" : "Parlay Pilihan Pengguna" : "AI Selected Parlay",
       reasoning: hasManualLegs ? "Menggabungkan prediksi AI yang valid dan leg yang dipilih pengguna. Probabilitas leg manual berasal dari estimasi pengguna; leg manual tidak dimasukkan ke AI Learning." : "Dibuat dari prediksi AI yang dipilih pengguna."
@@ -87336,6 +88689,327 @@ var parlays_default = router12;
 // src/routes/learning.ts
 var import_express13 = __toESM(require_express2(), 1);
 init_logger();
+
+// src/services/ledger-report.ts
+init_supabase_client();
+
+// src/lib/ledger-report.ts
+init_blend();
+
+// src/lib/quant/evaluation.ts
+init_parlay();
+function profitUnits(outcome, odds, stake = 1) {
+  switch (outcome) {
+    case "win":
+      return stake * (odds - 1);
+    case "half_win":
+      return stake * (odds - 1) / 2;
+    case "push":
+    case "void":
+      return 0;
+    case "half_loss":
+      return -stake / 2;
+    case "loss":
+      return -stake;
+  }
+}
+function binaryOutcome(outcome) {
+  if (outcome === "win" || outcome === "half_win") return 1;
+  if (outcome === "loss" || outcome === "half_loss") return 0;
+  return null;
+}
+var clampP2 = (p) => Math.min(0.995, Math.max(5e-3, p));
+var mean = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN;
+function sd(xs) {
+  if (xs.length < 2) return NaN;
+  const m = mean(xs);
+  return Math.sqrt(xs.reduce((s, x) => s + (x - m) ** 2, 0) / (xs.length - 1));
+}
+function brier(ps, ys) {
+  return mean(ps.map((p, i) => (clampP2(p) - ys[i]) ** 2));
+}
+function logLoss(ps, ys) {
+  return mean(ps.map((p, i) => ys[i] === 1 ? -Math.log(clampP2(p)) : -Math.log(1 - clampP2(p))));
+}
+function calibrationBins(ps, ys, edges = [0, 0.4, 0.5, 0.6, 0.7, 1.0001]) {
+  const out = [];
+  for (let i = 0; i < edges.length - 1; i++) {
+    const lo = edges[i];
+    const hi = edges[i + 1];
+    const idx = ps.map((p, k) => p >= lo && p < hi ? k : -1).filter((k) => k >= 0);
+    if (idx.length === 0) continue;
+    out.push({
+      label: `${Math.round(lo * 100)}\u2013${Math.round(Math.min(hi, 1) * 100)}%`,
+      n: idx.length,
+      meanPredicted: mean(idx.map((k) => ps[k])),
+      observed: mean(idx.map((k) => ys[k]))
+    });
+  }
+  return out;
+}
+function bootstrapMean(xs, resamples = 2e3, seed = 7) {
+  if (xs.length < 2) return { lo: NaN, hi: NaN, pLeZero: NaN };
+  const rnd = mulberry32(seed);
+  const means = [];
+  let le = 0;
+  for (let r = 0; r < resamples; r++) {
+    let s = 0;
+    for (let i = 0; i < xs.length; i++) s += xs[Math.floor(rnd() * xs.length)];
+    const m = s / xs.length;
+    means.push(m);
+    if (m <= 0) le++;
+  }
+  means.sort((a, b) => a - b);
+  return {
+    lo: means[Math.floor(0.025 * resamples)],
+    hi: means[Math.floor(0.975 * resamples)],
+    pLeZero: le / resamples
+  };
+}
+function clvOf(b) {
+  if (b.closeFairProb != null && b.closeFairProb > 0 && b.closeFairProb < 1) {
+    return { value: b.oddsTaken * b.closeFairProb - 1, fairBased: true };
+  }
+  if (b.oddsClose != null && b.oddsClose > 1) {
+    return { value: b.oddsTaken / b.oddsClose - 1, fairBased: false };
+  }
+  return null;
+}
+function summarizeLedger(bets, opts = {}) {
+  const settled = bets.filter((b) => b.outcome != null);
+  const profits = settled.map((b) => profitUnits(b.outcome, b.oddsTaken, b.stakeUnits));
+  const staked = settled.reduce((s, b) => s + (b.outcome === "void" ? 0 : b.stakeUnits), 0);
+  const profit = profits.reduce((a, b) => a + b, 0);
+  const perUnit = settled.filter((b) => b.outcome !== "void").map((b) => profitUnits(b.outcome, b.oddsTaken, 1));
+  const roi = staked > 0 ? profit / staked : null;
+  const roiCI = perUnit.length >= 5 ? bootstrapMean(perUnit, opts.resamples ?? 2e3, opts.seed ?? 7) : null;
+  const decisive = settled.filter((b) => binaryOutcome(b.outcome) != null);
+  const wins = decisive.filter((b) => binaryOutcome(b.outcome) === 1).length;
+  const claimed = bets.filter((b) => b.pFinal != null && b.pFinal > 0 && b.pFinal < 1).map((b) => b.pFinal * b.oddsTaken - 1);
+  const clvs = bets.map((b) => clvOf(b)).filter((c) => c != null);
+  const clvVals = clvs.map((c) => c.value);
+  let clv = null;
+  if (clvVals.length >= 3) {
+    const m = mean(clvVals);
+    const s = sd(clvVals);
+    clv = {
+      n: clvVals.length,
+      mean: m,
+      ci: bootstrapMean(clvVals, opts.resamples ?? 2e3, (opts.seed ?? 7) + 1),
+      positiveRate: clvVals.filter((v) => v > 0).length / clvVals.length,
+      tStat: s > 0 ? m / (s / Math.sqrt(clvVals.length)) : 0,
+      fairBasedShare: clvs.filter((c) => c.fairBased).length / clvs.length
+    };
+  }
+  const scored = decisive.filter((b) => b.pFinal != null && b.pFinal > 0 && b.pFinal < 1);
+  let scores = null;
+  let calibration = [];
+  if (scored.length >= 5) {
+    const ps = scored.map((b) => b.pFinal);
+    const ys = scored.map((b) => binaryOutcome(b.outcome));
+    const withMarket = scored.filter((b) => b.pMarketFair != null && b.pMarketFair > 0 && b.pMarketFair < 1);
+    const pm = withMarket.map((b) => b.pMarketFair);
+    const ym = withMarket.map((b) => binaryOutcome(b.outcome));
+    const llModel = logLoss(ps, ys);
+    const llModelSame = withMarket.length ? logLoss(withMarket.map((b) => b.pFinal), ym) : null;
+    const llMarket = withMarket.length ? logLoss(pm, ym) : null;
+    scores = {
+      n: scored.length,
+      brierModel: brier(ps, ys),
+      brierMarket: withMarket.length ? brier(pm, ym) : null,
+      logLossModel: llModel,
+      logLossMarket: llMarket,
+      skillVsMarket: llMarket != null && llModelSame != null ? 1 - llModelSame / llMarket : null
+    };
+    calibration = calibrationBins(ps, ys);
+  }
+  const sdProfit = sd(perUnit);
+  const claimedEv = claimed.length ? mean(claimed) : null;
+  const betsNeeded = claimedEv != null && claimedEv > 5e-3 && Number.isFinite(sdProfit) ? Math.ceil(((1.645 + 0.842) * sdProfit / claimedEv) ** 2) : null;
+  const reasons = [];
+  let level = "insufficient";
+  let headline = "Sampel belum cukup untuk menyimpulkan apa pun.";
+  const n = settled.length;
+  const clvSig = clv != null && clv.n >= 30 && clv.tStat >= 2 && clv.mean > 0;
+  const clvBad = clv != null && clv.n >= 30 && clv.tStat <= -2;
+  const skill = scores?.skillVsMarket ?? null;
+  const roiNeg = roiCI != null && roiCI.hi < 0 && n >= 100;
+  if (n >= 100 || (clv?.n ?? 0) >= 50) {
+    level = "early";
+    headline = "Indikasi awal \u2014 belum bisa dibedakan dari keberuntungan.";
+  }
+  if (clvBad || roiNeg || skill != null && skill < -0.01 && (scores?.n ?? 0) >= 100) {
+    level = "refuted";
+    headline = "Bukti menunjukkan model TIDAK mengalahkan pasar saat ini.";
+  } else if (n >= 300 && clvSig && (skill == null || skill > 0)) {
+    level = "supported";
+    headline = "Edge didukung bukti: CLV positif signifikan dan model tidak kalah dari pasar.";
+  }
+  if (n < 100) reasons.push(`Hanya ${n} bet selesai; minimum praktis 100 untuk indikasi, 300+ untuk kesimpulan.`);
+  if (clv == null) reasons.push("Belum ada data closing odds \u2014 CLV (metrik tercepat & paling andal) tidak dapat dihitung.");
+  else if (clv.n < 30) reasons.push(`CLV baru ${clv.n} sampel (butuh \u2265 30 untuk uji t).`);
+  else reasons.push(`CLV rata-rata ${(clv.mean * 100).toFixed(2)}% (t = ${clv.tStat.toFixed(2)}, n = ${clv.n}).`);
+  if (skill != null) reasons.push(`Skill log-loss vs pasar: ${(skill * 100).toFixed(2)}% (${skill > 0 ? "model lebih baik" : "pasar lebih baik"}).`);
+  if (roi != null && claimedEv != null) {
+    reasons.push(`ROI aktual ${(roi * 100).toFixed(1)}% vs EV yang diklaim ${(claimedEv * 100).toFixed(1)}% \u2014 selisih ${((claimedEv - roi) * 100).toFixed(1)} poin menandakan ${claimedEv - roi > 0.05 ? "overestimasi probabilitas" : "kalibrasi wajar"}.`);
+  }
+  if (betsNeeded != null) reasons.push(`Untuk membuktikan EV klaim ${((claimedEv ?? 0) * 100).toFixed(1)}% via ROI saja dibutuhkan \u2248 ${betsNeeded.toLocaleString("id-ID")} bet.`);
+  return {
+    nTotal: bets.length,
+    nSettled: n,
+    nDecisive: decisive.length,
+    profit,
+    staked,
+    roi,
+    roiCI,
+    hitRate: decisive.length ? wins / decisive.length : null,
+    avgOdds: bets.length ? mean(bets.map((b) => b.oddsTaken)) : null,
+    avgClaimedEv: claimedEv,
+    clv,
+    scores,
+    calibration,
+    betsNeeded,
+    verdict: { level, headline, reasons }
+  };
+}
+
+// src/lib/ledger-report.ts
+var VALID_OUTCOMES = /* @__PURE__ */ new Set([
+  "win",
+  "half_win",
+  "push",
+  "half_loss",
+  "loss",
+  "void"
+]);
+function toLedgerBet(row) {
+  const outcome = row.outcome != null && VALID_OUTCOMES.has(row.outcome) ? row.outcome : null;
+  return {
+    pModel: row.p_model_only,
+    pMarketFair: row.p_market_fair,
+    pFinal: row.p_final,
+    oddsTaken: row.odds,
+    oddsClose: row.odds_close ?? null,
+    closeFairProb: row.close_fair_prob ?? null,
+    outcome,
+    stakeUnits: 1
+  };
+}
+function eceFromCalibration(summary) {
+  const bins = summary.calibration;
+  const n = bins.reduce((s, b) => s + b.n, 0);
+  if (n === 0) return null;
+  return bins.reduce((s, b) => s + b.n / n * Math.abs(b.meanPredicted - b.observed), 0);
+}
+function bssVsMarket(summary) {
+  const s = summary.scores;
+  if (!s || s.brierMarket == null || s.brierMarket <= 0) return null;
+  return 1 - s.brierModel / s.brierMarket;
+}
+var PHASE3_TARGET_SETTLED = 300;
+function slice(key, rows) {
+  const bets = rows.map(toLedgerBet);
+  const summary = summarizeLedger(bets);
+  const blendSamples = [];
+  for (const b of bets) {
+    const y = binaryOutcome(b.outcome);
+    if (y != null && b.pModel != null && b.pMarketFair != null) {
+      blendSamples.push({ pModel: b.pModel, pMarket: b.pMarketFair, outcome: y });
+    }
+  }
+  return {
+    key,
+    summary,
+    ece: eceFromCalibration(summary),
+    bssVsMarket: bssVsMarket(summary),
+    blendFit: fitBlendWeight(blendSamples)
+  };
+}
+function group(rows, keyOf) {
+  const map = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const k = keyOf(r);
+    const arr = map.get(k) ?? [];
+    arr.push(r);
+    map.set(k, arr);
+  }
+  return [...map.entries()].sort((a, b) => b[1].length - a[1].length).map(([k, rs]) => slice(k, rs));
+}
+function buildLedgerReport(rows) {
+  const overall = slice("all", rows);
+  const settled = rows.filter((r) => r.outcome != null && VALID_OUTCOMES.has(r.outcome)).length;
+  const withClose = rows.filter((r) => r.odds_close != null || r.close_fair_prob != null).length;
+  const clv = overall.summary.clv;
+  const skill = overall.summary.scores?.skillVsMarket ?? null;
+  const wStar = overall.blendFit?.weight ?? null;
+  const gates = [
+    {
+      id: "settled_300",
+      label: `\u2265 ${PHASE3_TARGET_SETTLED} selection ber-hasil pada ledger`,
+      passed: settled >= PHASE3_TARGET_SETTLED,
+      detail: `${settled}/${PHASE3_TARGET_SETTLED} seleksi ber-hasil.`
+    },
+    {
+      id: "clv_significant",
+      label: "CLV rata-rata > 0 dengan t-stat \u2265 2 (n \u2265 30)",
+      passed: clv != null && clv.n >= 30 && clv.mean > 0 && clv.tStat >= 2,
+      detail: clv == null ? "CLV belum bisa dihitung (belum ada odds_close/close_fair_prob)." : `CLV ${(clv.mean * 100).toFixed(2)}%, t=${clv.tStat.toFixed(2)}, n=${clv.n}.`
+    },
+    {
+      id: "skill_vs_market",
+      label: "Skill log-loss vs pasar > 0 pada himpunan yang sama",
+      passed: skill != null && skill > 0,
+      detail: skill == null ? "Belum cukup seleksi decisive dengan p_market_fair (butuh \u2265 5)." : `Skill ${(skill * 100).toFixed(2)}%.`
+    },
+    {
+      id: "blend_weight",
+      label: "fitBlendWeight: w* > 0 (model menambah informasi di atas pasar)",
+      passed: wStar != null && wStar > 0,
+      detail: overall.blendFit == null ? "fitBlendWeight butuh \u2265 30 sampel decisive dengan p_model & p_market." : `w* = ${overall.blendFit.weight.toFixed(2)} dari n=${overall.blendFit.n} (w*=0 \u2192 pasar murni).`
+    },
+    {
+      id: "calibration",
+      label: "ECE kalibrasi \u2264 0.05",
+      passed: overall.ece != null && overall.ece <= 0.05,
+      detail: overall.ece == null ? "Belum ada bin kalibrasi (butuh \u2265 5 seleksi decisive)." : `ECE ${(overall.ece * 100).toFixed(2)} poin.`
+    }
+  ];
+  return {
+    generatedFrom: { totalRows: rows.length, settledRows: settled, withCloseRows: withClose },
+    progress: {
+      settled,
+      target: PHASE3_TARGET_SETTLED,
+      pct: Math.min(100, Math.round(settled / PHASE3_TARGET_SETTLED * 1e3) / 10)
+    },
+    overall,
+    byModelVersion: group(rows, (r) => `v${r.model_version}`),
+    byFamily: group(rows, (r) => r.family),
+    gates,
+    verdict: overall.summary.verdict
+  };
+}
+
+// src/services/ledger-report.ts
+var PAGE = 1e3;
+var MAX_ROWS = 5e4;
+async function loadLedgerRows() {
+  const rows = [];
+  for (let from = 0; from < MAX_ROWS; from += PAGE) {
+    const { data, error } = await supabase.from("prediction_selections").select(
+      "fixture_id, analysed_at, model_version, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, odds_close, close_fair_prob, outcome, was_bet, bookmaker"
+    ).order("analysed_at", { ascending: true }).range(from, from + PAGE - 1);
+    if (error) throw new Error(`Gagal membaca prediction_selections: ${error.message}`);
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < PAGE) break;
+  }
+  return rows;
+}
+async function getLedgerReport() {
+  return buildLedgerReport(await loadLedgerRows());
+}
+
+// src/routes/learning.ts
 init_prompt_learning();
 var router13 = (0, import_express13.Router)();
 function errorMessage(error) {
@@ -87347,6 +89021,14 @@ router13.get("/learning/summary", async (_req, res) => {
   } catch (error) {
     logger.error({ error }, "[LEARNING] Failed to build transparent learning summary");
     res.status(500).json({ error: "Failed to load AI learning summary" });
+  }
+});
+router13.get("/learning/ledger", async (_req, res) => {
+  try {
+    res.json(await getLedgerReport());
+  } catch (error) {
+    logger.error({ error }, "[LEARNING] Failed to build ledger report");
+    res.status(500).json({ error: "Failed to load ledger report" });
   }
 });
 router13.get("/learning/optimizer", requireAdmin, async (_req, res) => {
@@ -87437,7 +89119,7 @@ init_supabase_client();
 init_settlement_context();
 var FINAL_STATUSES = /* @__PURE__ */ new Set(["FT", "AET", "PEN", "FINISHED", "COMPLETED"]);
 var TEMPORAL_HOLDOUT_FRACTION = 0.2;
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function timestamp2(value) {
@@ -87459,7 +89141,7 @@ function hasMeaningfulValue(value) {
   return false;
 }
 function containsXg(value) {
-  if (!isRecord3(value) && !Array.isArray(value)) return false;
+  if (!isRecord4(value) && !Array.isArray(value)) return false;
   const entries = Array.isArray(value) ? value.map((item, index) => [String(index), item]) : Object.entries(value);
   return entries.some(
     ([key, child]) => key === "stats_xg" && hasMeaningfulValue(child) || containsXg(child)
@@ -87478,7 +89160,7 @@ function makeFeatureAssessment(fixture, prediction) {
     return { row: null, featureReady: false, reason: "missing_versioned_snapshot" };
   }
   const recordedAnalysisAt = timestamp2(
-    isRecord3(context.analysis) ? context.analysis.analyzedAt : null
+    isRecord4(context.analysis) ? context.analysis.analyzedAt : null
   );
   const predictionCreatedAt = timestamp2(prediction.created_at);
   const availableTimes = [recordedAnalysisAt, predictionCreatedAt].filter((value) => value != null);
@@ -87490,26 +89172,26 @@ function makeFeatureAssessment(fixture, prediction) {
   }
   const analysisAtMs = Math.min(...availableTimes);
   const analysisAt = new Date(analysisAtMs).toISOString();
-  const input = isRecord3(context.input) ? context.input : null;
-  const teamStats = input && isRecord3(input.teamStats) ? input.teamStats : null;
-  const homeTeamStats = teamStats && isRecord3(teamStats.home) ? teamStats.home : null;
-  const awayTeamStats = teamStats && isRecord3(teamStats.away) ? teamStats.away : null;
+  const input = isRecord4(context.input) ? context.input : null;
+  const teamStats = input && isRecord4(input.teamStats) ? input.teamStats : null;
+  const homeTeamStats = teamStats && isRecord4(teamStats.home) ? teamStats.home : null;
+  const awayTeamStats = teamStats && isRecord4(teamStats.away) ? teamStats.away : null;
   if (!homeTeamStats || !awayTeamStats) {
     return { row: null, featureReady: false, reason: "missing_team_stats_snapshot" };
   }
-  const quality = isRecord3(context.dataQuality) && isRecord3(context.dataQuality.stats) ? context.dataQuality.stats : null;
-  const homeQuality = quality && isRecord3(quality.home) ? quality.home : null;
-  const awayQuality = quality && isRecord3(quality.away) ? quality.away : null;
+  const quality = isRecord4(context.dataQuality) && isRecord4(context.dataQuality.stats) ? context.dataQuality.stats : null;
+  const homeQuality = quality && isRecord4(quality.home) ? quality.home : null;
+  const awayQuality = quality && isRecord4(quality.away) ? quality.away : null;
   if (homeQuality?.valid !== true || awayQuality?.valid !== true) {
     return { row: null, featureReady: false, reason: "stats_quality_not_verified" };
   }
   if (!containsXg(homeTeamStats) || !containsXg(awayTeamStats)) {
     return { row: null, featureReady: false, reason: "missing_team_xg" };
   }
-  const oddsInput = input && isRecord3(input.odds) ? input.odds : null;
+  const oddsInput = input && isRecord4(input.odds) ? input.odds : null;
   const rawOdds = oddsInput && Array.isArray(oddsInput.snapshot) ? oddsInput.snapshot : [];
   const oddsSnapshots = rawOdds.filter((value) => {
-    if (!isRecord3(value)) return false;
+    if (!isRecord4(value)) return false;
     const capturedAt = timestamp2(value.captured_at ?? value.capturedAt);
     return capturedAt != null && capturedAt <= analysisAtMs && capturedAt <= kickoffAtMs;
   });

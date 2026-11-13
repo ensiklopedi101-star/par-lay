@@ -22,6 +22,7 @@ import {
   type CompositionCandidate,
   type ParlayComposition,
 } from "../lib/quant/composition";
+import { ticketStakePlan } from "../lib/quant/parlay";
 
 export const COMPOSER_GENERATED_BY = "QUANT_COMPOSER";
 
@@ -94,6 +95,9 @@ export async function composeAndSaveParlay(
       combined_odds: best.combinedOdds,
       win_probability: best.pDecision,
       expected_value: best.evDecision,
+      stake_pct: ticketStakePlan(best, best.legs.map(() => 0.03)).stakePct,
+      ev_pessimistic: best.evPessimistic,
+      p_correlated: best.pCorrelated,
       avg_confidence: null,
       status: "active",
       generated_by: COMPOSER_GENERATED_BY,

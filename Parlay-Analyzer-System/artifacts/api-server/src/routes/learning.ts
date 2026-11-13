@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { getLearningSummary } from "../services/learning-summary";
+import { getLedgerReport } from "../services/ledger-report";
 import { requireAdmin } from "../middlewares/admin";
 import {
   backfillSettledPredictionEvaluations,
@@ -25,6 +26,21 @@ router.get("/learning/summary", async (_req, res) => {
   } catch (error) {
     logger.error({ error }, "[LEARNING] Failed to build transparent learning summary");
     res.status(500).json({ error: "Failed to load AI learning summary" });
+  }
+});
+
+/**
+ * Laporan bukti Fase 3 (P3): Brier/BSS/ECE, CLV, fitBlendWeight, dan status
+ * gerbang ≥300 seleksi ber-hasil — dihitung dari `prediction_selections`,
+ * dipisah per model_version (v1 LLM vs v2 quant) dan per family market.
+ * Read-only dan tanpa efek samping, jadi aman dibuka publik seperti summary.
+ */
+router.get("/learning/ledger", async (_req, res) => {
+  try {
+    res.json(await getLedgerReport());
+  } catch (error) {
+    logger.error({ error }, "[LEARNING] Failed to build ledger report");
+    res.status(500).json({ error: "Failed to load ledger report" });
   }
 });
 

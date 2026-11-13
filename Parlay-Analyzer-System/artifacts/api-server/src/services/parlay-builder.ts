@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { analyzeParlay, ticketStakePlan, type ParlayLeg } from "../lib/quant/parlay";
 
 export interface ParlayCandidate {
   predictionId?: string | number;
@@ -40,31 +41,79 @@ function probabilityFor(candidate: ParlayCandidate): number {
   return Math.max(0.01, Math.min(0.99, candidate.probability));
 }
 
+/** Keluarga market kasar dari label bebas, untuk prior korelasi P5. */
+function familyOf(candidate: ParlayCandidate): ParlayLeg["marketFamily"] {
+  const text = `${candidate.market} ${candidate.selection}`.toLowerCase();
+  if (text.includes("btts") || text.includes("both teams")) return "BTTS";
+  if (text.includes("over") || text.includes("under") || text.includes("total")) return "Totals";
+  if (text.includes("handicap") || text.includes("ah")) return "AH";
+  if (text.includes("ht") || text.includes("half")) return "HT";
+  return "ML";
+}
+
+/**
+ * Metrik tiket (P5) — SEKARANG memakai mesin yang sama dengan composer quant.
+ *
+ * Sebelumnya fungsi ini menghitung `winProbability = Π p_i` (independen
+ * penuh): korelasi antar leg diabaikan, tidak ada EV pesimis, dan tidak ada
+ * stake tingkat tiket — padahal `analyzeParlay` yang benar sudah ada dan
+ * hanya dipakai jalur composer. Dua jalur menghitung tiket yang sama dengan
+ * dua matematika berbeda adalah bug konsistensi, bukan pilihan desain.
+ *
+ * Field lama (`combinedOdds`, `winProbability`, `expectedValue`,
+ * `avgConfidence`, `riskScore`, `riskLevel`) dipertahankan untuk pembaca
+ * lama; `winProbability` sekarang adalah `pDecision`
+ * (min dari independen/berkorelasi), dan field P5 ditambahkan di sampingnya.
+ */
 export function calculateParlayMetrics(candidates: ParlayCandidate[]) {
   const combinedOdds = candidates.reduce(
     (product, candidate) => product * Math.max(1.01, candidate.odds),
     1,
   );
-  const winProbability = candidates.reduce(
-    (product, candidate) => product * probabilityFor(candidate),
-    1,
-  );
-  const expectedValue = winProbability * combinedOdds - 1;
   const confidenceValues = candidates
     .map((candidate) => candidate.confidence)
     .filter((value): value is number => value != null && Number.isFinite(value));
   const avgConfidence = confidenceValues.length > 0
     ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
     : 0;
-  const confidenceRiskPenalty = confidenceValues.length > 0
-    ? Math.max(0, 8 - avgConfidence) * 4
-    : 0;
+
+  if (candidates.length === 0) {
+    return {
+      combinedOdds: 1,
+      winProbability: 0,
+      expectedValue: -1,
+      avgConfidence: 0,
+      riskScore: 100,
+      riskLevel: "very_high" as ParlayRiskLevel,
+      pIndependent: 0,
+      pCorrelated: 0,
+      evPessimistic: -1,
+      breakEvenBias: -1,
+      marginPaid: null as number | null,
+      ticketStake: null as ReturnType<typeof ticketStakePlan> | null,
+    };
+  }
+
+  const legs: ParlayLeg[] = candidates.map((candidate) => ({
+    p: probabilityFor(candidate),
+    odds: Math.max(1.01, candidate.odds),
+    league: candidate.league,
+    marketFamily: familyOf(candidate),
+    date: candidate.date,
+  }));
+  /* Seed tetap: metrik yang sama untuk leg yang sama, bisa direproduksi. */
+  const analysis = analyzeParlay(legs, { sims: 20_000, seed: 20260101 });
+  const stake = ticketStakePlan(analysis, legs.map(() => 0.03));
+
+  const winProbability = analysis.pDecision;
+  const expectedValue = analysis.evDecision;
+  const pessimisticPenalty = analysis.evPessimistic <= 0 ? 15 : 0;
   const riskScore = Math.min(
     100,
     Math.round(
       (1 - winProbability) * 65 +
       Math.max(0, candidates.length - 2) * 6 +
-      confidenceRiskPenalty +
+      pessimisticPenalty +
       Math.max(0, combinedOdds - 8) * 1.5,
     ),
   );
@@ -75,7 +124,20 @@ export function calculateParlayMetrics(candidates: ParlayCandidate[]) {
       : riskScore >= 30
         ? "medium"
         : "low";
-  return { combinedOdds, winProbability, expectedValue, avgConfidence, riskScore, riskLevel };
+  return {
+    combinedOdds,
+    winProbability,
+    expectedValue,
+    avgConfidence,
+    riskScore,
+    riskLevel,
+    pIndependent: analysis.pIndependent,
+    pCorrelated: analysis.pCorrelated,
+    evPessimistic: analysis.evPessimistic,
+    breakEvenBias: analysis.breakEvenBias,
+    marginPaid: analysis.marginPaid,
+    ticketStake: stake,
+  };
 }
 
 export async function createMergedParlay(
@@ -152,6 +214,9 @@ export async function createMergedParlay(
       combined_odds: metrics.combinedOdds,
       win_probability: metrics.winProbability,
       expected_value: metrics.expectedValue,
+      stake_pct: metrics.ticketStake?.stakePct ?? null,
+      ev_pessimistic: metrics.evPessimistic,
+      p_correlated: metrics.pCorrelated,
       risk_score: metrics.riskScore,
       avg_confidence: metrics.avgConfidence,
       status: "active",
@@ -199,21 +264,9 @@ export async function createParlayFromCandidates(candidates: ParlayCandidate[]):
   ).slice(0, 5);
   if (uniqueCandidates.length < 2) return null;
 
-  const combinedOdds = uniqueCandidates.reduce(
-    (product, candidate) => product * Math.max(1.01, candidate.odds),
-    1,
-  );
-  const winProbability = uniqueCandidates.reduce(
-    (product, candidate) => product * probabilityFor(candidate),
-    1,
-  );
-  const expectedValue = winProbability * combinedOdds - 1;
-  const confidenceValues = uniqueCandidates
-    .map((candidate) => candidate.confidence)
-    .filter((value): value is number => value != null && Number.isFinite(value));
-  const avgConfidence = confidenceValues.length > 0
-    ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
-    : 0;
+  /* Metrik tiket P5 yang sama seperti jalur lain — bukan perkalian independen. */
+  const metrics = calculateParlayMetrics(uniqueCandidates);
+  const { combinedOdds, winProbability, expectedValue, avgConfidence } = metrics;
   const leagues = new Set(uniqueCandidates.map((candidate) => candidate.league).filter(Boolean));
 
   const { data: parlay, error: parlayError } = await supabase
@@ -224,6 +277,9 @@ export async function createParlayFromCandidates(candidates: ParlayCandidate[]):
       combined_odds: combinedOdds,
       win_probability: winProbability,
       expected_value: expectedValue,
+      stake_pct: metrics.ticketStake?.stakePct ?? null,
+      ev_pessimistic: metrics.evPessimistic,
+      p_correlated: metrics.pCorrelated,
       avg_confidence: avgConfidence,
       status: "active",
       generated_by: "AI_BATCH",

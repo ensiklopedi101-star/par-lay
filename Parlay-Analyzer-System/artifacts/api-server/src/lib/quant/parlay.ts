@@ -139,6 +139,65 @@ export interface ParlayOptions {
   offeredOdds?: number;
 }
 
+/* ─────────────────────── Stake tingkat tiket (P5) ─────────────────────── */
+
+import { stakePlan, type StakeResult } from "./kelly";
+
+export interface TicketStakePlan extends StakeResult {
+  /** true bila tiket tidak boleh diberi stake sama sekali */
+  noStake: boolean;
+  /** alasan dalam Bahasa Indonesia, siap ditampilkan/disimpan */
+  reason: string;
+}
+
+/**
+ * Stake untuk SATU tiket parlay, bukan per leg.
+ *
+ * Kelly per leg tidak sah untuk tiket: probabilitas gabungan sudah merupakan
+ * hasil perkalian (dan koreksi korelasi), jadi stake harus dihitung dari
+ * `pDecision` dan odds gabungan. Ketidakpastian tiket digabungkan dari
+ * sigma tiap leg (akar jumlah kuadrat, dibatasi 0.15) karena error per leg
+ * menumpuk secara perkalian.
+ *
+ * Pagar:
+ *  - EV pesimis ≤ 0 → stake 0. Tiket yang hanya untung di skenario optimistis
+ *    bukan tiket yang boleh dibeli.
+ *  - ¼ Kelly, cap keras 2% bankroll (Fase 0: bucket 5% sudah dimatikan).
+ */
+export function ticketStakePlan(
+  result: Pick<ParlayResult, "pDecision" | "combinedOdds" | "evPessimistic">,
+  legSigmas: number[] = [],
+  opts: { fraction?: number; maxStakePct?: number } = {},
+): TicketStakePlan {
+  const sigma = Math.min(
+    0.15,
+    Math.sqrt(legSigmas.reduce((s, x) => s + (Number.isFinite(x) ? x : 0.03) ** 2, 0)) || 0.03,
+  );
+  const plan = stakePlan({
+    p: result.pDecision,
+    odds: result.combinedOdds,
+    sigma,
+    fraction: opts.fraction ?? 0.25,
+    maxStakePct: opts.maxStakePct ?? 2,
+  });
+  if (result.evPessimistic <= 0) {
+    return {
+      ...plan,
+      stakePct: 0,
+      noStake: true,
+      reason: "EV pesimis ≤ 0: tiket hanya untung bila tidak ada leg yang overestimasi. Stake 0.",
+    };
+  }
+  if (plan.stakePct <= 0) {
+    return { ...plan, noStake: true, reason: "Kelly setelah pengurangan σ memberi 0: tidak ada edge yang bisa dibeli." };
+  }
+  return {
+    ...plan,
+    noStake: false,
+    reason: `¼ Kelly dari p tiket ${(result.pDecision * 100).toFixed(1)}% @ ${result.combinedOdds.toFixed(2)}, cap 2% → stake ${plan.stakePct.toFixed(2)}% bankroll.`,
+  };
+}
+
 export function analyzeParlay(legs: ParlayLeg[], opts: ParlayOptions = {}): ParlayResult {
   if (legs.length < 1) throw new Error("Parlay butuh minimal 1 leg.");
   const sims = opts.sims ?? 40000;
