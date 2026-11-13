@@ -86479,9 +86479,14 @@ function normalizeLeagueSlug(raw) {
   return parts.join("-").toLowerCase().replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
 }
 var SLUG_ALIASES = {
-  "spain-la-liga": "spain-la-liga",
-  "spain-laliga": "spain-la-liga",
-  "la-liga": "spain-la-liga",
+  /* Slug resmi mengikuti tabel `leagues` dan konfigurasi odds/fixture:
+     "spain-laliga". Ejaan FootyStats "spain/la-liga" dinormalisasi menjadi
+     "spain-la-liga" oleh normalizeLeagueSlug, lalu alias ini meluruskannya
+     ke slug resmi. Sebelumnya alias justru menunjuk "spain-la-liga" yang
+     tidak ada di tabel leagues, sehingga ingest La Liga selalu 422. */
+  "spain-la-liga": "spain-laliga",
+  "spain-laliga": "spain-laliga",
+  "la-liga": "spain-laliga",
   "england-premier-league": "england-premier-league",
   "england-epl": "england-premier-league",
   "premier-league": "england-premier-league",
@@ -86538,6 +86543,15 @@ async function resolveLeagueSlug(raw) {
   }
   if (known.has(aliased)) {
     return { ok: true, slug: aliased, raw: String(raw ?? "") };
+  }
+  const spellingVariants = [
+    aliased.replace(/-la-liga$/, "-laliga"),
+    aliased.replace(/-laliga$/, "-la-liga")
+  ].filter((variant) => variant !== aliased);
+  for (const variant of spellingVariants) {
+    if (known.has(variant)) {
+      return { ok: true, slug: variant, raw: String(raw ?? "") };
+    }
   }
   const suggestions = [...known].map((slug) => ({ slug, distance: levenshtein(aliased, slug) })).sort((a, b) => a.distance - b.distance).slice(0, 3).filter((c) => c.distance <= Math.max(3, Math.floor(aliased.length / 3))).map((c) => c.slug);
   return {
