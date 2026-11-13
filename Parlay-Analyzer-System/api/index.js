@@ -85997,6 +85997,19 @@ function calculateKelly(odds, probWin) {
 // src/routes/analyze.ts
 init_parlay_builder();
 init_odds_history();
+
+// src/lib/scan-job-status.ts
+function recoverStaleScanJob(job, nowMs, staleMs) {
+  if (job.status !== "running") return { job, recovered: false };
+  const updatedMs = new Date(job.updatedAt).getTime();
+  if (!Number.isFinite(updatedMs) || nowMs - updatedMs <= staleMs) {
+    return { job, recovered: false };
+  }
+  const status = job.pending.length > 0 ? "partial" : "failed";
+  return { job: { ...job, status }, recovered: true };
+}
+
+// src/routes/analyze.ts
 init_market_odds_readiness();
 var import_node_crypto2 = require("node:crypto");
 var router7 = (0, import_express7.Router)();
@@ -86179,9 +86192,11 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
     });
   }
   persistJob(job);
+  job.pending = toScan.map((fixture) => Number(fixture.fixture_id));
   let backoffMs = 0;
   for (let index = 0; index < toScan.length; index++) {
     const fx = toScan[index];
+    job.pending = toScan.slice(index).map((fixture) => Number(fixture.fixture_id));
     if (Date.now() >= deadlineAt) {
       job.pending = toScan.slice(index).map((fixture) => Number(fixture.fixture_id));
       job.currentMatch = null;
@@ -86310,6 +86325,7 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
     }
   }
   job.currentMatch = null;
+  job.pending = [];
   const fromTickets = job.tickets.filter(
     (ticket) => ticket.is_parlay_leg && typeof ticket.probability === "number" && ticket.probability > 0 && ticket.probability < 1 && Number(ticket.odds) > 1 && Boolean(ticket.market)
   ).map((ticket) => ({
@@ -86460,10 +86476,21 @@ router7.post("/analyze/batch", requireAdmin, async (_req, res) => {
 });
 router7.get("/analyze/batch/:jobId", requireAdmin, async (req, res) => {
   try {
-    const job = await loadJob(String(req.params.jobId));
-    if (!job) {
+    const loaded = await loadJob(String(req.params.jobId));
+    if (!loaded) {
       res.status(404).json({ error: "Batch job not found or expired" });
       return;
+    }
+    const { job, recovered } = recoverStaleScanJob(loaded, Date.now(), SCAN_JOB_STALE_MS);
+    if (recovered) {
+      if (job.status === "failed") {
+        job.error = "Job scan berhenti tanpa kabar (instance terputus). Jalankan scan ulang.";
+      }
+      job.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+      job.currentMatch = null;
+      batchJobs.set(job.id, job);
+      persistJob(job);
+      logger.warn({ jobId: job.id, status: job.status, pending: job.pending.length }, "BATCH SCANNER: job yatim dipulihkan");
     }
     res.json(publicBatchJob(job));
   } catch (err) {

@@ -13,6 +13,7 @@ import { calculateKelly } from "../lib/kelly-criterion";
 import { requireAdmin } from "../middlewares/admin";
 import { createParlayFromCandidates, type ParlayCandidate } from "../services/parlay-builder";
 import { collectPagedRows, latestOddsByMarket } from "../services/odds-history";
+import { recoverStaleScanJob } from "../lib/scan-job-status";
 import { MAX_VERIFIED_ODDS_AGE_MS } from "../lib/market-odds-readiness";
 import { randomUUID } from "node:crypto";
 
@@ -361,9 +362,18 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
   // clean run there is no artificial delay at all; after a rate-limit hit the
   // wait backs off exponentially (capped at 20s) and resets to 0 as soon as a
   // call succeeds cleanly again.
+  /*
+   * Antrean sisa ditulis SEBELUM fixture pertama diproses dan diperbarui
+   * di setiap iterasi. Bila instance dibunuh di tengah panggilan AI,
+   * snapshot terakhir di `scan_jobs` tetap memuat fixture yang belum
+   * selesai — itulah yang membuat job yatim bisa dilanjutkan, bukan
+   * hilang (lihat lib/scan-job-status.ts).
+   */
+  job.pending = toScan.map((fixture) => Number(fixture.fixture_id));
   let backoffMs = 0;
   for (let index = 0; index < toScan.length; index++) {
     const fx = toScan[index]!;
+    job.pending = toScan.slice(index).map((fixture) => Number(fixture.fixture_id));
     if (Date.now() >= deadlineAt) {
       /*
        * Berhenti dengan rapi sebelum instance dibunuh. Sisa fixture disimpan
@@ -508,6 +518,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
   }
 
   job.currentMatch = null;
+  job.pending = [];
 
   /*
    * Leg dari run sebelumnya ikut dihitung. Tanpa ini, setiap kali scan
@@ -716,10 +727,27 @@ router.post("/analyze/batch", requireAdmin, async (_req, res) => {
 
 router.get("/analyze/batch/:jobId", requireAdmin, async (req, res) => {
   try {
-    const job = await loadJob(String(req.params.jobId));
-    if (!job) {
+    const loaded = await loadJob(String(req.params.jobId));
+    if (!loaded) {
       res.status(404).json({ error: "Batch job not found or expired" });
       return;
+    }
+    /*
+     * Job "running" yang membeku = instance-nya mati di tengah jalan.
+     * Pulihkan jadi `partial` (ada sisa antrean → frontend melanjutkan)
+     * atau `failed` (antrean kosong), supaya UI tidak menunggu selamanya
+     * dan pengguna tidak mengira scan masih berjalan.
+     */
+    const { job, recovered } = recoverStaleScanJob(loaded, Date.now(), SCAN_JOB_STALE_MS);
+    if (recovered) {
+      if (job.status === "failed") {
+        job.error = "Job scan berhenti tanpa kabar (instance terputus). Jalankan scan ulang.";
+      }
+      job.finishedAt = new Date().toISOString();
+      job.currentMatch = null;
+      batchJobs.set(job.id, job);
+      persistJob(job);
+      logger.warn({ jobId: job.id, status: job.status, pending: job.pending.length }, "BATCH SCANNER: job yatim dipulihkan");
     }
     res.json(publicBatchJob(job));
   } catch (err) {
