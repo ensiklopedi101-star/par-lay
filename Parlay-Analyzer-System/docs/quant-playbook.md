@@ -224,6 +224,33 @@ Karena `market_key` v1 sama dengan v2, job Fase 2 yang sudah ada
 (`closing`, `outcomes`) otomatis mengisi `odds_close` dan `outcome` baris v1
 tanpa perubahan. Tes: 317 lulus (11 baru untuk P3).
 
+### P5 & P6 — selesai dibangun (13 Nov 2026)
+
+**P5 (matematika parlay):** jalur lama `calculateParlayMetrics` masih memakai
+perkalian independen murni, sementara composer quant sudah memakai Monte
+Carlo korelasi — dua matematika untuk tiket yang sama. Sekarang keduanya
+memakai `analyzeParlay`, ditambah stake tingkat tiket:
+
+| Komponen | Isi |
+|---|---|
+| `ticketStakePlan` (`lib/quant/parlay.ts`) | ¼ Kelly dari `pDecision` & odds gabungan, σ tiket = akar jumlah kuadrat σ leg (cap 0.15), cap keras 2%; EV pesimis ≤ 0 → stake 0 |
+| `calculateParlayMetrics` (`parlay-builder.ts`) | `winProbability = pDecision`, + `pCorrelated`, `evPessimistic`, `breakEvenBias`, `ticketStake` (field lama dipertahankan) |
+| Penyimpanan | migrasi `20261113_parlay_ticket_stake.sql` (sudah diterapkan): `parlays.stake_pct / ev_pessimistic / p_correlated`, diisi builder & composer |
+
+**P6 (persona):** `PERSONA_V5` sudah ada sejak lama tetapi tidak pernah
+dipakai, dan persona produksi di DB masih v4 yang meminta `ev_percent` dan
+stake sampai 5% (melanggar cap Fase 0). Karena persona bisa diganti dari
+panel tanpa deploy, solusinya bukan mengedit teks DB:
+
+| Komponen | Isi |
+|---|---|
+| `V5_CONTRACT_SUFFIX` (`llm-contract.ts`) | Ditempel **terakhir** pada system instruction apa pun: model dilarang melaporkan EV/stake, probability tetap wajib, dan hanya boleh mengusulkan `lambda_adjustment` berbukti |
+| `extractLambdaAdjustment` | Mengambil adjustment dari JSON respons, men-sanitasi (±12%, bukti ≥ 10 karakter wajib; tanpa bukti dibuang → null) |
+| Wiring `ai-analysis.ts` | Adjustment diteruskan ke `shadowLogQuantAnalysis` (sebelumnya selalu `null`) dan disimpan di snapshot untuk audit; persona bawaan tidak lagi meminta EV/stake |
+
+Tes total: **326 lulus** (9 baru: parlay stake/korelasi, kontrak V5 &
+ekstraktor, metrik tiket).
+
 **Yang belum terjadi (bukan kode):** ledger produksi masih 0 baris dan
 `ai_predictions` terakhir 2026-10-25. Pemicu terjadwal adalah cron-job.org
 (bukan GitHub — jadwal workflow sudah dimatikan, lihat `CRON_JOBS.md`).

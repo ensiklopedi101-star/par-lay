@@ -30,6 +30,7 @@ import {
 } from "../lib/betting-math";
 import type { LeagueAverages } from "../lib/quant/strength";
 import { getGeminiModel } from "./model-discovery";
+import { extractLambdaAdjustment, V5_CONTRACT_SUFFIX } from "../lib/quant/llm-contract";
 import { shadowLogQuantAnalysis } from "./quant-shadow";
 import { shadowLogLlmAnalysis } from "./llm-shadow";
 import { classifyOddsMarket } from "./odds-fetcher";
@@ -75,19 +76,19 @@ FORMAT OUTPUT WAJIB (JSON + teks):
 ## 🎯 ANALISIS SINGKAT (3-4 kalimat)
 Ringkasan: siapa yang punya edge, pasar mana yang bergerak, dan konfirmasi statistik.
 
-## 💹 ANALISIS EV (per pasaran)
-Pasaran | Prob. Nyata | Implisit Bandar | EV | Tren Konfirmasi | Verdict
---- | --- | --- | --- | --- | ---
-1X2 Home | XX% | XX% | +X% | Searah | VALUE / NO VALUE
+## 💹 PERBANDINGAN PASARAN (per pasaran)
+Pasaran | Prob. Penilaian Anda | Implisit Bandar | Tren Konfirmasi | Verdict
+--- | --- | --- | --- | ---
+1X2 Home | XX% | XX% | Searah | VALUE / NO VALUE
 ... (semua pasaran)
+CATATAN P6: JANGAN menghitung atau melaporkan EV dalam bentuk apa pun — EV selalu dihitung kode dari probabilitas Anda dan odds provider. Tabel ini membandingkan probabilitas, bukan EV.
 
 ## 🎯 REKOMENDASI AKHIR
 - Pasaran terpilih: [nama pasaran]
-- Keputusan: **AMBIL** atau **NO BET**
-- Odds minimum value: X.XX
-- Confidence Score: X/10
-- Stake saran: Unit % (gunakan stake 1-3% per bet, maks 5% jika confidence > 9.5)
+- Keputusan kandidat: **AMBIL** atau **NO BET** (keputusan final di mesin)
+- Confidence Score: X/10 (keterangan saja, bukan gerbang)
 - Justifikasi: 2-3 kalimat
+- DILARANG memberi saran stake/ukuran taruhan. Stake dihitung kode (fractional Kelly, cap 2%).
 
 ## ⚡ KODE PARLAY (JSON)
 OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
@@ -105,10 +106,10 @@ OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
       "probability": 0.58,
       "confidence": 8.5,
       "odds": 1.85,
-      "ev_percent": 8.2,
       "rationale": "Regresi 11 laci mengonfirmasi xG gabungan 3.12. Terjadi sharp money drop 0.12 pada Over, mengindikasikan arus dana besar terkonfirmasi."
    }
-  ]
+  ],
+  "lambda_adjustment": {"lambda_home_mult": 1.00, "lambda_away_mult": 1.00, "evidence": []}
 }
 
 VALIDATION GATE:
@@ -119,7 +120,7 @@ VALIDATION GATE:
   outcome harus home/draw/away, over/under, atau yes/no sesuai market; line harus angka persis dari provider
   untuk Totals/AH dan null untuk market lain. Jangan mengarang nama market atau line.
 - Probability wajib eksplisit, 0 < probability < 1, dan bukan confidence atau probabilitas implisit.
-- Hitung ulang EV = (probability × odds provider) - 1. Gunakan "NO_BET" bila EV tidak positif,
+- JANGAN menghitung EV (kode yang menghitungnya dari probability × odds provider). Gunakan "NO_BET" bila
   probability tidak valid, market/line tidak cocok, atau data terlalu tipis untuk dinilai.
 
 Field "probability" adalah probabilitas nyata untuk selection dalam angka 0-1, bukan confidence dan bukan probabilitas implisit bandar. Field ini wajib untuk selection selain NO_BET.
@@ -1201,7 +1202,7 @@ ${relationalBlock}
 2. Pilih tepat satu market dari snapshot provider. Totals dan Asian Handicap wajib cocok dengan
    line yang persis; jika line tidak tersedia atau berbeda, gunakan NO_BET.
 3. Tulis probability nyata eksplisit dalam rentang 0 sampai 1. Confidence 0-10 tidak boleh dipakai sebagai probability.
-4. Hitung ulang EV dengan odds snapshot selection: (probability × odds) - 1. Jika hasilnya <= 0, gunakan NO_BET.
+4. JANGAN menghitung EV — kode menghitungnya dari probability dan odds snapshot. Bila Anda tidak bisa memberi probability yang bertanggung jawab, gunakan NO_BET.
 5. Keluarkan market terstruktur: market_type salah satu ML/HT/Totals/AH/BTTS; outcome sesuai market;
    line harus line angka provider yang persis untuk Totals/AH dan null untuk market lain.
 6. JSON selections hanya boleh merekomendasikan pertandingan ${homeTeam} vs ${awayTeam}; jangan menggabungkan fixture lain.`;
@@ -1340,6 +1341,7 @@ interface EvaluationSnapshot {
     headToHead: unknown;
     oddsMovement: unknown;
     ragLessons: unknown;
+    llmLambdaAdjustment?: unknown;
   };
   dataQuality: AnalysisResult["data_quality"] | null;
   settlement: null;
@@ -1747,6 +1749,9 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     persona,
     agentInstructions ? `INSTRUKSI TAMBAHAN:\n${agentInstructions}` : null,
     aiConfig.learningPromptAddendum || null,
+    /* P6: kontrak V5 selalu terakhir, apa pun persona dari DB — lihat
+       V5_CONTRACT_SUFFIX di lib/quant/llm-contract.ts. */
+    V5_CONTRACT_SUFFIX,
   ].filter((section): section is string => Boolean(section)).join("\n\n");
   console.log(`[AI-ANALYSIS] Persona sumber: ${persona === DEFAULT_SYSTEM_INSTRUCTION ? "DEFAULT (fallback)" : "SUPABASE (kustom)"}`);
 
@@ -1874,6 +1879,9 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     /* Dihitung dari usulan AI (bukan hanya yang lolos gerbang) supaya seleksi
        yang ditolak pun tercatat — tanpa itu kita tidak bisa mengukur apa yang
        sengaja kita lewatkan. */
+    /* P6: λ-adjustment berbukti dari respons model (tersanitasi). Disimpan
+       di snapshot agar bisa diaudit, dan diteruskan ke quant shadow. */
+    const llmLambdaAdjustment = extractLambdaAdjustment(predictionText);
     const modelSelection = modelProbabilityForSelection(
       matchContext.matrix,
       matchContext.markets,
@@ -1982,6 +1990,8 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
        headToHead: h2h,
        oddsMovement: movementRows,
        ragLessons: lessons,
+       /* P6: adjustment yang benar-benar dipakai engine quant (null = dibuang/tidak ada). */
+       llmLambdaAdjustment,
      },
      dataQuality: {
        stats: { home: homeStatsQuality, away: awayStatsQuality },
@@ -2076,13 +2086,12 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
       leagueSlug,
       structuredOdds,
       /*
-       * The current prompt asks the model for prose plus a probability, not the
-       * PERSONA_V5 λ-adjustment contract, so there is no evidence-backed
-       * adjustment to pass yet. null means "no adjustment" — the engine runs on
-       * market + team statistics alone, which is exactly the baseline we want
-       * to measure in the shadow log.
+       * P6: kontrak V5 kini meminta "lambda_adjustment" berbukti di JSON
+       * yang sama. extractLambdaAdjustment men-sanitasi (±12%, wajib bukti);
+       * null berarti model tidak memberi penyesuaian yang layak, dan engine
+       * berjalan dari pasar + statistik saja — baseline yang memang diukur.
        */
-      llmAdjustment: null,
+      llmAdjustment: llmLambdaAdjustment,
     });
     if (shadow.logged > 0) {
       logger.info(

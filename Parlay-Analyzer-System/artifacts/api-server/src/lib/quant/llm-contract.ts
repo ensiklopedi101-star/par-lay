@@ -31,6 +31,84 @@ OUTPUT: satu objek JSON valid saja:
   "data_gaps": ["line-up resmi belum rilis"]
 }`;
 
+/**
+ * Suffix kontrak V5 yang ditempel SETELAH persona mana pun (bawaan maupun
+ * dari `scheduler_config.ai_persona` di database).
+ *
+ * Kenapa suffix, bukan mengganti persona: persona aktif disimpan di DB dan
+ * bisa diganti dari panel tanpa deploy. Mengganti isinya dari kode tidak
+ * akan berpengaruh. Menempel kontrak ini di urutan terakhir perakitan system
+ * instruction membuat aturan V5 selalu menjadi instruksi penutup — dan tes
+ * memastikan ia selalu terpasang.
+ *
+ * Isi kontraknya menyelesaikan sisa P6: model berhenti melaporkan EV dan
+ * stake-nya sendiri (itu selalu dihitung kode), dan satu-satunya angka yang
+ * boleh ia usulkan adalah λ-adjustment berbukti ala PERSONA_V5.
+ */
+export const V5_CONTRACT_SUFFIX = `
+═══ KONTRAK V5 (WAJIB, mengalahkan instruksi sebelumnya bila bertentangan) ═══
+1. DILARANG melaporkan EV, ev_percent, stake, atau ukuran taruhan dalam bentuk apa pun. EV dan stake SELALU dihitung kode dari probabilitas dan odds provider. Bila Anda menulis angka EV/stake, angka itu diabaikan.
+2. "probability" pada selection tetap wajib (0 < p < 1): itu penilaian probabilitas Anda untuk market terpilih, BUKAN confidence dan BUKAN probabilitas implisit bandar. Confidence hanya keterangan.
+3. Sertakan objek "lambda_adjustment" pada JSON yang sama, mengikuti PERSONA_V5: Anda hanya boleh mengusulkan pengali lambda_home_mult / lambda_away_mult dalam 0.88–1.12 berdasarkan informasi material (cedera, line-up, rotasi, skorsing, motivasi ekstrem) dan WAJIB menyertakan "evidence" berisi {type, detail ≥ 10 karakter, source_url}. Tanpa bukti yang dapat diverifikasi, gunakan 1.00 untuk keduanya dan evidence kosong — pengali tanpa bukti akan dibuang oleh kode.
+4. Keputusan akhir (AMBIL/NO BET, stake, komposisi parlay) bukan wewenang Anda. Susun kandidat terbaik menurut penilaian Anda; mesin yang memutuskan.`;
+
+import { sanitizeLlmAdjustment, type LlmAdjustment } from "./strength";
+
+/** Semua objek JSON `{...}` seimbang dalam teks, di-parse bila bisa. */
+function jsonObjectsIn(text: string): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j]!;
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(text.slice(i, j + 1)) as unknown;
+            if (parsed && typeof parsed === "object") out.push(parsed as Record<string, unknown>);
+          } catch { /* bukan JSON valid — lewati */ }
+          i = j;
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Ambil λ-adjustment berbukti dari respons model dan sanitasi.
+ *
+ * Mengembalikan null bila tidak ada adjustment yang LAYAK (tidak ditemukan,
+ * atau dibuang sanitasi karena tanpa bukti / di luar ±12%) — pemanggil harus
+ * memperlakukan null sebagai "tanpa penyesuaian", bukan sebagai error.
+ */
+export function extractLambdaAdjustment(text: string): LlmAdjustment | null {
+  for (const obj of jsonObjectsIn(text)) {
+    const raw = (obj["lambda_adjustment"] ?? obj["lambdaAdjustment"] ?? null) as unknown;
+    const candidate = raw && typeof raw === "object" ? raw : obj;
+    const hasLambdaKeys = "lambda_home_mult" in (candidate as Record<string, unknown>)
+      || "lambdaHomeMult" in (candidate as Record<string, unknown>);
+    if (!hasLambdaKeys) continue;
+    const clean = sanitizeLlmAdjustment(candidate);
+    const isNeutral = clean.lambdaHomeMult === 1 && clean.lambdaAwayMult === 1;
+    return isNeutral && clean.evidence.length === 0 ? null : clean;
+  }
+  return null;
+}
+
 export type ResultClass =
   | "variance"            // proses baik, hasil buruk → JANGAN buat pelajaran naratif
   | "process_error"       // harga bergerak melawan kita / data buruk → buat pelajaran

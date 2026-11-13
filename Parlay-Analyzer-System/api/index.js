@@ -55712,6 +55712,116 @@ var init_model_discovery = __esm({
   }
 });
 
+// src/lib/quant/strength.ts
+function shrunkRatio(observedPerMatch, xgPerMatch, leagueTeamAvg, n, prior, K, xgWeight) {
+  const blended = xgPerMatch != null && Number.isFinite(xgPerMatch) ? xgWeight * xgPerMatch + (1 - xgWeight) * observedPerMatch : observedPerMatch;
+  const ratio = blended / Math.max(0.2, leagueTeamAvg);
+  return (n * ratio + K * prior) / (n + K);
+}
+function modelLambdas(home, away, league, opts = {}) {
+  const K = opts.priorStrength ?? 8;
+  const xgW = opts.xgWeight ?? 0.6;
+  const teamAvg = (league.homeGoals + league.awayGoals) / 2;
+  const atkH = shrunkRatio(home.goalsFor, home.xgFor, teamAvg, home.matches, home.priorAttack ?? 1, K, xgW);
+  const defH = shrunkRatio(home.goalsAgainst, home.xgAgainst, teamAvg, home.matches, home.priorDefense ?? 1, K, xgW);
+  const atkA = shrunkRatio(away.goalsFor, away.xgFor, teamAvg, away.matches, away.priorAttack ?? 1, K, xgW);
+  const defA = shrunkRatio(away.goalsAgainst, away.xgAgainst, teamAvg, away.matches, away.priorDefense ?? 1, K, xgW);
+  const minN = Math.max(0, Math.min(home.matches, away.matches));
+  return {
+    lambdaHome: clamp2(league.homeGoals * atkH * defA, 0.2, 4.5),
+    lambdaAway: clamp2(league.awayGoals * atkA * defH, 0.15, 4),
+    reliability: minN / (minN + K)
+  };
+}
+function sanitizeLlmAdjustment(raw) {
+  const neutral = { lambdaHomeMult: 1, lambdaAwayMult: 1, evidence: [] };
+  if (!raw || typeof raw !== "object") return neutral;
+  const r = raw;
+  const evidence = Array.isArray(r.evidence) ? r.evidence.filter((e) => !!e && typeof e === "object").map((e) => ({
+    type: String(e.type ?? "other"),
+    detail: String(e.detail ?? "").slice(0, 300),
+    sourceUrl: typeof e.source_url === "string" ? e.source_url : typeof e.sourceUrl === "string" ? e.sourceUrl : void 0
+  })).filter((e) => e.detail.length >= 10) : [];
+  if (evidence.length === 0) return neutral;
+  const lo = 1 - MAX_LLM_LAMBDA_ADJUST;
+  const hi = 1 + MAX_LLM_LAMBDA_ADJUST;
+  const h = Number(r.lambda_home_mult ?? r.lambdaHomeMult);
+  const a = Number(r.lambda_away_mult ?? r.lambdaAwayMult);
+  return {
+    lambdaHomeMult: Number.isFinite(h) ? clamp2(h, lo, hi) : 1,
+    lambdaAwayMult: Number.isFinite(a) ? clamp2(a, lo, hi) : 1,
+    evidence
+  };
+}
+var clamp2, MAX_LLM_LAMBDA_ADJUST;
+var init_strength = __esm({
+  "src/lib/quant/strength.ts"() {
+    "use strict";
+    clamp2 = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+    MAX_LLM_LAMBDA_ADJUST = 0.12;
+  }
+});
+
+// src/lib/quant/llm-contract.ts
+function jsonObjectsIn(text) {
+  const out = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(text.slice(i, j + 1));
+            if (parsed && typeof parsed === "object") out.push(parsed);
+          } catch {
+          }
+          i = j;
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+function extractLambdaAdjustment(text) {
+  for (const obj of jsonObjectsIn(text)) {
+    const raw = obj["lambda_adjustment"] ?? obj["lambdaAdjustment"] ?? null;
+    const candidate = raw && typeof raw === "object" ? raw : obj;
+    const hasLambdaKeys = "lambda_home_mult" in candidate || "lambdaHomeMult" in candidate;
+    if (!hasLambdaKeys) continue;
+    const clean = sanitizeLlmAdjustment(candidate);
+    const isNeutral = clean.lambdaHomeMult === 1 && clean.lambdaAwayMult === 1;
+    return isNeutral && clean.evidence.length === 0 ? null : clean;
+  }
+  return null;
+}
+var V5_CONTRACT_SUFFIX;
+var init_llm_contract = __esm({
+  "src/lib/quant/llm-contract.ts"() {
+    "use strict";
+    init_strength();
+    V5_CONTRACT_SUFFIX = `
+\u2550\u2550\u2550 KONTRAK V5 (WAJIB, mengalahkan instruksi sebelumnya bila bertentangan) \u2550\u2550\u2550
+1. DILARANG melaporkan EV, ev_percent, stake, atau ukuran taruhan dalam bentuk apa pun. EV dan stake SELALU dihitung kode dari probabilitas dan odds provider. Bila Anda menulis angka EV/stake, angka itu diabaikan.
+2. "probability" pada selection tetap wajib (0 < p < 1): itu penilaian probabilitas Anda untuk market terpilih, BUKAN confidence dan BUKAN probabilitas implisit bandar. Confidence hanya keterangan.
+3. Sertakan objek "lambda_adjustment" pada JSON yang sama, mengikuti PERSONA_V5: Anda hanya boleh mengusulkan pengali lambda_home_mult / lambda_away_mult dalam 0.88\u20131.12 berdasarkan informasi material (cedera, line-up, rotasi, skorsing, motivasi ekstrem) dan WAJIB menyertakan "evidence" berisi {type, detail \u2265 10 karakter, source_url}. Tanpa bukti yang dapat diverifikasi, gunakan 1.00 untuk keduanya dan evidence kosong \u2014 pengali tanpa bukti akan dibuang oleh kode.
+4. Keputusan akhir (AMBIL/NO BET, stake, komposisi parlay) bukan wewenang Anda. Susun kandidat terbaik menurut penilaian Anda; mesin yang memutuskan.`;
+  }
+});
+
 // src/lib/quant/devig.ts
 function overround(odds) {
   return odds.reduce((sum, o) => sum + 1 / o, 0) - 1;
@@ -55771,56 +55881,6 @@ function devig(odds, method = "shin") {
 var init_devig = __esm({
   "src/lib/quant/devig.ts"() {
     "use strict";
-  }
-});
-
-// src/lib/quant/strength.ts
-function shrunkRatio(observedPerMatch, xgPerMatch, leagueTeamAvg, n, prior, K, xgWeight) {
-  const blended = xgPerMatch != null && Number.isFinite(xgPerMatch) ? xgWeight * xgPerMatch + (1 - xgWeight) * observedPerMatch : observedPerMatch;
-  const ratio = blended / Math.max(0.2, leagueTeamAvg);
-  return (n * ratio + K * prior) / (n + K);
-}
-function modelLambdas(home, away, league, opts = {}) {
-  const K = opts.priorStrength ?? 8;
-  const xgW = opts.xgWeight ?? 0.6;
-  const teamAvg = (league.homeGoals + league.awayGoals) / 2;
-  const atkH = shrunkRatio(home.goalsFor, home.xgFor, teamAvg, home.matches, home.priorAttack ?? 1, K, xgW);
-  const defH = shrunkRatio(home.goalsAgainst, home.xgAgainst, teamAvg, home.matches, home.priorDefense ?? 1, K, xgW);
-  const atkA = shrunkRatio(away.goalsFor, away.xgFor, teamAvg, away.matches, away.priorAttack ?? 1, K, xgW);
-  const defA = shrunkRatio(away.goalsAgainst, away.xgAgainst, teamAvg, away.matches, away.priorDefense ?? 1, K, xgW);
-  const minN = Math.max(0, Math.min(home.matches, away.matches));
-  return {
-    lambdaHome: clamp2(league.homeGoals * atkH * defA, 0.2, 4.5),
-    lambdaAway: clamp2(league.awayGoals * atkA * defH, 0.15, 4),
-    reliability: minN / (minN + K)
-  };
-}
-function sanitizeLlmAdjustment(raw) {
-  const neutral = { lambdaHomeMult: 1, lambdaAwayMult: 1, evidence: [] };
-  if (!raw || typeof raw !== "object") return neutral;
-  const r = raw;
-  const evidence = Array.isArray(r.evidence) ? r.evidence.filter((e) => !!e && typeof e === "object").map((e) => ({
-    type: String(e.type ?? "other"),
-    detail: String(e.detail ?? "").slice(0, 300),
-    sourceUrl: typeof e.source_url === "string" ? e.source_url : typeof e.sourceUrl === "string" ? e.sourceUrl : void 0
-  })).filter((e) => e.detail.length >= 10) : [];
-  if (evidence.length === 0) return neutral;
-  const lo = 1 - MAX_LLM_LAMBDA_ADJUST;
-  const hi = 1 + MAX_LLM_LAMBDA_ADJUST;
-  const h = Number(r.lambda_home_mult ?? r.lambdaHomeMult);
-  const a = Number(r.lambda_away_mult ?? r.lambdaAwayMult);
-  return {
-    lambdaHomeMult: Number.isFinite(h) ? clamp2(h, lo, hi) : 1,
-    lambdaAwayMult: Number.isFinite(a) ? clamp2(a, lo, hi) : 1,
-    evidence
-  };
-}
-var clamp2, MAX_LLM_LAMBDA_ADJUST;
-var init_strength = __esm({
-  "src/lib/quant/strength.ts"() {
-    "use strict";
-    clamp2 = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
-    MAX_LLM_LAMBDA_ADJUST = 0.12;
   }
 });
 
@@ -58172,7 +58232,7 @@ ${relationalBlock}
 2. Pilih tepat satu market dari snapshot provider. Totals dan Asian Handicap wajib cocok dengan
    line yang persis; jika line tidak tersedia atau berbeda, gunakan NO_BET.
 3. Tulis probability nyata eksplisit dalam rentang 0 sampai 1. Confidence 0-10 tidak boleh dipakai sebagai probability.
-4. Hitung ulang EV dengan odds snapshot selection: (probability \xD7 odds) - 1. Jika hasilnya <= 0, gunakan NO_BET.
+4. JANGAN menghitung EV \u2014 kode menghitungnya dari probability dan odds snapshot. Bila Anda tidak bisa memberi probability yang bertanggung jawab, gunakan NO_BET.
 5. Keluarkan market terstruktur: market_type salah satu ML/HT/Totals/AH/BTTS; outcome sesuai market;
    line harus line angka provider yang persis untuk Totals/AH dan null untuk market lain.
 6. JSON selections hanya boleh merekomendasikan pertandingan ${homeTeam} vs ${awayTeam}; jangan menggabungkan fixture lain.`;
@@ -58432,7 +58492,10 @@ async function analyzeFixture(fixtureId, context) {
     persona,
     agentInstructions ? `INSTRUKSI TAMBAHAN:
 ${agentInstructions}` : null,
-    aiConfig.learningPromptAddendum || null
+    aiConfig.learningPromptAddendum || null,
+    /* P6: kontrak V5 selalu terakhir, apa pun persona dari DB — lihat
+       V5_CONTRACT_SUFFIX di lib/quant/llm-contract.ts. */
+    V5_CONTRACT_SUFFIX
   ].filter((section) => Boolean(section)).join("\n\n");
   console.log(`[AI-ANALYSIS] Persona sumber: ${persona === DEFAULT_SYSTEM_INSTRUCTION ? "DEFAULT (fallback)" : "SUPABASE (kustom)"}`);
   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, relationalBlock, homeStats, awayStats);
@@ -58499,6 +58562,7 @@ ${repaired.text}`;
   const selectedOddsMatchMode = oddsMatch?.status ?? "unmatched";
   const selectedOddsCapturedAt = oddsMatch?.capturedAt ?? oddsAvailability.latestCapturedAt;
   const evAtAnalysis = recommendation.evPercent / 100;
+  const llmLambdaAdjustment = extractLambdaAdjustment(predictionText);
   const modelSelection = modelProbabilityForSelection(
     matchContext.matrix,
     matchContext.markets,
@@ -58593,7 +58657,9 @@ ${repaired.text}`;
       standings: { home: homeStandings, away: awayStandings },
       headToHead: h2h,
       oddsMovement: movementRows,
-      ragLessons: lessons
+      ragLessons: lessons,
+      /* P6: adjustment yang benar-benar dipakai engine quant (null = dibuang/tidak ada). */
+      llmLambdaAdjustment
     },
     dataQuality: {
       stats: { home: homeStatsQuality, away: awayStatsQuality },
@@ -58675,13 +58741,12 @@ ${repaired.text}`;
       leagueSlug,
       structuredOdds,
       /*
-       * The current prompt asks the model for prose plus a probability, not the
-       * PERSONA_V5 λ-adjustment contract, so there is no evidence-backed
-       * adjustment to pass yet. null means "no adjustment" — the engine runs on
-       * market + team statistics alone, which is exactly the baseline we want
-       * to measure in the shadow log.
+       * P6: kontrak V5 kini meminta "lambda_adjustment" berbukti di JSON
+       * yang sama. extractLambdaAdjustment men-sanitasi (±12%, wajib bukti);
+       * null berarti model tidak memberi penyesuaian yang layak, dan engine
+       * berjalan dari pasar + statistik saja — baseline yang memang diukur.
        */
-      llmAdjustment: null
+      llmAdjustment: llmLambdaAdjustment
     });
     if (shadow.logged > 0) {
       logger.info(
@@ -58764,6 +58829,7 @@ var init_ai_analysis = __esm({
     init_match_context();
     init_betting_math();
     init_model_discovery();
+    init_llm_contract();
     init_quant_shadow();
     init_llm_shadow();
     init_odds_fetcher();
@@ -58800,19 +58866,19 @@ FORMAT OUTPUT WAJIB (JSON + teks):
 ## \u{1F3AF} ANALISIS SINGKAT (3-4 kalimat)
 Ringkasan: siapa yang punya edge, pasar mana yang bergerak, dan konfirmasi statistik.
 
-## \u{1F4B9} ANALISIS EV (per pasaran)
-Pasaran | Prob. Nyata | Implisit Bandar | EV | Tren Konfirmasi | Verdict
---- | --- | --- | --- | --- | ---
-1X2 Home | XX% | XX% | +X% | Searah | VALUE / NO VALUE
+## \u{1F4B9} PERBANDINGAN PASARAN (per pasaran)
+Pasaran | Prob. Penilaian Anda | Implisit Bandar | Tren Konfirmasi | Verdict
+--- | --- | --- | --- | ---
+1X2 Home | XX% | XX% | Searah | VALUE / NO VALUE
 ... (semua pasaran)
+CATATAN P6: JANGAN menghitung atau melaporkan EV dalam bentuk apa pun \u2014 EV selalu dihitung kode dari probabilitas Anda dan odds provider. Tabel ini membandingkan probabilitas, bukan EV.
 
 ## \u{1F3AF} REKOMENDASI AKHIR
 - Pasaran terpilih: [nama pasaran]
-- Keputusan: **AMBIL** atau **NO BET**
-- Odds minimum value: X.XX
-- Confidence Score: X/10
-- Stake saran: Unit % (gunakan stake 1-3% per bet, maks 5% jika confidence > 9.5)
+- Keputusan kandidat: **AMBIL** atau **NO BET** (keputusan final di mesin)
+- Confidence Score: X/10 (keterangan saja, bukan gerbang)
 - Justifikasi: 2-3 kalimat
+- DILARANG memberi saran stake/ukuran taruhan. Stake dihitung kode (fractional Kelly, cap 2%).
 
 ## \u26A1 KODE PARLAY (JSON)
 OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
@@ -58830,10 +58896,10 @@ OUTPUT WAJIB MENGGUNAKAN FORMAT JSON DI BAWAH INI TANPA TEKS PREFASI APAPUN:
       "probability": 0.58,
       "confidence": 8.5,
       "odds": 1.85,
-      "ev_percent": 8.2,
       "rationale": "Regresi 11 laci mengonfirmasi xG gabungan 3.12. Terjadi sharp money drop 0.12 pada Over, mengindikasikan arus dana besar terkonfirmasi."
    }
-  ]
+  ],
+  "lambda_adjustment": {"lambda_home_mult": 1.00, "lambda_away_mult": 1.00, "evidence": []}
 }
 
 VALIDATION GATE:
@@ -58844,7 +58910,7 @@ VALIDATION GATE:
   outcome harus home/draw/away, over/under, atau yes/no sesuai market; line harus angka persis dari provider
   untuk Totals/AH dan null untuk market lain. Jangan mengarang nama market atau line.
 - Probability wajib eksplisit, 0 < probability < 1, dan bukan confidence atau probabilitas implisit.
-- Hitung ulang EV = (probability \xD7 odds provider) - 1. Gunakan "NO_BET" bila EV tidak positif,
+- JANGAN menghitung EV (kode yang menghitungnya dari probability \xD7 odds provider). Gunakan "NO_BET" bila
   probability tidak valid, market/line tidak cocok, atau data terlalu tipis untuk dinilai.
 
 Field "probability" adalah probabilitas nyata untuk selection dalam angka 0-1, bukan confidence dan bukan probabilitas implisit bandar. Field ini wajib untuk selection selain NO_BET.
@@ -58909,31 +58975,243 @@ KOMPOSISI PARLAY (bila lebih dari satu selection tersedia):
   }
 });
 
+// src/lib/quant/parlay.ts
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = a + 1831565813 >>> 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function normInv(p) {
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+  const pl = 0.02425;
+  const q0 = Math.min(1 - 1e-12, Math.max(1e-12, p));
+  if (q0 < pl) {
+    const q2 = Math.sqrt(-2 * Math.log(q0));
+    return (((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
+  }
+  if (q0 > 1 - pl) {
+    const q2 = Math.sqrt(-2 * Math.log(1 - q0));
+    return -(((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
+  }
+  const q = q0 - 0.5;
+  const r = q * q;
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+function pairwiseCorrelation(a, b) {
+  let rho = 0.02;
+  if (a.league && a.league === b.league) rho += 0.03;
+  if (a.date && a.date === b.date) rho += 0.02;
+  const ta = a.marketFamily === "Totals" || a.marketFamily === "BTTS";
+  const tb = b.marketFamily === "Totals" || b.marketFamily === "BTTS";
+  if (ta && tb) rho += 0.05;
+  return Math.min(0.25, rho);
+}
+function cholesky(matrix) {
+  const n = matrix.length;
+  let scale = 1;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const L = Array.from({ length: n }, () => new Array(n).fill(0));
+    let ok = true;
+    for (let i = 0; i < n && ok; i++) {
+      for (let j = 0; j <= i; j++) {
+        const off = i === j ? matrix[i][j] : matrix[i][j] * scale;
+        let sum = off;
+        for (let k = 0; k < j; k++) sum -= L[i][k] * L[j][k];
+        if (i === j) {
+          if (sum <= 1e-10) {
+            ok = false;
+            break;
+          }
+          L[i][j] = Math.sqrt(sum);
+        } else L[i][j] = sum / L[j][j];
+      }
+    }
+    if (ok) return L;
+    scale *= 0.5;
+  }
+  return Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : 0));
+}
+function ticketStakePlan(result2, legSigmas = [], opts = {}) {
+  const sigma = Math.min(
+    0.15,
+    Math.sqrt(legSigmas.reduce((s, x) => s + (Number.isFinite(x) ? x : 0.03) ** 2, 0)) || 0.03
+  );
+  const plan = stakePlan({
+    p: result2.pDecision,
+    odds: result2.combinedOdds,
+    sigma,
+    fraction: opts.fraction ?? 0.25,
+    maxStakePct: opts.maxStakePct ?? 2
+  });
+  if (result2.evPessimistic <= 0) {
+    return {
+      ...plan,
+      stakePct: 0,
+      noStake: true,
+      reason: "EV pesimis \u2264 0: tiket hanya untung bila tidak ada leg yang overestimasi. Stake 0."
+    };
+  }
+  if (plan.stakePct <= 0) {
+    return { ...plan, noStake: true, reason: "Kelly setelah pengurangan \u03C3 memberi 0: tidak ada edge yang bisa dibeli." };
+  }
+  return {
+    ...plan,
+    noStake: false,
+    reason: `\xBC Kelly dari p tiket ${(result2.pDecision * 100).toFixed(1)}% @ ${result2.combinedOdds.toFixed(2)}, cap 2% \u2192 stake ${plan.stakePct.toFixed(2)}% bankroll.`
+  };
+}
+function analyzeParlay(legs, opts = {}) {
+  if (legs.length < 1) throw new Error("Parlay butuh minimal 1 leg.");
+  const sims = opts.sims ?? 4e4;
+  const sigma = opts.sigma ?? 0.03;
+  const probs = legs.map((l) => Math.min(0.995, Math.max(5e-3, l.p)));
+  const combinedOdds = opts.offeredOdds ?? legs.reduce((acc, l) => acc * l.odds, 1);
+  const pIndependent = probs.reduce((acc, p) => acc * p, 1);
+  const n = legs.length;
+  const corr = Array.from(
+    { length: n },
+    (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : pairwiseCorrelation(legs[i], legs[j]))
+  );
+  const L = cholesky(corr);
+  const thresholds = probs.map((p) => normInv(p));
+  const rnd = mulberry32(opts.seed ?? 20260101);
+  const gauss = () => {
+    const u1 = Math.max(1e-12, rnd());
+    const u2 = rnd();
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  };
+  let hits = 0;
+  const z = new Array(n).fill(0);
+  for (let s = 0; s < sims; s++) {
+    for (let i = 0; i < n; i++) z[i] = gauss();
+    let all = true;
+    for (let i = 0; i < n && all; i++) {
+      let x = 0;
+      for (let j = 0; j <= i; j++) x += L[i][j] * z[j];
+      if (x >= thresholds[i]) all = false;
+    }
+    if (all) hits++;
+  }
+  const pCorrelated = hits / sims;
+  const simStdErr = Math.sqrt(pCorrelated * (1 - pCorrelated) / sims);
+  const pPessimistic = probs.reduce((acc, p) => acc * Math.max(1e-3, p - sigma), 1);
+  const g = (delta) => probs.reduce((acc, p) => acc * Math.max(0, p - delta), 1) * combinedOdds - 1;
+  let breakEvenBias = 0;
+  if (g(0) > 0) {
+    let lo = 0;
+    let hi = Math.min(...probs);
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (g(mid) > 0) lo = mid;
+      else hi = mid;
+    }
+    breakEvenBias = lo;
+  } else {
+    breakEvenBias = -1;
+  }
+  const allMarket = legs.every((l) => l.pMarket != null && l.pMarket > 0);
+  const marketProd = allMarket ? legs.reduce((acc, l) => acc * l.pMarket, 1) : null;
+  return {
+    legs: n,
+    combinedOdds,
+    pIndependent,
+    pCorrelated,
+    simStdErr,
+    evIndependent: pIndependent * combinedOdds - 1,
+    evCorrelated: pCorrelated * combinedOdds - 1,
+    pDecision: Math.min(pIndependent, pCorrelated),
+    evDecision: Math.min(pIndependent, pCorrelated) * combinedOdds - 1,
+    pPessimistic,
+    evPessimistic: pPessimistic * combinedOdds - 1,
+    fairOddsCorrelated: pCorrelated > 0 ? 1 / pCorrelated : Infinity,
+    marginPaid: marketProd != null ? 1 - combinedOdds * marketProd : null,
+    breakEvenBias,
+    correlationMatrix: corr
+  };
+}
+var init_parlay = __esm({
+  "src/lib/quant/parlay.ts"() {
+    "use strict";
+    init_kelly();
+  }
+});
+
 // src/services/parlay-builder.ts
 function probabilityFor(candidate) {
   return Math.max(0.01, Math.min(0.99, candidate.probability));
+}
+function familyOf(candidate) {
+  const text = `${candidate.market} ${candidate.selection}`.toLowerCase();
+  if (text.includes("btts") || text.includes("both teams")) return "BTTS";
+  if (text.includes("over") || text.includes("under") || text.includes("total")) return "Totals";
+  if (text.includes("handicap") || text.includes("ah")) return "AH";
+  if (text.includes("ht") || text.includes("half")) return "HT";
+  return "ML";
 }
 function calculateParlayMetrics(candidates2) {
   const combinedOdds = candidates2.reduce(
     (product, candidate) => product * Math.max(1.01, candidate.odds),
     1
   );
-  const winProbability = candidates2.reduce(
-    (product, candidate) => product * probabilityFor(candidate),
-    1
-  );
-  const expectedValue2 = winProbability * combinedOdds - 1;
   const confidenceValues = candidates2.map((candidate) => candidate.confidence).filter((value) => value != null && Number.isFinite(value));
   const avgConfidence = confidenceValues.length > 0 ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length : 0;
-  const confidenceRiskPenalty = confidenceValues.length > 0 ? Math.max(0, 8 - avgConfidence) * 4 : 0;
+  if (candidates2.length === 0) {
+    return {
+      combinedOdds: 1,
+      winProbability: 0,
+      expectedValue: -1,
+      avgConfidence: 0,
+      riskScore: 100,
+      riskLevel: "very_high",
+      pIndependent: 0,
+      pCorrelated: 0,
+      evPessimistic: -1,
+      breakEvenBias: -1,
+      marginPaid: null,
+      ticketStake: null
+    };
+  }
+  const legs = candidates2.map((candidate) => ({
+    p: probabilityFor(candidate),
+    odds: Math.max(1.01, candidate.odds),
+    league: candidate.league,
+    marketFamily: familyOf(candidate),
+    date: candidate.date
+  }));
+  const analysis = analyzeParlay(legs, { sims: 2e4, seed: 20260101 });
+  const stake = ticketStakePlan(analysis, legs.map(() => 0.03));
+  const winProbability = analysis.pDecision;
+  const expectedValue2 = analysis.evDecision;
+  const pessimisticPenalty = analysis.evPessimistic <= 0 ? 15 : 0;
   const riskScore = Math.min(
     100,
     Math.round(
-      (1 - winProbability) * 65 + Math.max(0, candidates2.length - 2) * 6 + confidenceRiskPenalty + Math.max(0, combinedOdds - 8) * 1.5
+      (1 - winProbability) * 65 + Math.max(0, candidates2.length - 2) * 6 + pessimisticPenalty + Math.max(0, combinedOdds - 8) * 1.5
     )
   );
   const riskLevel = riskScore >= 75 ? "very_high" : riskScore >= 55 ? "high" : riskScore >= 30 ? "medium" : "low";
-  return { combinedOdds, winProbability, expectedValue: expectedValue2, avgConfidence, riskScore, riskLevel };
+  return {
+    combinedOdds,
+    winProbability,
+    expectedValue: expectedValue2,
+    avgConfidence,
+    riskScore,
+    riskLevel,
+    pIndependent: analysis.pIndependent,
+    pCorrelated: analysis.pCorrelated,
+    evPessimistic: analysis.evPessimistic,
+    breakEvenBias: analysis.breakEvenBias,
+    marginPaid: analysis.marginPaid,
+    ticketStake: stake
+  };
 }
 async function createMergedParlay(candidates2, sourceParlayIds, options = {}) {
   const rejected = [];
@@ -58980,6 +59258,9 @@ async function createMergedParlay(candidates2, sourceParlayIds, options = {}) {
     combined_odds: metrics.combinedOdds,
     win_probability: metrics.winProbability,
     expected_value: metrics.expectedValue,
+    stake_pct: metrics.ticketStake?.stakePct ?? null,
+    ev_pessimistic: metrics.evPessimistic,
+    p_correlated: metrics.pCorrelated,
     risk_score: metrics.riskScore,
     avg_confidence: metrics.avgConfidence,
     status: "active",
@@ -59021,17 +59302,8 @@ async function createParlayFromCandidates(candidates2) {
     new Map(candidates2.map((candidate) => [String(candidate.fixtureId), candidate])).values()
   ).slice(0, 5);
   if (uniqueCandidates.length < 2) return null;
-  const combinedOdds = uniqueCandidates.reduce(
-    (product, candidate) => product * Math.max(1.01, candidate.odds),
-    1
-  );
-  const winProbability = uniqueCandidates.reduce(
-    (product, candidate) => product * probabilityFor(candidate),
-    1
-  );
-  const expectedValue2 = winProbability * combinedOdds - 1;
-  const confidenceValues = uniqueCandidates.map((candidate) => candidate.confidence).filter((value) => value != null && Number.isFinite(value));
-  const avgConfidence = confidenceValues.length > 0 ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length : 0;
+  const metrics = calculateParlayMetrics(uniqueCandidates);
+  const { combinedOdds, winProbability, expectedValue: expectedValue2, avgConfidence } = metrics;
   const leagues = new Set(uniqueCandidates.map((candidate) => candidate.league).filter(Boolean));
   const { data: parlay, error: parlayError } = await supabase.from("parlays").insert({
     parlay_name: `AI Batch Parlay \u2014 ${(/* @__PURE__ */ new Date()).toLocaleDateString("id-ID")}`,
@@ -59039,6 +59311,9 @@ async function createParlayFromCandidates(candidates2) {
     combined_odds: combinedOdds,
     win_probability: winProbability,
     expected_value: expectedValue2,
+    stake_pct: metrics.ticketStake?.stakePct ?? null,
+    ev_pessimistic: metrics.evPessimistic,
+    p_correlated: metrics.pCorrelated,
     avg_confidence: avgConfidence,
     status: "active",
     generated_by: "AI_BATCH",
@@ -59108,6 +59383,7 @@ var init_parlay_builder = __esm({
     "use strict";
     init_supabase_client();
     init_logger();
+    init_parlay();
   }
 });
 
@@ -76893,145 +77169,6 @@ var require_multer = __commonJS({
   }
 });
 
-// src/lib/quant/parlay.ts
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = a + 1831565813 >>> 0;
-    let t = a;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-function normInv(p) {
-  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
-  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
-  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
-  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
-  const pl = 0.02425;
-  const q0 = Math.min(1 - 1e-12, Math.max(1e-12, p));
-  if (q0 < pl) {
-    const q2 = Math.sqrt(-2 * Math.log(q0));
-    return (((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
-  }
-  if (q0 > 1 - pl) {
-    const q2 = Math.sqrt(-2 * Math.log(1 - q0));
-    return -(((((c[0] * q2 + c[1]) * q2 + c[2]) * q2 + c[3]) * q2 + c[4]) * q2 + c[5]) / ((((d[0] * q2 + d[1]) * q2 + d[2]) * q2 + d[3]) * q2 + 1);
-  }
-  const q = q0 - 0.5;
-  const r = q * q;
-  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
-}
-function pairwiseCorrelation(a, b) {
-  let rho = 0.02;
-  if (a.league && a.league === b.league) rho += 0.03;
-  if (a.date && a.date === b.date) rho += 0.02;
-  const ta = a.marketFamily === "Totals" || a.marketFamily === "BTTS";
-  const tb = b.marketFamily === "Totals" || b.marketFamily === "BTTS";
-  if (ta && tb) rho += 0.05;
-  return Math.min(0.25, rho);
-}
-function cholesky(matrix) {
-  const n = matrix.length;
-  let scale = 1;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const L = Array.from({ length: n }, () => new Array(n).fill(0));
-    let ok = true;
-    for (let i = 0; i < n && ok; i++) {
-      for (let j = 0; j <= i; j++) {
-        const off = i === j ? matrix[i][j] : matrix[i][j] * scale;
-        let sum = off;
-        for (let k = 0; k < j; k++) sum -= L[i][k] * L[j][k];
-        if (i === j) {
-          if (sum <= 1e-10) {
-            ok = false;
-            break;
-          }
-          L[i][j] = Math.sqrt(sum);
-        } else L[i][j] = sum / L[j][j];
-      }
-    }
-    if (ok) return L;
-    scale *= 0.5;
-  }
-  return Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : 0));
-}
-function analyzeParlay(legs, opts = {}) {
-  if (legs.length < 1) throw new Error("Parlay butuh minimal 1 leg.");
-  const sims = opts.sims ?? 4e4;
-  const sigma = opts.sigma ?? 0.03;
-  const probs = legs.map((l) => Math.min(0.995, Math.max(5e-3, l.p)));
-  const combinedOdds = opts.offeredOdds ?? legs.reduce((acc, l) => acc * l.odds, 1);
-  const pIndependent = probs.reduce((acc, p) => acc * p, 1);
-  const n = legs.length;
-  const corr = Array.from(
-    { length: n },
-    (_, i) => Array.from({ length: n }, (_2, j) => i === j ? 1 : pairwiseCorrelation(legs[i], legs[j]))
-  );
-  const L = cholesky(corr);
-  const thresholds = probs.map((p) => normInv(p));
-  const rnd = mulberry32(opts.seed ?? 20260101);
-  const gauss = () => {
-    const u1 = Math.max(1e-12, rnd());
-    const u2 = rnd();
-    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-  };
-  let hits = 0;
-  const z = new Array(n).fill(0);
-  for (let s = 0; s < sims; s++) {
-    for (let i = 0; i < n; i++) z[i] = gauss();
-    let all = true;
-    for (let i = 0; i < n && all; i++) {
-      let x = 0;
-      for (let j = 0; j <= i; j++) x += L[i][j] * z[j];
-      if (x >= thresholds[i]) all = false;
-    }
-    if (all) hits++;
-  }
-  const pCorrelated = hits / sims;
-  const simStdErr = Math.sqrt(pCorrelated * (1 - pCorrelated) / sims);
-  const pPessimistic = probs.reduce((acc, p) => acc * Math.max(1e-3, p - sigma), 1);
-  const g = (delta) => probs.reduce((acc, p) => acc * Math.max(0, p - delta), 1) * combinedOdds - 1;
-  let breakEvenBias = 0;
-  if (g(0) > 0) {
-    let lo = 0;
-    let hi = Math.min(...probs);
-    for (let i = 0; i < 60; i++) {
-      const mid = (lo + hi) / 2;
-      if (g(mid) > 0) lo = mid;
-      else hi = mid;
-    }
-    breakEvenBias = lo;
-  } else {
-    breakEvenBias = -1;
-  }
-  const allMarket = legs.every((l) => l.pMarket != null && l.pMarket > 0);
-  const marketProd = allMarket ? legs.reduce((acc, l) => acc * l.pMarket, 1) : null;
-  return {
-    legs: n,
-    combinedOdds,
-    pIndependent,
-    pCorrelated,
-    simStdErr,
-    evIndependent: pIndependent * combinedOdds - 1,
-    evCorrelated: pCorrelated * combinedOdds - 1,
-    pDecision: Math.min(pIndependent, pCorrelated),
-    evDecision: Math.min(pIndependent, pCorrelated) * combinedOdds - 1,
-    pPessimistic,
-    evPessimistic: pPessimistic * combinedOdds - 1,
-    fairOddsCorrelated: pCorrelated > 0 ? 1 / pCorrelated : Infinity,
-    marginPaid: marketProd != null ? 1 - combinedOdds * marketProd : null,
-    breakEvenBias,
-    correlationMatrix: corr
-  };
-}
-var init_parlay = __esm({
-  "src/lib/quant/parlay.ts"() {
-    "use strict";
-  }
-});
-
 // src/lib/quant/composition.ts
 var composition_exports = {};
 __export(composition_exports, {
@@ -87580,6 +87717,7 @@ init_parlay_builder();
 init_supabase_client();
 init_logger();
 init_composition();
+init_parlay();
 var COMPOSER_GENERATED_BY = "QUANT_COMPOSER";
 async function composeAndSaveParlay(candidates2, options = {}) {
   const client = options.client ?? supabase;
@@ -87614,6 +87752,9 @@ async function composeAndSaveParlay(candidates2, options = {}) {
     combined_odds: best.combinedOdds,
     win_probability: best.pDecision,
     expected_value: best.evDecision,
+    stake_pct: ticketStakePlan(best, best.legs.map(() => 0.03)).stakePct,
+    ev_pessimistic: best.evPessimistic,
+    p_correlated: best.pCorrelated,
     avg_confidence: null,
     status: "active",
     generated_by: COMPOSER_GENERATED_BY,
