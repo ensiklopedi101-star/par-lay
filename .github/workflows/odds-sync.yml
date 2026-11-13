@@ -40,10 +40,15 @@
 
 name: odds-sync
 
+# PEMICU UTAMA BUKAN FILE INI. Sejak 13 Nov 2026 pemilik memakai cron-job.org
+# sebagai pemicu terjadwal (lihat Parlay-Analyzer-System/CRON_JOBS.md).
+# Jadwal GitHub di file ini DIMATIKAN karena:
+#   1. Setiap run terjadwal gagal (secrets Actions tidak diisi) — noise.
+#   2. Bila secrets suatu saat diisi, ia akan menabrak job cron-job.org dan
+#      membakar kuota Odds-API dua kali untuk pekerjaan yang sama.
+# File ini dipertahankan hanya sebagai pemicu MANUAL (workflow_dispatch)
+# untuk keadaan darurat, misalnya cron-job.org sedang down.
 on:
-  schedule:
-    # Tiap jam, kecuali 06:00 UTC (cron harian Vercel jalan di jam itu).
-    - cron: "0 0-5,7-23 * * *"
   workflow_dispatch: {}
 
 concurrency:

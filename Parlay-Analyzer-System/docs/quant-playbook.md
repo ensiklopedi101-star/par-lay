@@ -225,11 +225,13 @@ Karena `market_key` v1 sama dengan v2, job Fase 2 yang sudah ada
 tanpa perubahan. Tes: 317 lulus (11 baru untuk P3).
 
 **Yang belum terjadi (bukan kode):** ledger produksi masih 0 baris dan
-`ai_predictions` terakhir 2026-10-25, karena workflow `odds-sync` gagal di
-semua run (job mati dalam 2–4 detik = guard secrets `API_BASE_URL`/
-`CRON_SECRET` di GitHub belum diisi, langkah manual sisa PR #13). Selama itu
-belum diisi, tidak ada analisis baru, dan P3 tidak akan mengumpulkan satu
-baris pun — sehebat apa pun kodenya.
+`ai_predictions` terakhir 2026-10-25. Pemicu terjadwal adalah cron-job.org
+(bukan GitHub — jadwal workflow sudah dimatikan, lihat `CRON_JOBS.md`).
+Bukti 13 Nov: sync terbukti jalan lewat cron (`odds_history` terakhir hari
+ini), tetapi ada 64 fixture berharga yang belum dianalisis — jadi job
+`action=analyze` di cron-job.org yang belum jalan/belum terdaftar. Satu
+eksekusi analyze yang berhasil langsung membuat
+`prediction_selections > 0`; diagnosis lengkapnya di `CRON_JOBS.md`.
 
 ## 9. Pagar yang tidak boleh dilanggar
 
