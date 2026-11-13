@@ -167,6 +167,27 @@ export function worstCaseFairProbability(odds: Odds[], index: number): number | 
   return Math.min(...values);
 }
 
+/**
+ * Konsensus probabilitas wajar dari beberapa bookmaker.
+ *
+ * Mengambil baris pertama saja membuat hasil bergantung pada urutan provider:
+ * satu bookmaker yang lambat memperbarui harga bisa menjadi “pasar” bagi
+ * seluruh sistem. Di sini setiap bookmaker di-devig dengan worst-case terlebih
+ * dahulu, lalu diambil median — outlier satu bookmaker tidak mendominasi,
+ * tetapi konservatisme devig per bookmaker tetap dipertahankan.
+ */
+export function consensusFairProbability(oddsRows: Odds[][], index: number): number | null {
+  const values = oddsRows
+    .map((odds) => worstCaseFairProbability(odds, index))
+    .filter((value): value is number => value != null && Number.isFinite(value))
+    .sort((a, b) => a - b);
+  if (values.length === 0) return null;
+  const middle = Math.floor(values.length / 2);
+  return values.length % 2 === 1
+    ? values[middle]!
+    : (values[middle - 1]! + values[middle]!) / 2;
+}
+
 /** Probabilitas wajar menurut satu metode (untuk laporan/EDGE, bukan gerbang). */
 export function fairProbability(
   odds: Odds[],

@@ -145,10 +145,10 @@ export default function Standings() {
             placeholder="Search team..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-white sm:w-48"
+            className="w-full bg-card sm:w-48"
           />
           <Select value={leagueSlug} onValueChange={setLeagueSlug}>
-            <SelectTrigger className="w-full bg-white sm:w-52">
+            <SelectTrigger className="w-full bg-card sm:w-52">
               <SelectValue placeholder="All Leagues" />
             </SelectTrigger>
             <SelectContent>
@@ -159,7 +159,7 @@ export default function Standings() {
             </SelectContent>
           </Select>
           <Select value={season} onValueChange={setSeason}>
-            <SelectTrigger className="w-full bg-white sm:w-44" aria-label="Pilih musim">
+            <SelectTrigger className="w-full bg-card sm:w-44" aria-label="Pilih musim">
               <SelectValue placeholder="Pilih musim" />
             </SelectTrigger>
             <SelectContent>
@@ -171,7 +171,7 @@ export default function Standings() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-border bg-white px-4 py-3 text-xs text-muted-foreground shadow-sm">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground shadow-sm">
         <span className="font-semibold text-foreground">Cara membaca form:</span>
         <span className="flex items-center gap-1.5"><span className="flex h-6 w-6 items-center justify-center rounded border border-emerald-300 bg-emerald-100 font-extrabold text-emerald-800">W</span> Menang</span>
         <span className="flex items-center gap-1.5"><span className="flex h-6 w-6 items-center justify-center rounded border border-amber-300 bg-amber-100 font-extrabold text-amber-800">D</span> Seri</span>

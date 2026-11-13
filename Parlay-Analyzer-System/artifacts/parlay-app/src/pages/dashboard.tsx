@@ -499,7 +499,7 @@ export default function Dashboard() {
               Panel sync, analisis, komposisi parlay, settlement, dan otomasi sekarang terpusat di menu Transparansi Sistem agar Dashboard tetap ringkas.
             </p>
           </div>
-          <Button asChild variant="outline" className="shrink-0 bg-white">
+          <Button asChild variant="outline" className="shrink-0 bg-card">
             <a href="/transparency">Buka Transparansi</a>
           </Button>
         </CardContent>

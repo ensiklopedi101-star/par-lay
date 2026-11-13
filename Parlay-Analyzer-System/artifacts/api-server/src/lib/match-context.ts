@@ -80,6 +80,36 @@ function block(row: Record<string, unknown> | null | undefined, key: string): Re
   return value as Record<string, unknown>;
 }
 
+/**
+ * `findTeamStats` dapat mengembalikan baris datar ATAU bungkus dua musim:
+ * `{ current_season, baseline_reference, _meta: "COMBINED" | "BASELINE_ONLY" }`.
+ *
+ * Bungkus itu dibuat ketika musim berjalan masih < 6 laga (atau belum ada),
+ * dengan musim sebelumnya sebagai jangkar. Parser lama hanya membaca kolom
+ * `stats_*` di level teratas, sehingga pada format terbungkus SEMUA rate
+ * terbaca null dan λ diam-diam jatuh ke rata-rata/default liga — padahal
+ * prompt LLM menerima statistiknya dan terlihat “dipakai”.
+ *
+ * Di sini bungkus dibuka secara eksplisit. Untuk COMBINED, baseline dipilih
+ * sebagai sumber rate utama sesuai aturan jangkar musim sebelumnya; data
+ * musim berjalan tetap tampil di prompt dan dapat memengaruhi narasi/λ LLM,
+ * tetapi tidak boleh berpura-pura menjadi sampel besar untuk model skor.
+ */
+export function effectiveStatsRow(
+  row: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!row) return null;
+  const baseline = row["baseline_reference"];
+  if (baseline && typeof baseline === "object" && !Array.isArray(baseline)) {
+    return baseline as Record<string, unknown>;
+  }
+  const current = row["current_season"];
+  if (current && typeof current === "object" && !Array.isArray(current)) {
+    return current as Record<string, unknown>;
+  }
+  return row;
+}
+
 function pick(source: Record<string, unknown>, keys: string[]): unknown {
   for (const key of keys) {
     if (source[key] !== undefined && source[key] !== null) return source[key];
@@ -118,14 +148,15 @@ export interface TeamRatesParsed {
 }
 
 export function parseTeamRates(row: Record<string, unknown> | null | undefined): TeamRatesParsed {
-  const xg = block(row, "stats_xg");
-  const scored = block(row, "stats_goals_scored");
-  const conceded = block(row, "stats_goals_conceded");
-  const btts = block(row, "stats_btts");
-  const fts = block(row, "stats_fts");
-  const form = block(row, "stats_team_form");
-  const shots = block(row, "stats_shots");
-  const ht = block(row, "stats_ht");
+  const effective = effectiveStatsRow(row);
+  const xg = block(effective, "stats_xg");
+  const scored = block(effective, "stats_goals_scored");
+  const conceded = block(effective, "stats_goals_conceded");
+  const btts = block(effective, "stats_btts");
+  const fts = block(effective, "stats_fts");
+  const form = block(effective, "stats_team_form");
+  const shots = block(effective, "stats_shots");
+  const ht = block(effective, "stats_ht");
 
   const matches = parseStatNumber(pick(xg, ["MP"])) ?? parseStatNumber(pick(form, ["MP"]));
 
@@ -466,6 +497,9 @@ export function buildMatchContext(input: MatchContextInput): MatchContext {
 
   if (leagueIsDefault) {
     dataGaps.push("Rata-rata gol liga tidak tersedia; dipakai default 1.45/1.15.");
+  }
+  if (input.homeStats?.["_meta"] || input.awayStats?.["_meta"]) {
+    dataGaps.push("Satu atau kedua tim memakai jangkar musim sebelumnya untuk model skor karena musim berjalan belum mencapai 6 laga; musim berjalan tetap ditampilkan terpisah di prompt.");
   }
   if (home.matches == null || away.matches == null) {
     dataGaps.push("Jumlah laga musim berjalan tidak terbaca; kekuatan tim tidak bisa di-shrink.");

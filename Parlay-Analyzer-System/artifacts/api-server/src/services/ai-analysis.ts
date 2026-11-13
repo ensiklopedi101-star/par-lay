@@ -26,7 +26,7 @@ import {
   blendProbability,
   conservativeEv,
   expectedValue,
-  worstCaseFairProbability,
+  consensusFairProbability,
 } from "../lib/betting-math";
 import type { LeagueAverages } from "../lib/quant/strength";
 import { getGeminiModel } from "./model-discovery";
@@ -817,9 +817,11 @@ async function fetchHeadToHead(
 /**
  * Probabilitas wajar (de-vig) untuk label market kanonik.
  *
- * Memakai `worstCaseFairProbability`: probabilitas terendah di antara metode
- * devig, sehingga edge tidak lahir dari asumsi yang paling menguntungkan.
- * Mengembalikan null bila pasar pembandingnya tidak ditemukan — bukan 0.
+ * Memakai `consensusFairProbability`: tiap bookmaker di-devig secara
+ * worst-case, lalu diambil median antar-bookmaker. Dengan begitu edge tidak
+ * lahir dari metode devig yang paling menguntungkan maupun dari satu harga
+ * provider yang basi/outlier. Mengembalikan null bila pasar pembandingnya
+ * tidak ditemukan — bukan 0.
  */
 function fairProbabilityForLabel(
   label: string | null,
@@ -828,33 +830,43 @@ function fairProbabilityForLabel(
 ): number | null {
   if (!label) return null;
   const lower = label.trim().toLowerCase();
-  const withLine = <T extends { line?: number }>(rows: T[]): T | null => {
-    if (rows.length === 0) return null;
-    if (line == null) return rows[0]!;
-    return rows.find((row) => row.line != null && Math.abs(row.line - line) < 1e-9) ?? null;
+  const withLine = <T extends { line?: number }>(rows: T[]): T[] => {
+    if (rows.length === 0) return [];
+    if (line == null) return rows;
+    return rows.filter((row) => row.line != null && Math.abs(row.line - line) < 1e-9);
   };
 
+  /* Konsensus median antar-bookmaker: sebelumnya hanya baris pertama yang
+     dipakai, sehingga “probabilitas pasar” bergantung pada urutan provider
+     dan satu harga basi/outlier dapat menciptakan atau menghapus edge. */
   if (lower === "home win" || lower === "away win" || lower === "draw") {
-    const row = odds.matchWinner[0];
-    if (!row) return null;
     const index = lower === "home win" ? 0 : lower === "draw" ? 1 : 2;
-    return worstCaseFairProbability([row.home ?? null, row.draw ?? null, row.away ?? null], index);
+    return consensusFairProbability(
+      odds.matchWinner.map((row) => [row.home ?? null, row.draw ?? null, row.away ?? null]),
+      index,
+    );
   }
   if (lower === "btts yes" || lower === "btts no") {
-    const row = odds.btts[0];
-    if (!row) return null;
-    return worstCaseFairProbability([row.yes ?? null, row.no ?? null], lower === "btts yes" ? 0 : 1);
+    return consensusFairProbability(
+      odds.btts.map((row) => [row.yes ?? null, row.no ?? null]),
+      lower === "btts yes" ? 0 : 1,
+    );
   }
   if (/^(over|under)\s/.test(lower)) {
-    const row = withLine(odds.overUnder);
-    if (!row) return null;
-    return worstCaseFairProbability([row.over ?? null, row.under ?? null], lower.startsWith("over") ? 0 : 1);
+    const rows = withLine(odds.overUnder);
+    if (rows.length === 0) return null;
+    return consensusFairProbability(
+      rows.map((row) => [row.over ?? null, row.under ?? null]),
+      lower.startsWith("over") ? 0 : 1,
+    );
   }
   if (lower.startsWith("asian handicap")) {
-    const row = withLine(odds.asianHandicap);
-    if (!row) return null;
-    const isHome = lower.includes("home");
-    return worstCaseFairProbability([row.home ?? null, row.away ?? null], isHome ? 0 : 1);
+    const rows = withLine(odds.asianHandicap);
+    if (rows.length === 0) return null;
+    return consensusFairProbability(
+      rows.map((row) => [row.home ?? null, row.away ?? null]),
+      lower.includes("home") ? 0 : 1,
+    );
   }
   /* HT dan market lain: tidak ada pasar pembanding yang bisa di-devig di sini. */
   return null;
@@ -1154,11 +1166,17 @@ function buildPrompt(
       const current = stats.current_season as Record<string, unknown> | string;
       const baseline = stats.baseline_reference as Record<string, unknown>;
       const currentMatches = (typeof current === "object" && current != null)
-        ? (current.matches_played as number) ?? 0
+        ? matchesPlayedFromStats(current as Record<string, unknown>)
         : 0;
-      return `MUSIM BERJALAN (${new Date().getFullYear()}, ${currentMatches} pertandingan): ${JSON.stringify(current)}
-MUSIM SEBELUMNYA (${new Date().getFullYear() - 1}): ${JSON.stringify(baseline)}
-[ATURAN PRIORITAS: Musim berjalan masih < 6 pertandingan. Gunakan MUSIM SEBELUMNYA sebagai jangkar utama, dan MUSIM BERJALAN hanya sebagai cek konsistensi. Jika sudah ≥ 6 pertandingan, prioritas penuh ke MUSIM BERJALAN.]${meta === "BASELINE_ONLY" ? "\n[PERHATIAN: Data musim berjalan belum tersedia. Gunakan MUSIM SEBELUMNYA sebagai satu-satunya referensi historis.]" : ""}`;
+      const currentLabel = (typeof current === "object" && current != null && "season" in current)
+        ? String((current as Record<string, unknown>).season)
+        : "musim berjalan";
+      const baselineLabel = baseline && "season" in baseline
+        ? String((baseline as Record<string, unknown>).season)
+        : "musim sebelumnya";
+      return `MUSIM BERJALAN (${currentLabel}, ${currentMatches} pertandingan): ${JSON.stringify(current)}
+MUSIM SEBELUMNYA (${baselineLabel}): ${JSON.stringify(baseline)}
+[ATURAN PRIORITAS: Bila musim berjalan masih < 6 pertandingan, gunakan MUSIM SEBELUMNYA sebagai jangkar utama dan MUSIM BERJALAN hanya sebagai cek konsistensi. Model skor kuantitatif memakai aturan yang sama; jangan mencampur kedua musim menjadi satu angka tanpa menyebut sumbernya.]${meta === "BASELINE_ONLY" ? "\n[PERHATIAN: Data musim berjalan belum tersedia. Gunakan MUSIM SEBELUMNYA sebagai satu-satunya referensi historis.]" : ""}`;
     }
     return JSON.stringify(stats[label] ?? null);
   };

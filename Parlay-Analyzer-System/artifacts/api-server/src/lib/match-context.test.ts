@@ -79,6 +79,34 @@ test("parseTeamRates membaca split kandang/tandang dan residual xG", () => {
   assert.equal(rates.last6, "W L D L L L");
 });
 
+test("parseTeamRates membuka bungkus COMBINED/BASELINE_ONLY agar statistik musim sebelumnya benar-benar dipakai model", () => {
+  const wrapped = {
+    _meta: "COMBINED",
+    current_season: {
+      stats_xg: { MP: "3", xG: "2.40", xGA: "0.60" },
+      stats_goals_scored: { Home: "2.50 / match", Away: "2.30 / match", "Per Match": "2.40 / match" },
+      stats_goals_conceded: { Home: "0.50 / match", Away: "0.70 / match", "Per Match": "0.60 / match" },
+    },
+    baseline_reference: sunderland,
+  };
+  const rates = parseTeamRates(wrapped);
+  /* Harus membaca baseline Sunderland, bukan null/default karena kolom
+     stats_* tidak berada di level teratas bungkus. */
+  assert.equal(rates.goalsForHome, 0.4);
+  assert.equal(rates.goalsAgainstAway, 2.6);
+  assert.equal(rates.xgFor, 1.34);
+
+  const ctx = buildMatchContext({
+    homeTeam: "Sunderland",
+    awayTeam: "Arsenal",
+    homeStats: wrapped,
+    awayStats: opponent,
+    league: { homeGoals: 1.5, awayGoals: 1.1 },
+  });
+  assert.ok(ctx.dataGaps.some((gap) => /jangkar musim sebelumnya/.test(gap)));
+  assert.ok(ctx.signals.some((signal) => /Split Sunderland: 0\.40/.test(signal)));
+});
+
 test("parseTeamRates aman untuk baris kosong", () => {
   const rates = parseTeamRates(null);
   assert.equal(rates.goalsFor, null);

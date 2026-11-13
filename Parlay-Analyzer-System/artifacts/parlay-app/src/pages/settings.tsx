@@ -488,14 +488,14 @@ export default function SettingsPage() {
                   value={config?.effectiveAiPersona ?? ""}
                   readOnly
                   rows={12}
-                  className="mt-3 resize-y bg-white font-mono text-xs"
+                  className="mt-3 resize-y bg-card font-mono text-xs"
                   aria-label="Persona efektif yang sedang berjalan"
                 />
                 <p className="mt-2 text-xs text-muted-foreground">
                   Kolom di atas read-only karena mencerminkan gabungan sumber yang sedang aktif. Untuk mengubah persona dasar, edit kolom berikutnya lalu simpan.
                 </p>
                 {config?.v5ContractSuffix && (
-                  <details className="mt-3 rounded-lg border border-border bg-white p-3">
+                  <details className="mt-3 rounded-lg border border-border bg-card p-3">
                     <summary className="cursor-pointer text-xs font-semibold">Lihat Kontrak V5 yang selalu ditempel terakhir</summary>
                     <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">{config.v5ContractSuffix}</pre>
                   </details>

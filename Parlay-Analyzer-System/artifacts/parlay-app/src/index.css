@@ -73,33 +73,34 @@
   --elevate-1: rgba(15, 23, 42, .03);
   --elevate-2: rgba(15, 23, 42, .06);
 
-  /* Tema terang profesional: latar abu-biru sangat muda, permukaan putih,
-     teks slate gelap, dan aksen teal yang tenang. Tidak ada mode hitam. */
-  --background: 216 33% 97%;
-  --foreground: 222 47% 11%;
-  --border: 214 32% 88%;
-  --input: 214 32% 84%;
-  --ring: 174 72% 32%;
+  /* Tema soft-light profesional: latar abu-biru redup, permukaan off-white,
+     teks slate lembut, dan aksen teal yang kalem. Cerah tetapi tidak menyilaukan,
+     dan tetap bukan tema hitam/terminal. */
+  --background: 216 24% 91%;
+  --foreground: 222 30% 18%;
+  --border: 214 24% 82%;
+  --input: 214 24% 78%;
+  --ring: 174 48% 34%;
 
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --card-border: 214 32% 88%;
+  --card: 210 25% 97%;
+  --card-foreground: 222 30% 18%;
+  --card-border: 214 24% 82%;
 
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-  --popover-border: 214 32% 88%;
+  --popover: 210 25% 97%;
+  --popover-foreground: 222 30% 18%;
+  --popover-border: 214 24% 82%;
 
-  --primary: 174 72% 30%;
+  --primary: 174 48% 32%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 214 32% 93%;
-  --secondary-foreground: 222 47% 16%;
+  --secondary: 214 24% 86%;
+  --secondary-foreground: 222 30% 22%;
 
-  --muted: 216 33% 94%;
-  --muted-foreground: 215 16% 42%;
+  --muted: 216 22% 88%;
+  --muted-foreground: 215 14% 44%;
 
-  --accent: 214 45% 92%;
-  --accent-foreground: 222 47% 16%;
+  --accent: 214 28% 85%;
+  --accent-foreground: 222 30% 22%;
 
   --destructive: 0 72% 48%;
   --destructive-foreground: 0 0% 100%;
@@ -110,14 +111,14 @@
   --chart-4: 262 60% 55%;
   --chart-5: 340 70% 50%;
 
-  --sidebar: 0 0% 100%;
-  --sidebar-foreground: 215 18% 34%;
-  --sidebar-border: 214 32% 88%;
-  --sidebar-primary: 174 72% 30%;
+  --sidebar: 213 24% 89%;
+  --sidebar-foreground: 215 16% 36%;
+  --sidebar-border: 214 24% 80%;
+  --sidebar-primary: 174 48% 32%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 174 45% 92%;
-  --sidebar-accent-foreground: 174 72% 24%;
-  --sidebar-ring: 174 72% 32%;
+  --sidebar-accent: 174 28% 84%;
+  --sidebar-accent-foreground: 174 45% 25%;
+  --sidebar-ring: 174 48% 34%;
 
   --app-font-sans: 'Inter', system-ui, -apple-system, "Segoe UI", sans-serif;
   --app-font-serif: Georgia, serif;

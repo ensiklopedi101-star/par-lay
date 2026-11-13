@@ -17,6 +17,7 @@ import {
   parlayProbability,
   stakingPlan,
   worstCaseFairProbability,
+  consensusFairProbability,
 } from "./betting-math.js";
 
 const close = (actual: number, expected: number, tolerance = 1e-3) =>
@@ -95,6 +96,20 @@ test("worst case mengambil probabilitas terendah antar metode, di kedua sisi", (
   close(worstCaseFairProbability(odds, 2)!, lowest(2));
   assert.ok(worstCaseFairProbability(odds, 0)! <= multHome);
   assert.ok(worstCaseFairProbability(odds, 2)! <= multAway);
+});
+
+test("consensusFairProbability memakai median antar-bookmaker, bukan baris pertama", () => {
+  const rows = [
+    [1.50, 4.50, 6.00], // outlier: home jauh lebih pendek
+    [1.90, 3.60, 4.20],
+    [1.95, 3.50, 4.00],
+  ];
+  const consensus = consensusFairProbability(rows, 0)!;
+  const firstOnly = worstCaseFairProbability(rows[0]!, 0)!;
+  assert.ok(Math.abs(consensus - firstOnly) > 0.05);
+  assert.ok(consensus > 0.45 && consensus < 0.52);
+  assert.equal(consensusFairProbability([], 0), null);
+  assert.equal(consensusFairProbability([[null, null]], 0), null);
 });
 
 /* ── EV ────────────────────────────────────────────────────────────────── */

@@ -61,7 +61,7 @@ export default function AICenter({ defaultTab = "predictions" }: { defaultTab?: 
       </Card>
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as "predictions" | "parlays")} className="space-y-5">
-        <TabsList className="grid h-auto w-full grid-cols-2 rounded-xl bg-white p-1 shadow-sm sm:w-[520px]">
+        <TabsList className="grid h-auto w-full grid-cols-2 rounded-xl bg-card p-1 shadow-sm sm:w-[520px]">
           <TabsTrigger value="predictions" className="gap-2 rounded-lg py-2.5">
             <BrainCircuit className="h-4 w-4" /> Prediksi AI
           </TabsTrigger>

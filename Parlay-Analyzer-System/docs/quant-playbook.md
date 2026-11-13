@@ -299,3 +299,38 @@ eksekusi analyze yang berhasil langsung membuat
 - MetricGate — *Brier score*: https://metricgate.com/docs/brier-score/
 - ImpliedScore — *Football probability calibration* (checklist pelaporan 1X2):
   https://impliedscore.com/football-probability-calibration/
+
+### Audit pemanfaatan Odds × Team Stats — 13 Nov 2026
+
+Audit jalur `analyzeFixture` menemukan bahwa odds dan statistik sebenarnya
+sudah dipakai berlapis, tetapi ada dua titik di mana data terlihat dipakai
+padahal model kuantitatif tidak menerimanya:
+
+| Lapisan | Odds | Team stats |
+|---|---|---|
+| Gerbang awal | Snapshot harus ada dan ≤ batas umur; jika tidak, AI tidak dipanggil | 8 kolom wajib harus valid dan segar; jika tidak, fixture ditolak sebelum LLM |
+| Prompt LLM | Harga per bookmaker/market + tren pergerakan | 11 blok JSON per tim; bila musim berjalan < 6 laga, musim lalu menjadi jangkar dan musim berjalan hanya cek konsistensi |
+| Model kode | Odds terverifikasi persis pada market/line yang dipilih; EV dihitung ulang, bukan dipercaya dari LLM | Split kandang/tandang, xG, residual, form, dan rata-rata liga membentuk λ dan satu matriks skor untuk 1X2/O-U/BTTS/AH |
+| Keputusan | Probabilitas model diblend 35/65 dengan probabilitas pasar fair; saat ini mode shadow untuk gate kuantitatif | λ-adjustment LLM hanya diterima bila berbukti dan dalam ±12%; tanpa bukti dibuang |
+
+Perbaikan yang diterapkan:
+
+1. **Bungkus dua musim kini benar-benar dibaca model skor.** `findTeamStats`
+   dapat mengembalikan `{current_season, baseline_reference, _meta}`. Parser
+   lama hanya membaca `stats_*` di level atas, sehingga semua rate menjadi
+   null dan λ jatuh ke default. `effectiveStatsRow()` kini membuka bungkus
+   tersebut dan memakai baseline sebagai jangkar sesuai aturan < 6 laga.
+2. **Probabilitas pasar memakai konsensus bookmaker.** Sebelumnya
+   `fairProbabilityForLabel` mengambil baris pertama untuk market terkait.
+   Sekarang setiap bookmaker di-devig worst-case, lalu diambil median
+   (`consensusFairProbability`) agar satu harga basi/outlier tidak menjadi
+   representasi seluruh pasar.
+3. **Label prompt musim diperbaiki.** Jumlah pertandingan musim berjalan kini
+   dibaca dari `stats_team_form.MP`, dan label memakai nilai `season` nyata,
+   bukan tahun kalender yang dapat menamai musim secara keliru.
+
+Batas yang tetap disadari: odds dari bandar rekreasi bukan harga tajam,
+pergerakan odds bukan bukti “sharp money” tanpa konteks likuiditas, dan
+statistik musim lalu dapat basi karena transfer/rotasi. Karena itu data
+gaps dan freshness tetap menjadi alasan NO BET/technical review, bukan
+diisi tebakan.

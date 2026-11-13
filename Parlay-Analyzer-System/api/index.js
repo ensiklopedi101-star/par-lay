@@ -55249,6 +55249,18 @@ function block(row, key) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value;
 }
+function effectiveStatsRow(row) {
+  if (!row) return null;
+  const baseline = row["baseline_reference"];
+  if (baseline && typeof baseline === "object" && !Array.isArray(baseline)) {
+    return baseline;
+  }
+  const current = row["current_season"];
+  if (current && typeof current === "object" && !Array.isArray(current)) {
+    return current;
+  }
+  return row;
+}
 function pick(source, keys) {
   for (const key of keys) {
     if (source[key] !== void 0 && source[key] !== null) return source[key];
@@ -55256,14 +55268,15 @@ function pick(source, keys) {
   return void 0;
 }
 function parseTeamRates(row) {
-  const xg = block(row, "stats_xg");
-  const scored = block(row, "stats_goals_scored");
-  const conceded = block(row, "stats_goals_conceded");
-  const btts = block(row, "stats_btts");
-  const fts = block(row, "stats_fts");
-  const form = block(row, "stats_team_form");
-  const shots = block(row, "stats_shots");
-  const ht = block(row, "stats_ht");
+  const effective = effectiveStatsRow(row);
+  const xg = block(effective, "stats_xg");
+  const scored = block(effective, "stats_goals_scored");
+  const conceded = block(effective, "stats_goals_conceded");
+  const btts = block(effective, "stats_btts");
+  const fts = block(effective, "stats_fts");
+  const form = block(effective, "stats_team_form");
+  const shots = block(effective, "stats_shots");
+  const ht = block(effective, "stats_ht");
   const matches = parseStatNumber(pick(xg, ["MP"])) ?? parseStatNumber(pick(form, ["MP"]));
   return {
     matches,
@@ -55459,6 +55472,9 @@ function buildMatchContext(input) {
   const signals = [];
   if (leagueIsDefault) {
     dataGaps.push("Rata-rata gol liga tidak tersedia; dipakai default 1.45/1.15.");
+  }
+  if (input.homeStats?.["_meta"] || input.awayStats?.["_meta"]) {
+    dataGaps.push("Satu atau kedua tim memakai jangkar musim sebelumnya untuk model skor karena musim berjalan belum mencapai 6 laga; musim berjalan tetap ditampilkan terpisah di prompt.");
   }
   if (home.matches == null || away.matches == null) {
     dataGaps.push("Jumlah laga musim berjalan tidak terbaca; kekuatan tim tidak bisa di-shrink.");
@@ -55659,6 +55675,12 @@ function worstCaseFairProbability(odds, index) {
   const values = results.map((result2) => result2.fair[index]).filter((value) => typeof value === "number" && Number.isFinite(value));
   if (values.length === 0) return null;
   return Math.min(...values);
+}
+function consensusFairProbability(oddsRows, index) {
+  const values = oddsRows.map((odds) => worstCaseFairProbability(odds, index)).filter((value) => value != null && Number.isFinite(value)).sort((a, b) => a - b);
+  if (values.length === 0) return null;
+  const middle = Math.floor(values.length / 2);
+  return values.length % 2 === 1 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
 }
 function expectedValue(probability, odds) {
   if (!Number.isFinite(probability) || !Number.isFinite(odds) || odds <= 1) return 0;
@@ -57928,31 +57950,38 @@ function fairProbabilityForLabel(label, odds, line) {
   if (!label) return null;
   const lower = label.trim().toLowerCase();
   const withLine = (rows) => {
-    if (rows.length === 0) return null;
-    if (line == null) return rows[0];
-    return rows.find((row) => row.line != null && Math.abs(row.line - line) < 1e-9) ?? null;
+    if (rows.length === 0) return [];
+    if (line == null) return rows;
+    return rows.filter((row) => row.line != null && Math.abs(row.line - line) < 1e-9);
   };
   if (lower === "home win" || lower === "away win" || lower === "draw") {
-    const row = odds.matchWinner[0];
-    if (!row) return null;
     const index = lower === "home win" ? 0 : lower === "draw" ? 1 : 2;
-    return worstCaseFairProbability([row.home ?? null, row.draw ?? null, row.away ?? null], index);
+    return consensusFairProbability(
+      odds.matchWinner.map((row) => [row.home ?? null, row.draw ?? null, row.away ?? null]),
+      index
+    );
   }
   if (lower === "btts yes" || lower === "btts no") {
-    const row = odds.btts[0];
-    if (!row) return null;
-    return worstCaseFairProbability([row.yes ?? null, row.no ?? null], lower === "btts yes" ? 0 : 1);
+    return consensusFairProbability(
+      odds.btts.map((row) => [row.yes ?? null, row.no ?? null]),
+      lower === "btts yes" ? 0 : 1
+    );
   }
   if (/^(over|under)\s/.test(lower)) {
-    const row = withLine(odds.overUnder);
-    if (!row) return null;
-    return worstCaseFairProbability([row.over ?? null, row.under ?? null], lower.startsWith("over") ? 0 : 1);
+    const rows = withLine(odds.overUnder);
+    if (rows.length === 0) return null;
+    return consensusFairProbability(
+      rows.map((row) => [row.over ?? null, row.under ?? null]),
+      lower.startsWith("over") ? 0 : 1
+    );
   }
   if (lower.startsWith("asian handicap")) {
-    const row = withLine(odds.asianHandicap);
-    if (!row) return null;
-    const isHome = lower.includes("home");
-    return worstCaseFairProbability([row.home ?? null, row.away ?? null], isHome ? 0 : 1);
+    const rows = withLine(odds.asianHandicap);
+    if (rows.length === 0) return null;
+    return consensusFairProbability(
+      rows.map((row) => [row.home ?? null, row.away ?? null]),
+      lower.includes("home") ? 0 : 1
+    );
   }
   return null;
 }
@@ -58198,10 +58227,12 @@ function buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, re
     if (meta === "COMBINED" || meta === "BASELINE_ONLY") {
       const current = stats.current_season;
       const baseline = stats.baseline_reference;
-      const currentMatches = typeof current === "object" && current != null ? current.matches_played ?? 0 : 0;
-      return `MUSIM BERJALAN (${(/* @__PURE__ */ new Date()).getFullYear()}, ${currentMatches} pertandingan): ${JSON.stringify(current)}
-MUSIM SEBELUMNYA (${(/* @__PURE__ */ new Date()).getFullYear() - 1}): ${JSON.stringify(baseline)}
-[ATURAN PRIORITAS: Musim berjalan masih < 6 pertandingan. Gunakan MUSIM SEBELUMNYA sebagai jangkar utama, dan MUSIM BERJALAN hanya sebagai cek konsistensi. Jika sudah \u2265 6 pertandingan, prioritas penuh ke MUSIM BERJALAN.]${meta === "BASELINE_ONLY" ? "\n[PERHATIAN: Data musim berjalan belum tersedia. Gunakan MUSIM SEBELUMNYA sebagai satu-satunya referensi historis.]" : ""}`;
+      const currentMatches = typeof current === "object" && current != null ? matchesPlayedFromStats(current) : 0;
+      const currentLabel = typeof current === "object" && current != null && "season" in current ? String(current.season) : "musim berjalan";
+      const baselineLabel = baseline && "season" in baseline ? String(baseline.season) : "musim sebelumnya";
+      return `MUSIM BERJALAN (${currentLabel}, ${currentMatches} pertandingan): ${JSON.stringify(current)}
+MUSIM SEBELUMNYA (${baselineLabel}): ${JSON.stringify(baseline)}
+[ATURAN PRIORITAS: Bila musim berjalan masih < 6 pertandingan, gunakan MUSIM SEBELUMNYA sebagai jangkar utama dan MUSIM BERJALAN hanya sebagai cek konsistensi. Model skor kuantitatif memakai aturan yang sama; jangan mencampur kedua musim menjadi satu angka tanpa menyebut sumbernya.]${meta === "BASELINE_ONLY" ? "\n[PERHATIAN: Data musim berjalan belum tersedia. Gunakan MUSIM SEBELUMNYA sebagai satu-satunya referensi historis.]" : ""}`;
     }
     return JSON.stringify(stats[label] ?? null);
   };

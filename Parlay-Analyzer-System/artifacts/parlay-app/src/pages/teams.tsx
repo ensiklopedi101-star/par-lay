@@ -124,7 +124,7 @@ export default function Teams() {
             role="tab"
             aria-selected={seasonMode === option.value}
             variant={seasonMode === option.value ? "default" : "outline"}
-            className={seasonMode === option.value ? "" : "bg-white"}
+            className={seasonMode === option.value ? "" : "bg-card"}
             onClick={() => setSeasonMode(option.value)}
           >
             {option.label}
@@ -132,15 +132,15 @@ export default function Teams() {
         ))}
       </div>
 
-      <div className="grid gap-3 rounded-2xl border border-border bg-white p-4 shadow-sm md:grid-cols-[1fr_280px]">
+      <div className="grid gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm md:grid-cols-[1fr_280px]">
         <div>
           <label htmlFor="team-search" className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cari tim</label>
-          <Input id="team-search" data-testid="input-team-search" placeholder="Contoh: Arsenal, Barcelona, Enschede…" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-white" />
+          <Input id="team-search" data-testid="input-team-search" placeholder="Contoh: Arsenal, Barcelona, Enschede…" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-card" />
         </div>
         <div>
           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">Liga</label>
           <Select value={leagueSlug} onValueChange={setLeagueSlug}>
-            <SelectTrigger className="w-full bg-white" data-testid="select-league">
+            <SelectTrigger className="w-full bg-card" data-testid="select-league">
               <SelectValue placeholder="Semua liga" />
             </SelectTrigger>
             <SelectContent>
