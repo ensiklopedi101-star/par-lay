@@ -86682,6 +86682,7 @@ function validateStatPayload(statType, statData) {
 
 // src/routes/stats-ingest.ts
 init_team_stats_merge();
+init_stats_integrity();
 var router8 = (0, import_express8.Router)();
 function requireApiKey(req, res, next) {
   const configuredKey = process.env["EXTENSION_API_KEY"];
@@ -86744,11 +86745,20 @@ async function upsertTeamStat(leagueSlug, season, teamName, statType, statData, 
     team_name: displayTeam,
     updated_at: (/* @__PURE__ */ new Date()).toISOString()
   };
+  const { stats: sanitizedExisting, removed } = normalizeStatsRow({
+    ...mergedExisting
+  });
+  for (const hit of removed) {
+    logger.warn(
+      { leagueSlug, season, teamName: displayTeam, kol: hit.column },
+      "Ingest: membuang blok korup dari baris tersimpan (bertentangan dengan nama kolom)"
+    );
+  }
   for (const column of TEAM_STATS_JSON_COLUMNS) {
-    const existingValue = mergedExisting[column];
+    const existingValue = sanitizedExisting[column];
     if (existingValue !== null && existingValue !== void 0) payload[column] = existingValue;
   }
-  const existingStat = mergedExisting[statType];
+  const existingStat = sanitizedExisting[statType];
   payload[statType] = {
     ...existingStat && typeof existingStat === "object" && !Array.isArray(existingStat) ? existingStat : {},
     ...statData

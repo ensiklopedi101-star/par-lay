@@ -16,6 +16,7 @@ import {
   preferredTeamDisplayName,
   TEAM_STATS_JSON_COLUMNS,
 } from "../lib/team-stats-merge";
+import { normalizeStatsRow } from "../lib/stats-integrity";
 
 const router: IRouter = Router();
 
@@ -128,12 +129,30 @@ async function upsertTeamStat(
     updated_at: new Date().toISOString(),
   };
 
+  // Kontaminasi lama (La Liga 2026-27): 18 baris menyimpan tabel "Goals
+  // Conceded" di kolom stats_goals_scored. Teks yang sama sudah ada di
+  // stats_goals_conceded, jadi tidak ada informasi yang hilang. Buang blok
+  // yang bertentangan SEBELUM digabung ke payload — payload update menimpa
+  // SELURUH kolom, jadi membawa blok korup itu memicu constraint
+  // team_stats_scored_not_conceded di update mana pun (17 dari 20 tim
+  // tertolak pada ingest stats_team_form 2026-11-13, bukan karena datanya
+  // salah, melainkan karena blok korup ikut terseret).
+  const { stats: sanitizedExisting, removed } = normalizeStatsRow({
+    ...(mergedExisting as Record<string, unknown>),
+  });
+  for (const hit of removed) {
+    logger.warn(
+      { leagueSlug, season, teamName: displayTeam, kol: hit.column },
+      "Ingest: membuang blok korup dari baris tersimpan (bertentangan dengan nama kolom)",
+    );
+  }
+
   // Fold complementary categories from any legacy aliases into the row being updated.
   for (const column of TEAM_STATS_JSON_COLUMNS) {
-    const existingValue = mergedExisting[column];
+    const existingValue = sanitizedExisting[column];
     if (existingValue !== null && existingValue !== undefined) payload[column] = existingValue;
   }
-  const existingStat = mergedExisting[statType];
+  const existingStat = sanitizedExisting[statType];
   payload[statType] = {
     ...(existingStat && typeof existingStat === "object" && !Array.isArray(existingStat)
       ? existingStat as Record<string, unknown>
