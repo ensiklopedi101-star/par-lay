@@ -56,9 +56,14 @@ export function normalizeLeagueSlug(raw: string): string {
  * slug and this stays empty.
  */
 const SLUG_ALIASES: Record<string, string> = {
-  "spain-la-liga": "spain-la-liga",
-  "spain-laliga": "spain-la-liga",
-  "la-liga": "spain-la-liga",
+  /* Slug resmi mengikuti tabel `leagues` dan konfigurasi odds/fixture:
+     "spain-laliga". Ejaan FootyStats "spain/la-liga" dinormalisasi menjadi
+     "spain-la-liga" oleh normalizeLeagueSlug, lalu alias ini meluruskannya
+     ke slug resmi. Sebelumnya alias justru menunjuk "spain-la-liga" yang
+     tidak ada di tabel leagues, sehingga ingest La Liga selalu 422. */
+  "spain-la-liga": "spain-laliga",
+  "spain-laliga": "spain-laliga",
+  "la-liga": "spain-laliga",
   "england-premier-league": "england-premier-league",
   "england-epl": "england-premier-league",
   "premier-league": "england-premier-league",
@@ -146,6 +151,19 @@ export async function resolveLeagueSlug(raw: string): Promise<ResolvedLeague> {
   }
   if (known.has(aliased)) {
     return { ok: true, slug: aliased, raw: String(raw ?? "") };
+  }
+
+  /* Varian ejaan kompetisi yang sama: "…-la-liga" vs "…-laliga" (dan
+     sebaliknya). Bila hanya satu ejaan yang terdaftar di tabel leagues,
+     pakai ejaan terdaftar itu daripada menolak impor yang sebenarnya sah. */
+  const spellingVariants = [
+    aliased.replace(/-la-liga$/, "-laliga"),
+    aliased.replace(/-laliga$/, "-la-liga"),
+  ].filter((variant) => variant !== aliased);
+  for (const variant of spellingVariants) {
+    if (known.has(variant)) {
+      return { ok: true, slug: variant, raw: String(raw ?? "") };
+    }
   }
 
   /* Suggest the closest known slugs so the caller can fix the extension. */
