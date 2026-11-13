@@ -31,6 +31,7 @@ import {
 import type { LeagueAverages } from "../lib/quant/strength";
 import { getGeminiModel } from "./model-discovery";
 import { shadowLogQuantAnalysis } from "./quant-shadow";
+import { shadowLogLlmAnalysis } from "./llm-shadow";
 import { classifyOddsMarket } from "./odds-fetcher";
 import { getActiveLearningPromptVersion } from "./prompt-learning";
 import {
@@ -2091,6 +2092,34 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     }
   } catch (shadowError) {
     logger.warn({ shadowError, fixtureId }, "[AI-ANALYSIS] Quant shadow log dilewati");
+  }
+
+  /*
+   * P3: catat SEMUA market jalur LLM ke ledger yang sama (model_version = 1).
+   *
+   * Tanpa ini, hanya quant v2 yang punya baris yang bisa diberi outcome dan
+   * odds_close — jalur LLM tidak akan pernah bisa dibandingkan secara adil
+   * (lihat lib/llm-ledger.ts). Sama seperti quant shadow: observasi saja,
+   * tidak mengubah rekomendasi, dan kegagalannya tidak mematahkan analisis.
+   */
+  try {
+    const llmShadow = await shadowLogLlmAnalysis({
+      fixtureId,
+      analysedAt: analyzedAt,
+      matrix: matchContext.matrix,
+      markets: matchContext.markets,
+      odds: structuredOdds,
+      betLabel: parsedRecommendation.marketBet,
+      betLine: oddsMatch?.matchedLine ?? oddsMatch?.line ?? null,
+    });
+    if (llmShadow.logged > 0) {
+      logger.info(
+        { fixtureId, selections: llmShadow.logged, skipped: llmShadow.skipped },
+        "[AI-ANALYSIS] LLM shadow log (P3) tersimpan",
+      );
+    }
+  } catch (llmShadowError) {
+    logger.warn({ llmShadowError, fixtureId }, "[AI-ANALYSIS] LLM shadow log dilewati");
   }
 
   return {

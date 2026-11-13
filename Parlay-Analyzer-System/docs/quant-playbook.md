@@ -208,8 +208,28 @@ ada bukti berarti memindahkan risiko dari "tidak pernah bertaruh" ke "bertaruh t
 dasar". Setelah ~50 seleksi terkumpul, bandingkan `p_final` vs hasil nyata (Brier),
 lalu naikkan ke `enforced`.
 
-Yang **belum** dikerjakan: menulis `prediction_selections` dari jalur LLM (P3) dan
-menaikkan gerbang ke `enforced` (P1). Keduanya menunggu data bayangan di atas.
+Yang **belum** dikerjakan: menaikkan gerbang ke `enforced` (P1). Itu menunggu
+data bayangan di atas.
+
+### P3 — selesai dibangun (13 Nov 2026)
+
+| Komponen | File | Isi |
+|---|---|---|
+| Builder baris v1 | `lib/llm-ledger.ts` | Semua market (ML/BTTS/Totals/AH) dari satu bookmaker, `market_key` identik dengan engine quant, `p_final` = blend 0.35·model + 0.65·pasar, baris tanpa probabilitas model yang sah **tidak ditulis** |
+| Writer v1 | `services/llm-shadow.ts` + hook di `ai-analysis.ts` | Upsert `model_version = 1` setelah quant shadow; gagal tidak pernah mematahkan analisis |
+| Laporan bukti | `lib/ledger-report.ts` | Memakai ulang `summarizeLedger` + `fitBlendWeight`: Brier, BSS vs pasar, ECE, CLV + t-stat, w*, per versi & per family, dan 5 gerbang Fase 3 |
+| Endpoint | `GET /api/learning/ledger` | Read-only; vonis di bawah ambang sampel wajib `insufficient` |
+
+Karena `market_key` v1 sama dengan v2, job Fase 2 yang sudah ada
+(`closing`, `outcomes`) otomatis mengisi `odds_close` dan `outcome` baris v1
+tanpa perubahan. Tes: 317 lulus (11 baru untuk P3).
+
+**Yang belum terjadi (bukan kode):** ledger produksi masih 0 baris dan
+`ai_predictions` terakhir 2026-10-25, karena workflow `odds-sync` gagal di
+semua run (job mati dalam 2–4 detik = guard secrets `API_BASE_URL`/
+`CRON_SECRET` di GitHub belum diisi, langkah manual sisa PR #13). Selama itu
+belum diisi, tidak ada analisis baru, dan P3 tidak akan mengumpulkan satu
+baris pun — sehebat apa pun kodenya.
 
 ## 9. Pagar yang tidak boleh dilanggar
 
