@@ -156,8 +156,14 @@ async function upsertTeamStat(
     if (snapshotIndex >= 0) existingRows[snapshotIndex] = { ...existingRows[snapshotIndex], ...payload };
     else existingRows.push({ id: existingId, ...payload });
   } else {
-    // Insert new row
-    payload.created_at = new Date().toISOString();
+    /* Insert baris baru. JANGAN tambahkan `created_at`: tabel
+       team_season_stats tidak punya kolom itu (skema: id, league_slug,
+       season, team_name, 11 kolom stats_*, updated_at, team_key).
+       Menulisnya membuat SETIAP insert tim baru gagal dengan
+       "Could not find the 'created_at' column" — bug yang menelan
+       FC Twente & Go Ahead Eagles (Eredivisie 2026-27) dan diam-diam
+       menolak semua tim promosi/baru di liga mana pun. `updated_at`
+       di payload sudah cukup dan memang kolom tabelnya. */
     const { data: inserted, error } = await supabase
       .from("team_season_stats")
       .insert(payload)

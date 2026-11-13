@@ -54518,6 +54518,18 @@ var init_team_name_cleaner = __esm({
       "england-premier-league": {
         brighton: "Brighton & Hove Albion",
         "brighton hove albion": "Brighton & Hove Albion"
+      },
+      /* Eredivisie: nama provider (FootyStats) berbeda dari nama kanonik yang
+         sudah tersimpan di team_season_stats. Tanpa alias ini, pencocokan token
+         gagal total untuk Go Ahead Eagles ("ga" vs "go ahead") sehingga tim
+         dianggap baru dan jatuh ke jalur insert — yang menelan datanya. */
+      "netherlands-eredivisie": {
+        twente: "FC Twente Enschede",
+        "twente enschede": "FC Twente Enschede",
+        /* Nama tersimpan di DB hanya "Enschede" (bukan "FC Twente Enschede"). */
+        enschede: "FC Twente Enschede",
+        "go ahead eagles": "GA Eagles",
+        "ga eagles": "GA Eagles"
       }
     };
     GLOBAL_TEAM_ALIASES = {
@@ -86694,7 +86706,6 @@ async function upsertTeamStat(leagueSlug, season, teamName, statType, statData, 
     if (snapshotIndex >= 0) existingRows[snapshotIndex] = { ...existingRows[snapshotIndex], ...payload };
     else existingRows.push({ id: existingId, ...payload });
   } else {
-    payload.created_at = (/* @__PURE__ */ new Date()).toISOString();
     const { data: inserted, error } = await supabase.from("team_season_stats").insert(payload).select("id").maybeSingle();
     if (error) {
       return { success: false, error: error.message };
