@@ -34,6 +34,7 @@ import {
   type PairedMetric,
 } from "../lib/model-backtest";
 import { RollingFormTracker } from "../lib/rolling-form";
+import { collectPagedRows } from "./odds-history";
 import type { LeagueAverages } from "../lib/quant/strength";
 
 /** Liga yang punya statistik 2025-26 untuk dipakai sebagai prior. */
@@ -52,6 +53,8 @@ const FIXTURES_FROM = "2026-08-01";
 
 export interface ModelBacktestResult {
   generatedAt: string;
+  /** Total baris odds (ML+Totals+BTTS) yang berhasil dimuat — penunjuk integritas paginasi. */
+  oddsRowsLoaded: number;
   fixturesTotal: number;
   skippedNoStats: number;
   skippedNoMarket: number;
@@ -174,17 +177,28 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
   const fixtureRows = (fixtures ?? []) as Array<Record<string, unknown>>;
   const ids = fixtureRows.map((f) => String(f["fixture_id"]));
   const oddsByMatch = new Map<string, Array<Record<string, unknown>>>();
+  let oddsRowsLoaded = 0;
   for (let i = 0; i < ids.length; i += 25) {
-    const { data, error } = await supabase
-      .from("odds_history")
-      .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
-      .in("match_id", ids.slice(i, i + 25))
-      .order("captured_at", { ascending: false })
-      .limit(1000);
-    if (error) throw new Error(`odds_history: ${error.message}`);
-    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    /*
+     * WAJIB terpaginasi penuh: sejak query memuat ML+Totals+BTTS, satu
+     * potongan bisa berisi >1000 baris dan limit datar akan membuang
+     * baris ML secara diam-diam (pernah terjadi: n vs pasar anjlok
+     * 127 → 56 dan seluruh vonis bergeser). collectPagedRows adalah
+     * perbaikan yang sama seperti PR #27.
+     */
+    const rows = await collectPagedRows<Record<string, unknown>>(async (from, to) => {
+      const { data, error } = await supabase!
+        .from("odds_history")
+        .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
+        .in("match_id", ids.slice(i, i + 25))
+        .order("captured_at", { ascending: false })
+        .range(from, to);
+      return { data: (data ?? []) as Array<Record<string, unknown>>, error };
+    });
+    for (const row of rows) {
       const marketClass = classifyOddsMarket(row["market_type"]);
       if (marketClass !== "ML" && marketClass !== "Totals" && marketClass !== "BTTS") continue;
+      oddsRowsLoaded++;
       const arr = oddsByMatch.get(String(row["match_id"])) ?? [];
       arr.push(row);
       oddsByMatch.set(String(row["match_id"]), arr);
@@ -377,6 +391,7 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
 
   const value: ModelBacktestResult = {
     generatedAt: new Date().toISOString(),
+    oddsRowsLoaded,
     fixturesTotal: fixtureRows.length,
     skippedNoStats,
     skippedNoMarket,

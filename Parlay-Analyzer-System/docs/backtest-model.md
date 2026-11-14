@@ -113,3 +113,14 @@ terakhir sebelum keputusan desain:
    BTTS terakhir sebelum kick-off, konsensus fair yang sama). Pasar
    1X2 adalah yang paling efisien; keunggulan model — bila ada —
    lebih mungkin bersembunyi di pasar turunan gol.
+
+## Insiden integritas (14 Nov 2026)
+
+Perluasan query odds ke ML+Totals+BTTS tanpa paginasi membuat baris
+ML terdesak batas 1000 baris: n vs pasar anjlok 127 → 56 dan vonis
+bergeser ke −7,72% dari subset rusak. Vonis itu **dibatalkan**.
+Perbaikannya: `collectPagedRows` (patrun PR #27) + penunjuk
+`oddsRowsLoaded` di panel. Pelajaran permanen: setiap perubahan
+cakupan query wajib memeriksa bahwa n sampel tidak bergerak tanpa
+penjelasan — angka yang berubah diam-diam lebih berbahaya daripada
+angka buruk.

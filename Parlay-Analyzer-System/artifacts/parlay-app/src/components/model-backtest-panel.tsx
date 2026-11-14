@@ -281,7 +281,8 @@ export function ModelBacktestPanel({
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               Cakupan: {data.fixturesTotal} pertandingan selesai · {data.skippedNoStats} dilewati karena
               statistik prior salah satu tim tidak ada (mis. tim promosi) · {data.skippedNoMarket} tanpa
-              snapshot pasar pra-pertandingan. Over 2.5 log-loss {fmt(report.over25.logLoss)} · BTTS{" "}
+              snapshot pasar pra-pertandingan · {data.oddsRowsLoaded} baris odds dimuat (integritas
+              paginasi). Over 2.5 log-loss {fmt(report.over25.logLoss)} · BTTS{" "}
               {fmt(report.btts.logLoss)}. Diperbarui {new Date(data.generatedAt).toLocaleString("id-ID")}.
             </p>
           </>

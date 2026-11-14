@@ -89652,6 +89652,7 @@ var RollingFormTracker = class {
 };
 
 // src/services/model-backtest.ts
+init_odds_history();
 var BACKTEST_LEAGUES = {
   "england-premier-league": "england-premier-league",
   "italy-serie-a": "italy-serie-a",
@@ -89724,12 +89725,16 @@ async function getModelBacktest(force = false) {
   const fixtureRows = fixtures ?? [];
   const ids = fixtureRows.map((f) => String(f["fixture_id"]));
   const oddsByMatch = /* @__PURE__ */ new Map();
+  let oddsRowsLoaded = 0;
   for (let i = 0; i < ids.length; i += 25) {
-    const { data, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", ids.slice(i, i + 25)).order("captured_at", { ascending: false }).limit(1e3);
-    if (error) throw new Error(`odds_history: ${error.message}`);
-    for (const row of data ?? []) {
+    const rows = await collectPagedRows(async (from, to) => {
+      const { data, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", ids.slice(i, i + 25)).order("captured_at", { ascending: false }).range(from, to);
+      return { data: data ?? [], error };
+    });
+    for (const row of rows) {
       const marketClass = classifyOddsMarket(row["market_type"]);
       if (marketClass !== "ML" && marketClass !== "Totals" && marketClass !== "BTTS") continue;
+      oddsRowsLoaded++;
       const arr = oddsByMatch.get(String(row["match_id"])) ?? [];
       arr.push(row);
       oddsByMatch.set(String(row["match_id"]), arr);
@@ -89878,6 +89883,7 @@ async function getModelBacktest(force = false) {
   );
   const value = {
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    oddsRowsLoaded,
     fixturesTotal: fixtureRows.length,
     skippedNoStats,
     skippedNoMarket,
