@@ -476,7 +476,24 @@ export interface ModelBacktestReportData {
       modelLogLoss: number;
       vsMarket: { n: number; skill: number; tStat: number | null } | null;
     }>;
+    byPeriod: Array<{
+      period: string;
+      n: number;
+      modelLogLoss: number;
+      vsMarket: { n: number; skill: number; tStat: number | null } | null;
+    }>;
     verdict: string;
+  };
+  calibration: {
+    trainN: number;
+    validationN: number;
+    defaultParams: { xgWeight: number; shrinkK: number };
+    bestParams: { xgWeight: number; shrinkK: number } | null;
+    bestTrainSkill: number | null;
+    defaultValidation: { skill: number; tStat: number | null } | null;
+    bestValidation: { skill: number; tStat: number | null } | null;
+    adoptionJustified: boolean;
+    note: string;
   };
 }
 
