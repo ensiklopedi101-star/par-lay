@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { getLearningSummary } from "../services/learning-summary";
 import { getLedgerReport } from "../services/ledger-report";
+import { getModelBacktest } from "../services/model-backtest";
 import { requireAdmin } from "../middlewares/admin";
 import {
   backfillSettledPredictionEvaluations,
@@ -41,6 +42,20 @@ router.get("/learning/ledger", async (_req, res) => {
   } catch (error) {
     logger.error({ error }, "[LEARNING] Failed to build ledger report");
     res.status(500).json({ error: "Failed to load ledger report" });
+  }
+});
+
+/**
+ * Backtest model Poisson vs pasar (prior musim lalu → hasil musim ini).
+ * Read-only dan ter-cache 10 menit di server; panel Transparansi yang
+ * membacanya, bukan jalur analisis.
+ */
+router.get("/learning/model-backtest", async (_req, res) => {
+  try {
+    res.json(await getModelBacktest());
+  } catch (error) {
+    logger.error({ error }, "[MODEL-BACKTEST] Failed to build report");
+    res.status(500).json({ error: "Failed to load model backtest" });
   }
 });
 
