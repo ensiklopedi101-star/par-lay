@@ -446,6 +446,49 @@ export function useGetSyncStatus() {
   });
 }
 
+/* ─── Backtest Model Poisson vs Pasar ─── */
+export interface ModelBacktestReportData {
+  generatedAt: string;
+  fixturesTotal: number;
+  skippedNoStats: number;
+  skippedNoMarket: number;
+  report: {
+    samples: number;
+    withMarket: number;
+    oneX2: {
+      modelLogLoss: number;
+      modelBrier: number;
+      argmaxHitRate: number;
+      vsMarket: {
+        n: number;
+        modelLogLoss: number;
+        marketLogLoss: number;
+        skill: number;
+        tStat: number | null;
+      } | null;
+    };
+    over25: { n: number; logLoss: number; brier: number; baseRate: number };
+    btts: { n: number; logLoss: number; brier: number; baseRate: number };
+    calibrationEce: number | null;
+    byLeague: Array<{
+      league: string;
+      n: number;
+      modelLogLoss: number;
+      vsMarket: { n: number; skill: number; tStat: number | null } | null;
+    }>;
+    verdict: string;
+  };
+}
+
+export const getGetModelBacktestQueryKey = () => ["learning/model-backtest"];
+export function useGetModelBacktest() {
+  return useQuery<ModelBacktestReportData>({
+    queryKey: getGetModelBacktestQueryKey(),
+    queryFn: () => apiGet<ModelBacktestReportData>(`${API_BASE}/learning/model-backtest`),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 /* ─── Ringkasan Settlement ─── */
 export const getGetSettlementSummaryQueryKey = () => ["sync/settlement-summary"];
 export function useGetSettlementSummary() {

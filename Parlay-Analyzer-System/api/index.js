@@ -50995,9 +50995,9 @@ async function fetchActiveLeagueSlugs(apiKey) {
   }
 }
 async function fetchLeagueEvents(leagueSlug, apiKey) {
-  const cached = leagueEventsCache.get(leagueSlug);
-  if (cached && Date.now() - cached.at < LEAGUE_EVENTS_CACHE_MS) {
-    return cached.events;
+  const cached2 = leagueEventsCache.get(leagueSlug);
+  if (cached2 && Date.now() - cached2.at < LEAGUE_EVENTS_CACHE_MS) {
+    return cached2.events;
   }
   const collected = [];
   const seen = /* @__PURE__ */ new Set();
@@ -56389,9 +56389,9 @@ function computeLeagueAverages(rows) {
     );
     return { averages: null, teamsUsed, warnings };
   }
-  const mean2 = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
-  const homeGoals = mean2(home);
-  const awayGoals = mean2(away);
+  const mean3 = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
+  const homeGoals = mean3(home);
+  const awayGoals = mean3(away);
   if (awayGoals > homeGoals * 1.25) {
     warnings.push(
       `rata-rata gol tandang (${awayGoals.toFixed(2)}) melebihi tuan rumah (${homeGoals.toFixed(2)}) \u2014 kemungkinan kolom tertukar`
@@ -57997,8 +57997,8 @@ function teamStatsCacheKey(teamName, leagueSlug) {
 async function findTeamStatsCached(teamName, leagueSlug, cache) {
   if (!cache) return findTeamStats(teamName, leagueSlug);
   const key = teamStatsCacheKey(teamName, leagueSlug);
-  const cached = cache.get(key);
-  if (cached) return cached;
+  const cached2 = cache.get(key);
+  if (cached2) return cached2;
   const stats = await findTeamStats(teamName, leagueSlug);
   cache.set(key, stats);
   return stats;
@@ -58120,8 +58120,8 @@ function fairProbabilityForLabel(label, odds, line) {
 }
 async function resolveLeagueAverages(leagueSlug) {
   const key = leagueSlug.trim().toLowerCase();
-  const cached = leagueAverageCache.get(key);
-  if (cached && Date.now() - cached.at < LEAGUE_AVERAGE_TTL_MS) return cached.value;
+  const cached2 = leagueAverageCache.get(key);
+  if (cached2 && Date.now() - cached2.at < LEAGUE_AVERAGE_TTL_MS) return cached2.value;
   try {
     const { data, error } = await supabase.from("team_season_stats").select("team_name, season, stats_goals_scored, stats_goals_conceded").eq("league_slug", leagueSlug).order("season", { ascending: false }).limit(400);
     if (error || !data || data.length === 0) {
@@ -58143,10 +58143,10 @@ async function resolveLeagueAverages(leagueSlug) {
       leagueAverageCache.set(key, { at: Date.now(), value: null });
       return null;
     }
-    const mean2 = (values) => values.reduce((sum, value2) => sum + value2, 0) / values.length;
+    const mean3 = (values) => values.reduce((sum, value2) => sum + value2, 0) / values.length;
     const value = {
-      homeGoals: Number(mean2(home).toFixed(3)),
-      awayGoals: Number(mean2(away).toFixed(3))
+      homeGoals: Number(mean3(home).toFixed(3)),
+      awayGoals: Number(mean3(away).toFixed(3))
     };
     leagueAverageCache.set(key, { at: Date.now(), value });
     return value;
@@ -58605,13 +58605,13 @@ async function analyzeFixture(fixtureId, context) {
   ]);
   const homeStandings = buildStandingContext(homeTeam, homeStats);
   const awayStandings = buildStandingContext(awayTeam, awayStats);
-  const leagueAverages = await resolveLeagueAverages(leagueSlug);
+  const leagueAverages2 = await resolveLeagueAverages(leagueSlug);
   const matchContext = buildMatchContext({
     homeTeam,
     awayTeam,
     homeStats,
     awayStats,
-    league: leagueAverages,
+    league: leagueAverages2,
     standings: {
       home: homeStandings ? { position: homeStandings.position, points: homeStandings.points } : null,
       away: awayStandings ? { position: awayStandings.position, points: awayStandings.points } : null
@@ -86099,8 +86099,8 @@ function hydrateJob(row) {
   };
 }
 async function loadJob(jobId) {
-  const cached = batchJobs.get(jobId);
-  if (cached) return cached;
+  const cached2 = batchJobs.get(jobId);
+  if (cached2) return cached2;
   const { data, error } = await supabase.from("scan_jobs").select("*").eq("id", jobId).gt("updated_at", new Date(Date.now() - SCAN_JOB_TTL_MS).toISOString()).maybeSingle();
   if (error) {
     logger.warn({ error, jobId }, "BATCH SCANNER: gagal membaca job tersimpan");
@@ -89296,6 +89296,276 @@ async function getLedgerReport() {
   return buildLedgerReport(await loadLedgerRows());
 }
 
+// src/services/model-backtest.ts
+init_supabase_client();
+init_logger();
+init_match_context();
+init_poisson();
+init_stats_integrity();
+init_team_name_cleaner();
+init_odds_market();
+init_betting_math();
+
+// src/lib/model-backtest.ts
+var EPS = 1e-12;
+function clampProb(p) {
+  return Math.min(1 - EPS, Math.max(EPS, p));
+}
+function oneX2Outcome(s) {
+  if (s.actual.homeGoals > s.actual.awayGoals) return "home";
+  if (s.actual.homeGoals < s.actual.awayGoals) return "away";
+  return "draw";
+}
+function logLoss1X2(probs, s) {
+  const outcome = oneX2Outcome(s);
+  return -Math.log(clampProb(probs[outcome]));
+}
+function brier1X2(probs, s) {
+  const outcome = oneX2Outcome(s);
+  let sum = 0;
+  for (const key of ["home", "draw", "away"]) {
+    const y = key === outcome ? 1 : 0;
+    sum += (probs[key] - y) ** 2;
+  }
+  return sum;
+}
+function mean2(values) {
+  return values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length;
+}
+function paired(samples) {
+  const withMarket = samples.filter((s) => s.market != null);
+  if (withMarket.length === 0) return null;
+  const diffs = withMarket.map(
+    (s) => logLoss1X2(s.market, s) - logLoss1X2(s.model, s)
+  );
+  const skill = mean2(diffs);
+  let tStat = null;
+  if (diffs.length >= 2) {
+    const variance = mean2(diffs.map((d) => (d - skill) ** 2));
+    const sd2 = Math.sqrt(variance);
+    tStat = sd2 > 0 ? skill / (sd2 / Math.sqrt(diffs.length)) : null;
+  }
+  return {
+    n: withMarket.length,
+    modelLogLoss: mean2(withMarket.map((s) => logLoss1X2(s.model, s))),
+    marketLogLoss: mean2(withMarket.map((s) => logLoss1X2(s.market, s))),
+    skill,
+    tStat
+  };
+}
+function binaryMetric(samples, prob, outcome) {
+  const probs = samples.map(prob);
+  const ys = samples.map((s) => outcome(s) ? 1 : 0);
+  return {
+    n: samples.length,
+    logLoss: mean2(probs.map((p, i) => {
+      const y = ys[i];
+      return -(y * Math.log(clampProb(p)) + (1 - y) * Math.log(clampProb(1 - p)));
+    })),
+    brier: mean2(probs.map((p, i) => (p - ys[i]) ** 2)),
+    baseRate: mean2(ys)
+  };
+}
+function calibrationEce(samples) {
+  const points = [];
+  for (const s of samples) {
+    const outcome = oneX2Outcome(s);
+    points.push({ p: s.model.home, y: outcome === "home" ? 1 : 0 });
+    points.push({ p: s.model.draw, y: outcome === "draw" ? 1 : 0 });
+    points.push({ p: s.model.away, y: outcome === "away" ? 1 : 0 });
+    points.push({ p: s.model.over25, y: s.actual.homeGoals + s.actual.awayGoals > 2.5 ? 1 : 0 });
+    points.push({ p: s.model.bttsYes, y: s.actual.homeGoals > 0 && s.actual.awayGoals > 0 ? 1 : 0 });
+  }
+  if (points.length < 5) return null;
+  const bins = /* @__PURE__ */ new Map();
+  for (const point of points) {
+    const bin = Math.min(9, Math.floor(point.p * 10));
+    const bucket = bins.get(bin) ?? { p: [], y: [] };
+    bucket.p.push(point.p);
+    bucket.y.push(point.y);
+    bins.set(bin, bucket);
+  }
+  let ece = 0;
+  for (const bucket of bins.values()) {
+    ece += bucket.p.length / points.length * Math.abs(mean2(bucket.p) - mean2(bucket.y));
+  }
+  return ece;
+}
+function buildModelBacktest(samples) {
+  const vsMarket = paired(samples);
+  const argmaxHits = samples.filter((s) => {
+    const best = Math.max(s.model.home, s.model.draw, s.model.away);
+    const pick2 = best === s.model.home ? "home" : best === s.model.draw ? "draw" : "away";
+    return pick2 === oneX2Outcome(s);
+  }).length;
+  const leagues = /* @__PURE__ */ new Map();
+  for (const s of samples) {
+    const arr = leagues.get(s.league) ?? [];
+    arr.push(s);
+    leagues.set(s.league, arr);
+  }
+  const ece = calibrationEce(samples);
+  let verdict;
+  if (samples.length < 30) {
+    verdict = `Sampel terlalu kecil (n=${samples.length} < 30) \u2014 belum ada vonis yang boleh dipercaya.`;
+  } else if (vsMarket == null) {
+    verdict = "Probabilitas pasar tidak tersedia \u2014 model hanya bisa dinilai absolut, bukan vs pasar.";
+  } else if (vsMarket.skill > 0 && (vsMarket.tStat ?? 0) >= 2) {
+    verdict = `Model mengalahkan pasar secara signifikan (skill ${(vsMarket.skill * 100).toFixed(2)}%, t=${vsMarket.tStat?.toFixed(2)}). Bukti awal mendukung \u2014 lanjutkan ke pengumpulan ledger live.`;
+  } else if (vsMarket.skill > 0) {
+    verdict = `Model di atas pasar tapi belum signifikan (skill ${(vsMarket.skill * 100).toFixed(2)}%, t=${vsMarket.tStat?.toFixed(2) ?? "\u2014"}). Arah benar, bukti belum cukup.`;
+  } else {
+    verdict = `Model TIDAK mengalahkan pasar pada sampel ini (skill ${(vsMarket.skill * 100).toFixed(2)}%, t=${vsMarket.tStat?.toFixed(2) ?? "\u2014"}). Probabilitas model belum layak jadi dasar bet tanpa campuran pasar.`;
+  }
+  return {
+    samples: samples.length,
+    withMarket: samples.filter((s) => s.market != null).length,
+    oneX2: {
+      modelLogLoss: mean2(samples.map((s) => logLoss1X2(s.model, s))),
+      modelBrier: mean2(samples.map((s) => brier1X2(s.model, s))),
+      argmaxHitRate: samples.length === 0 ? 0 : argmaxHits / samples.length,
+      vsMarket
+    },
+    over25: binaryMetric(samples, (s) => s.model.over25, (s) => s.actual.homeGoals + s.actual.awayGoals > 2.5),
+    btts: binaryMetric(samples, (s) => s.model.bttsYes, (s) => s.actual.homeGoals > 0 && s.actual.awayGoals > 0),
+    calibrationEce: ece,
+    byLeague: [...leagues.entries()].sort((a, b) => b[1].length - a[1].length).map(([league, rows]) => ({
+      league,
+      n: rows.length,
+      modelLogLoss: mean2(rows.map((s) => logLoss1X2(s.model, s))),
+      vsMarket: paired(rows)
+    })),
+    verdict
+  };
+}
+
+// src/services/model-backtest.ts
+var BACKTEST_LEAGUES = {
+  "england-premier-league": "england-premier-league",
+  "italy-serie-a": "italy-serie-a",
+  "netherlands-eredivisie": "netherlands-eredivisie",
+  "france-ligue-1": "france-ligue-1",
+  "spain-laliga": "spain-laliga",
+  "germany-bundesliga": "germany-bundesliga",
+  /* fixtures memakai ejaan ini; team_season_stats memakai south-korea-*. */
+  "republic-of-korea-k-league-1": "south-korea-k-league-1"
+};
+var PRIOR_SEASON = "2025-26";
+var FIXTURES_FROM = "2026-08-01";
+function leagueAverages(rows) {
+  const home = [];
+  const away = [];
+  for (const row of rows) {
+    const rates = parseTeamRates(normalizeStatsRow(row).stats);
+    if (rates.goalsForHome != null) home.push(rates.goalsForHome);
+    if (rates.goalsForAway != null) away.push(rates.goalsForAway);
+  }
+  if (home.length < 8 || away.length < 8) return DEFAULT_LEAGUE;
+  const mean3 = (v) => v.reduce((a, b) => a + b, 0) / v.length;
+  return { homeGoals: Number(mean3(home).toFixed(3)), awayGoals: Number(mean3(away).toFixed(3)) };
+}
+var cached = null;
+var CACHE_TTL_MS2 = 10 * 60 * 1e3;
+async function getModelBacktest(force = false) {
+  if (!force && cached && Date.now() - cached.at < CACHE_TTL_MS2) return cached.value;
+  if (!supabase) throw new Error("Supabase client not initialised");
+  const fixtureLeagues = Object.keys(BACKTEST_LEAGUES);
+  const { data: fixtures, error: fixturesError } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name, home_goals, away_goals").in("league_name", fixtureLeagues).gte("fixture_date", FIXTURES_FROM).not("home_goals", "is", null).limit(2e3);
+  if (fixturesError) throw new Error(`fixtures: ${fixturesError.message}`);
+  const { data: stats, error: statsError } = await supabase.from("team_season_stats").select("league_slug, team_name, stats_xg, stats_goals_scored, stats_goals_conceded, stats_team_form").eq("season", PRIOR_SEASON).in("league_slug", Object.values(BACKTEST_LEAGUES)).limit(500);
+  if (statsError) throw new Error(`team_season_stats: ${statsError.message}`);
+  const statsByLeague = /* @__PURE__ */ new Map();
+  for (const row of stats ?? []) {
+    const arr = statsByLeague.get(row.league_slug) ?? [];
+    arr.push(row);
+    statsByLeague.set(row.league_slug, arr);
+  }
+  const averagesByLeague = /* @__PURE__ */ new Map();
+  for (const [league, rows] of statsByLeague) averagesByLeague.set(league, leagueAverages(rows));
+  const fixtureRows = fixtures ?? [];
+  const ids = fixtureRows.map((f) => String(f["fixture_id"]));
+  const oddsByMatch = /* @__PURE__ */ new Map();
+  for (let i = 0; i < ids.length; i += 25) {
+    const { data, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", ids.slice(i, i + 25)).eq("market_type", "ML").order("captured_at", { ascending: false }).limit(1e3);
+    if (error) throw new Error(`odds_history: ${error.message}`);
+    for (const row of data ?? []) {
+      if (classifyOddsMarket(row["market_type"]) !== "ML") continue;
+      const arr = oddsByMatch.get(String(row["match_id"])) ?? [];
+      arr.push(row);
+      oddsByMatch.set(String(row["match_id"]), arr);
+    }
+  }
+  const samples = [];
+  let skippedNoStats = 0;
+  let skippedNoMarket = 0;
+  for (const fixture of fixtureRows) {
+    const league = BACKTEST_LEAGUES[String(fixture["league_name"])] ?? String(fixture["league_name"]);
+    const rows = statsByLeague.get(league) ?? [];
+    const universe = rows.map((r) => r.team_name);
+    const find = (team) => rows.find((r) => teamNamesEquivalent(team, r.team_name, league, universe));
+    const homeRow = find(String(fixture["home_team_name"]));
+    const awayRow = find(String(fixture["away_team_name"]));
+    if (!homeRow || !awayRow) {
+      skippedNoStats++;
+      continue;
+    }
+    const lambdas = estimateLambdas(
+      parseTeamRates(normalizeStatsRow(homeRow).stats),
+      parseTeamRates(normalizeStatsRow(awayRow).stats),
+      averagesByLeague.get(league) ?? DEFAULT_LEAGUE
+    );
+    const probs = marketProbabilities(scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway));
+    const kickoffMs = new Date(String(fixture["fixture_date"])).getTime();
+    const prematch = (oddsByMatch.get(String(fixture["fixture_id"])) ?? []).filter((r) => r["captured_at"] && new Date(String(r["captured_at"])).getTime() < kickoffMs);
+    let market = null;
+    if (prematch.length > 0) {
+      const latestTs = Math.max(...prematch.map((r) => new Date(String(r["captured_at"])).getTime()));
+      const byBookmaker = /* @__PURE__ */ new Map();
+      for (const r of prematch) {
+        if (new Date(String(r["captured_at"])).getTime() !== latestTs) continue;
+        if (r["odds_1"] != null && r["odds_draw"] != null && r["odds_2"] != null) {
+          byBookmaker.set(String(r["bookmaker"] ?? "?"), [Number(r["odds_1"]), Number(r["odds_draw"]), Number(r["odds_2"])]);
+        }
+      }
+      const books = [...byBookmaker.values()];
+      const home = consensusFairProbability(books, 0);
+      const draw = consensusFairProbability(books, 1);
+      const away = consensusFairProbability(books, 2);
+      if (home != null && draw != null && away != null) {
+        const total = home + draw + away;
+        market = { home: home / total, draw: draw / total, away: away / total };
+      }
+    }
+    if (market == null) skippedNoMarket++;
+    samples.push({
+      id: String(fixture["fixture_id"]),
+      league,
+      model: {
+        home: probs.homeWin,
+        draw: probs.draw,
+        away: probs.awayWin,
+        over25: probs.over25,
+        bttsYes: probs.bttsYes
+      },
+      market,
+      actual: { homeGoals: Number(fixture["home_goals"]), awayGoals: Number(fixture["away_goals"]) }
+    });
+  }
+  const value = {
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    fixturesTotal: fixtureRows.length,
+    skippedNoStats,
+    skippedNoMarket,
+    report: buildModelBacktest(samples)
+  };
+  cached = { at: Date.now(), value };
+  logger.info(
+    { samples: samples.length, skippedNoStats, skippedNoMarket },
+    "[MODEL-BACKTEST] laporan dibuat"
+  );
+  return value;
+}
+
 // src/routes/learning.ts
 init_prompt_learning();
 var router13 = (0, import_express13.Router)();
@@ -89316,6 +89586,14 @@ router13.get("/learning/ledger", async (_req, res) => {
   } catch (error) {
     logger.error({ error }, "[LEARNING] Failed to build ledger report");
     res.status(500).json({ error: "Failed to load ledger report" });
+  }
+});
+router13.get("/learning/model-backtest", async (_req, res) => {
+  try {
+    res.json(await getModelBacktest());
+  } catch (error) {
+    logger.error({ error }, "[MODEL-BACKTEST] Failed to build report");
+    res.status(500).json({ error: "Failed to load model backtest" });
   }
 });
 router13.get("/learning/optimizer", requireAdmin, async (_req, res) => {
