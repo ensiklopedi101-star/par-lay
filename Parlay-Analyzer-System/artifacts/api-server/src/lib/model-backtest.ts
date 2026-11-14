@@ -16,6 +16,8 @@
 export interface BacktestSample {
   id: string;
   league: string;
+  /** ISO kick-off; dipakai segmentasi peluruhan prior per periode. */
+  kickoff?: string;
   model: { home: number; draw: number; away: number; over25: number; bttsYes: number };
   /** Probabilitas fair pasar (sudah di-devig); null bila pasar tidak tersedia. */
   market: { home: number; draw: number; away: number } | null;
@@ -54,7 +56,32 @@ export interface ModelBacktestReport {
   /** ECE atas semua probabilitas biner model (1X2 per sisi, O2.5, BTTS). */
   calibrationEce: number | null;
   byLeague: Array<{ league: string; n: number; modelLogLoss: number; vsMarket: PairedMetric | null }>;
+  /** Per bulan kick-off — mengukur apakah prior musim lalu meluruh. */
+  byPeriod: Array<{ period: string; n: number; modelLogLoss: number; vsMarket: PairedMetric | null }>;
   verdict: string;
+}
+
+export interface LambdaParamCombo {
+  xgWeight: number;
+  shrinkK: number;
+}
+
+export interface CalibrationExperiment {
+  trainN: number;
+  validationN: number;
+  defaultParams: LambdaParamCombo;
+  /** Kombinasi terbaik di data latih (bukan data validasi). */
+  bestParams: LambdaParamCombo | null;
+  bestTrainSkill: number | null;
+  defaultValidation: PairedMetric | null;
+  bestValidation: PairedMetric | null;
+  /**
+   * Parameter baru hanya layak diadopsi bila mengalahkan bawaan di data
+   * validasi yang tidak dipakai memilihnya, dan skill validasinya positif.
+   * Menang di data latih saja adalah overfitting dengan nama keren.
+   */
+  adoptionJustified: boolean;
+  note: string;
 }
 
 const EPS = 1e-12;
@@ -203,6 +230,81 @@ export function buildModelBacktest(samples: BacktestSample[]): ModelBacktestRepo
         modelLogLoss: mean(rows.map((s) => logLoss1X2(s.model, s))),
         vsMarket: paired(rows),
       })),
+    byPeriod: [...samples.reduce((map, s) => {
+      const period = s.kickoff ? s.kickoff.slice(0, 7) : "unknown";
+      const arr = map.get(period) ?? [];
+      arr.push(s);
+      map.set(period, arr);
+      return map;
+    }, new Map<string, BacktestSample[]>()).entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([period, rows]) => ({
+        period,
+        n: rows.length,
+        modelLogLoss: mean(rows.map((s) => logLoss1X2(s.model, s))),
+        vsMarket: paired(rows),
+      })),
     verdict,
+  };
+}
+
+/**
+ * Nilai eksperimen kalibrasi parameter dengan disiplin train/validasi.
+ * `trainSkills[i]` dan `validation[i]` sejajar dengan `combos[i]`;
+ * kombinasi bawaan harus termasuk di dalamnya.
+ */
+export function buildCalibrationExperiment(
+  combos: LambdaParamCombo[],
+  trainSkills: Array<number | null>,
+  validation: Array<PairedMetric | null>,
+  defaultCombo: LambdaParamCombo,
+  trainN: number,
+  validationN: number,
+): CalibrationExperiment {
+  let bestIdx = -1;
+  let bestSkill = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < combos.length; i++) {
+    const skill = trainSkills[i];
+    if (skill != null && skill > bestSkill) {
+      bestSkill = skill;
+      bestIdx = i;
+    }
+  }
+  const defaultIdx = combos.findIndex(
+    (c) => c.xgWeight === defaultCombo.xgWeight && c.shrinkK === defaultCombo.shrinkK,
+  );
+  const bestParams = bestIdx >= 0 ? combos[bestIdx]! : null;
+  const bestValidation = bestIdx >= 0 ? validation[bestIdx]! : null;
+  const defaultValidation = defaultIdx >= 0 ? validation[defaultIdx]! : null;
+
+  const adoptionJustified = Boolean(
+    bestParams
+    && bestValidation
+    && defaultValidation
+    && bestValidation.skill > defaultValidation.skill
+    && bestValidation.skill > 0,
+  );
+
+  let note: string;
+  if (bestParams == null) {
+    note = "Tidak ada kombinasi yang bisa dinilai di data latih (pasar tidak tersedia).";
+  } else if (adoptionJustified) {
+    note = `Parameter xgWeight=${bestParams.xgWeight}, shrinkK=${bestParams.shrinkK} mengalahkan bawaan di data validasi (skill ${(bestValidation!.skill * 100).toFixed(2)}% vs ${(defaultValidation!.skill * 100).toFixed(2)}%) — layak diadopsi lewat perubahan kode tersendiri.`;
+  } else if (bestValidation && defaultValidation && bestValidation.skill <= defaultValidation.skill) {
+    note = `Kombinasi terbaik di data latih (xgWeight=${bestParams.xgWeight}, shrinkK=${bestParams.shrinkK}) TIDAK mengalahkan bawaan di validasi — itu overfitting; parameter bawaan dipertahankan.`;
+  } else {
+    note = `Kombinasi terbaik di data latih belum membuktikan skill positif di validasi — parameter bawaan dipertahankan.`;
+  }
+
+  return {
+    trainN,
+    validationN,
+    defaultParams: defaultCombo,
+    bestParams,
+    bestTrainSkill: bestIdx >= 0 ? bestSkill : null,
+    defaultValidation,
+    bestValidation,
+    adoptionJustified,
+    note,
   };
 }

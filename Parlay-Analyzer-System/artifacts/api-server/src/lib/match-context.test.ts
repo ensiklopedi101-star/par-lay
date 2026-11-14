@@ -11,6 +11,7 @@ import {
   parsePercent,
   parseStatNumber,
   parseTeamRates,
+  DEFAULT_LEAGUE,
   type TeamRatesParsed,
 } from "./match-context.js";
 import { scoreMatrix } from "./quant/poisson.js";
@@ -288,4 +289,18 @@ test("modelProbabilityForSelection menolak HT dan label asing dengan catatan", (
   const empty = modelProbabilityForSelection(matrix, markets, null);
   assert.equal(empty.probability, null);
   assert.equal(empty.family, null);
+});
+
+test("estimateLambdas params: xgWeight=0 mengabaikan xG; shrinkK besar menarik λ ke rata-rata liga", () => {
+    const strong = {
+      stats_xg: { MP: "38", xG: "2.50", xGA: "0.80" },
+      stats_goals_scored: { "Per Match": "2.00 Scored / match", Home: "2.20 / match", Away: "1.80 / match" },
+      stats_goals_conceded: { "Per Match": "1.00 Conceded / match", Home: "0.90 / match", Away: "1.10 / match" },
+    };
+    const rates = parseTeamRates(strong);
+    const withXg = estimateLambdas(rates, rates, DEFAULT_LEAGUE, { xgWeight: 1 });
+    const noXg = estimateLambdas(rates, rates, DEFAULT_LEAGUE, { xgWeight: 0 });
+    assert.ok(withXg.attackHome > noXg.attackHome, "xG tinggi harus menaikkan rasio serang bila berbobot");
+    const shrunk = estimateLambdas(rates, rates, DEFAULT_LEAGUE, { shrinkK: 10000 });
+    assert.ok(Math.abs(shrunk.lambdaHome - DEFAULT_LEAGUE.homeGoals) < Math.abs(noXg.lambdaHome - DEFAULT_LEAGUE.homeGoals));
 });

@@ -137,6 +137,58 @@ export function ModelBacktestPanel({
               </table>
             </div>
 
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Peluruhan prior per bulan
+                </div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {report.byPeriod.map((row) => (
+                      <tr key={row.period} className="border-b border-border/50">
+                        <td className="py-1.5 pr-3">{row.period}</td>
+                        <td className="py-1.5 pr-3 tabular-nums">n={row.n}</td>
+                        <td className="py-1.5 tabular-nums">
+                          {row.vsMarket ? pctSigned(row.vsMarket.skill) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Skill yang memburuk dari bulan ke bulan = prior musim lalu makin basi. Skill yang
+                  sudah buruk sejak bulan pertama = masalah di modelnya.
+                </p>
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Eksperimen kalibrasi parameter
+                </div>
+                <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm leading-relaxed">
+                  <p>
+                    Bawaan: bobot xG {data.calibration.defaultParams.xgWeight} · shrinkage K=
+                    {data.calibration.defaultParams.shrinkK}. Separuh sampel awal memilih kombinasi
+                    (latih n={data.calibration.trainN}), separuh akhir menghakiminya (validasi n=
+                    {data.calibration.validationN}).
+                  </p>
+                  <p className="mt-2">
+                    {data.calibration.bestParams
+                      ? `Terbaik di latih: bobot xG ${data.calibration.bestParams.xgWeight} · K=${data.calibration.bestParams.shrinkK} (skill latih ${data.calibration.bestTrainSkill != null ? pctSigned(data.calibration.bestTrainSkill) : "—"}; validasi ${data.calibration.bestValidation ? pctSigned(data.calibration.bestValidation.skill) : "—"} vs bawaan ${data.calibration.defaultValidation ? pctSigned(data.calibration.defaultValidation.skill) : "—"}). `
+                      : ""}
+                    {data.calibration.note}
+                  </p>
+                  <Badge
+                    variant="secondary"
+                    className={data.calibration.adoptionJustified ? "mt-2 bg-emerald-500/15 text-emerald-600" : "mt-2"}
+                  >
+                    {data.calibration.adoptionJustified
+                      ? "Adopsi parameter baru terjustifikasi"
+                      : "Parameter bawaan dipertahankan"}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               Cakupan: {data.fixturesTotal} pertandingan selesai · {data.skippedNoStats} dilewati karena
               statistik prior salah satu tim tidak ada (mis. tim promosi) · {data.skippedNoMarket} tanpa

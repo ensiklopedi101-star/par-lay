@@ -47,3 +47,22 @@ Keduanya memakai penyiapan sampel yang sama
    ditangkap sync (bukan closing line resmi exchange).
 3. Sampel awal kecil (orde 10²). t-stat menjaga agar kesimpulan tidak
    melebihi bukti — dan vonisnya akan berkata begitu bila memang begitu.
+
+## Dua eksperimen lanjutan (14 Nov 2026)
+
+Hasil pertama: skill −4,08% (t=−1,60), ECE 3,2 poin. Dua pertanyaan
+berikutnya dijawab otomatis di laporan yang sama:
+
+1. **Peluruhan prior** (`byPeriod`, per bulan kick-off). Skill yang
+   memburuk dari bulan ke bulan berarti prior musim lalu makin basi —
+   obatnya data musim berjalan. Skill yang sudah buruk sejak bulan
+   pertama berarti masalahnya di model.
+2. **Kalibrasi parameter** (`calibration`). Grid kasar bobot xG
+   {0, 0.3, 0.6, 0.8, 1.0} × shrinkage K {0, 3, 6, 12} dipilih di
+   separuh pertama sampel (kronologis) dan dihakimi di separuh kedua.
+   `adoptionJustified` hanya true bila kombinasi terpilih mengalahkan
+   bawaan (0,6 / K=6) di validasi **dan** skill validasinya positif.
+   Menang di data latih saja dilaporkan sebagai overfitting dan
+   parameter bawaan dipertahankan. Adopsi sendiri selalu berupa
+   perubahan kode tersendiri setelah membaca hasil validasi — tidak
+   pernah otomatis.

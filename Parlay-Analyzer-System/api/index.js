@@ -55436,25 +55436,27 @@ function shrink(ratio, matches, k = SHRINK_MATCHES) {
   const n = matches && matches > 0 ? matches : 0;
   return (n * ratio + k * 1) / (n + k);
 }
-function estimateLambdas(home, away, league = DEFAULT_LEAGUE) {
+function estimateLambdas(home, away, league = DEFAULT_LEAGUE, params = {}) {
+  const xgWeight = params.xgWeight ?? XG_WEIGHT;
+  const shrinkK = params.shrinkK ?? SHRINK_MATCHES;
   const teamAvg = Math.max(0.2, (league.homeGoals + league.awayGoals) / 2);
   const blend = (xg, actual, fallback) => {
-    if (xg != null && actual != null) return XG_WEIGHT * xg + (1 - XG_WEIGHT) * actual;
+    if (xg != null && actual != null) return xgWeight * xg + (1 - xgWeight) * actual;
     return xg ?? actual ?? fallback;
   };
   const attackHomeRatio = blend(home.xgFor, home.goalsForHome, home.goalsFor ?? teamAvg) / teamAvg;
   const defenseHomeRatio = blend(home.xgAgainst, home.goalsAgainstHome, home.goalsAgainst ?? teamAvg) / teamAvg;
   const attackAwayRatio = blend(away.xgFor, away.goalsForAway, away.goalsFor ?? teamAvg) / teamAvg;
   const defenseAwayRatio = blend(away.xgAgainst, away.goalsAgainstAway, away.goalsAgainst ?? teamAvg) / teamAvg;
-  const attackHome = shrink(attackHomeRatio, home.matches);
-  const defenseHome = shrink(defenseHomeRatio, home.matches);
-  const attackAway = shrink(attackAwayRatio, away.matches);
-  const defenseAway = shrink(defenseAwayRatio, away.matches);
+  const attackHome = shrink(attackHomeRatio, home.matches, shrinkK);
+  const defenseHome = shrink(defenseHomeRatio, home.matches, shrinkK);
+  const attackAway = shrink(attackAwayRatio, away.matches, shrinkK);
+  const defenseAway = shrink(defenseAwayRatio, away.matches, shrinkK);
   const n = Math.max(0, Math.min(home.matches ?? 0, away.matches ?? 0));
   return {
     lambdaHome: clamp(league.homeGoals * attackHome * defenseAway, 0.2, 4.5),
     lambdaAway: clamp(league.awayGoals * attackAway * defenseHome, 0.15, 4),
-    reliability: n / (n + SHRINK_MATCHES),
+    reliability: n / (n + shrinkK),
     attackHome,
     defenseHome,
     attackAway,
@@ -89435,7 +89437,60 @@ function buildModelBacktest(samples) {
       modelLogLoss: mean2(rows.map((s) => logLoss1X2(s.model, s))),
       vsMarket: paired(rows)
     })),
+    byPeriod: [...samples.reduce((map, s) => {
+      const period = s.kickoff ? s.kickoff.slice(0, 7) : "unknown";
+      const arr = map.get(period) ?? [];
+      arr.push(s);
+      map.set(period, arr);
+      return map;
+    }, /* @__PURE__ */ new Map()).entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([period, rows]) => ({
+      period,
+      n: rows.length,
+      modelLogLoss: mean2(rows.map((s) => logLoss1X2(s.model, s))),
+      vsMarket: paired(rows)
+    })),
     verdict
+  };
+}
+function buildCalibrationExperiment(combos, trainSkills, validation, defaultCombo, trainN, validationN) {
+  let bestIdx = -1;
+  let bestSkill = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < combos.length; i++) {
+    const skill = trainSkills[i];
+    if (skill != null && skill > bestSkill) {
+      bestSkill = skill;
+      bestIdx = i;
+    }
+  }
+  const defaultIdx = combos.findIndex(
+    (c) => c.xgWeight === defaultCombo.xgWeight && c.shrinkK === defaultCombo.shrinkK
+  );
+  const bestParams = bestIdx >= 0 ? combos[bestIdx] : null;
+  const bestValidation = bestIdx >= 0 ? validation[bestIdx] : null;
+  const defaultValidation = defaultIdx >= 0 ? validation[defaultIdx] : null;
+  const adoptionJustified = Boolean(
+    bestParams && bestValidation && defaultValidation && bestValidation.skill > defaultValidation.skill && bestValidation.skill > 0
+  );
+  let note;
+  if (bestParams == null) {
+    note = "Tidak ada kombinasi yang bisa dinilai di data latih (pasar tidak tersedia).";
+  } else if (adoptionJustified) {
+    note = `Parameter xgWeight=${bestParams.xgWeight}, shrinkK=${bestParams.shrinkK} mengalahkan bawaan di data validasi (skill ${(bestValidation.skill * 100).toFixed(2)}% vs ${(defaultValidation.skill * 100).toFixed(2)}%) \u2014 layak diadopsi lewat perubahan kode tersendiri.`;
+  } else if (bestValidation && defaultValidation && bestValidation.skill <= defaultValidation.skill) {
+    note = `Kombinasi terbaik di data latih (xgWeight=${bestParams.xgWeight}, shrinkK=${bestParams.shrinkK}) TIDAK mengalahkan bawaan di validasi \u2014 itu overfitting; parameter bawaan dipertahankan.`;
+  } else {
+    note = `Kombinasi terbaik di data latih belum membuktikan skill positif di validasi \u2014 parameter bawaan dipertahankan.`;
+  }
+  return {
+    trainN,
+    validationN,
+    defaultParams: defaultCombo,
+    bestParams,
+    bestTrainSkill: bestIdx >= 0 ? bestSkill : null,
+    defaultValidation,
+    bestValidation,
+    adoptionJustified,
+    note
   };
 }
 
@@ -89452,6 +89507,28 @@ var BACKTEST_LEAGUES = {
 };
 var PRIOR_SEASON = "2025-26";
 var FIXTURES_FROM = "2026-08-01";
+var DEFAULT_PARAMS = { xgWeight: 0.6, shrinkK: 6 };
+var PARAM_GRID = [0, 0.3, 0.6, 0.8, 1].flatMap((xgWeight) => [0, 3, 6, 12].map((shrinkK) => ({ xgWeight, shrinkK })));
+function samplesFor(prepared, params) {
+  return prepared.map((fixture) => {
+    const lambdas = estimateLambdas(fixture.homeRates, fixture.awayRates, fixture.leagueAvg, params);
+    const probs = marketProbabilities(scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway));
+    return {
+      id: fixture.id,
+      league: fixture.league,
+      kickoff: fixture.kickoff,
+      model: {
+        home: probs.homeWin,
+        draw: probs.draw,
+        away: probs.awayWin,
+        over25: probs.over25,
+        bttsYes: probs.bttsYes
+      },
+      market: fixture.market,
+      actual: fixture.actual
+    };
+  });
+}
 function leagueAverages(rows) {
   const home = [];
   const away = [];
@@ -89495,7 +89572,7 @@ async function getModelBacktest(force = false) {
       oddsByMatch.set(String(row["match_id"]), arr);
     }
   }
-  const samples = [];
+  const prepared = [];
   let skippedNoStats = 0;
   let skippedNoMarket = 0;
   for (const fixture of fixtureRows) {
@@ -89509,12 +89586,6 @@ async function getModelBacktest(force = false) {
       skippedNoStats++;
       continue;
     }
-    const lambdas = estimateLambdas(
-      parseTeamRates(normalizeStatsRow(homeRow).stats),
-      parseTeamRates(normalizeStatsRow(awayRow).stats),
-      averagesByLeague.get(league) ?? DEFAULT_LEAGUE
-    );
-    const probs = marketProbabilities(scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway));
     const kickoffMs = new Date(String(fixture["fixture_date"])).getTime();
     const prematch = (oddsByMatch.get(String(fixture["fixture_id"])) ?? []).filter((r) => r["captured_at"] && new Date(String(r["captured_at"])).getTime() < kickoffMs);
     let market = null;
@@ -89537,26 +89608,43 @@ async function getModelBacktest(force = false) {
       }
     }
     if (market == null) skippedNoMarket++;
-    samples.push({
+    prepared.push({
       id: String(fixture["fixture_id"]),
       league,
-      model: {
-        home: probs.homeWin,
-        draw: probs.draw,
-        away: probs.awayWin,
-        over25: probs.over25,
-        bttsYes: probs.bttsYes
-      },
+      kickoff: String(fixture["fixture_date"]),
+      homeRates: parseTeamRates(normalizeStatsRow(homeRow).stats),
+      awayRates: parseTeamRates(normalizeStatsRow(awayRow).stats),
+      leagueAvg: averagesByLeague.get(league) ?? DEFAULT_LEAGUE,
       market,
       actual: { homeGoals: Number(fixture["home_goals"]), awayGoals: Number(fixture["away_goals"]) }
     });
   }
+  const samples = samplesFor(prepared, DEFAULT_PARAMS);
+  const chronological = [...prepared].sort((a, b) => a.kickoff.localeCompare(b.kickoff));
+  const splitAt = Math.floor(chronological.length / 2);
+  const trainPrepared = chronological.slice(0, splitAt);
+  const validationPrepared = chronological.slice(splitAt);
+  const trainSkills = PARAM_GRID.map(
+    (combo) => buildModelBacktest(samplesFor(trainPrepared, combo)).oneX2.vsMarket?.skill ?? null
+  );
+  const validationMetrics = PARAM_GRID.map(
+    (combo) => buildModelBacktest(samplesFor(validationPrepared, combo)).oneX2.vsMarket
+  );
+  const calibration = buildCalibrationExperiment(
+    PARAM_GRID,
+    trainSkills,
+    validationMetrics,
+    DEFAULT_PARAMS,
+    trainPrepared.length,
+    validationPrepared.length
+  );
   const value = {
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
     fixturesTotal: fixtureRows.length,
     skippedNoStats,
     skippedNoMarket,
-    report: buildModelBacktest(samples)
+    report: buildModelBacktest(samples),
+    calibration
   };
   cached = { at: Date.now(), value };
   logger.info(

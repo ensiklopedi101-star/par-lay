@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildModelBacktest, type BacktestSample } from "./model-backtest";
+import { buildCalibrationExperiment, buildModelBacktest, type BacktestSample } from "./model-backtest";
 
 function sample(partial: Partial<BacktestSample> & { actual: BacktestSample["actual"] }): BacktestSample {
   return {
@@ -54,5 +54,37 @@ describe("buildModelBacktest", () => {
       sample({ actual: { homeGoals: 1, awayGoals: 0 } }),
     ]);
     assert.match(report.verdict, /terlalu kecil/);
+  });
+});
+
+describe("segmentasi periode & eksperimen kalibrasi", () => {
+  it("byPeriod mengelompokkan per bulan kick-off", () => {
+    const samples = [
+      sample({ kickoff: "2026-08-15T14:00:00Z", actual: { homeGoals: 1, awayGoals: 0 } }),
+      sample({ kickoff: "2026-11-02T14:00:00Z", actual: { homeGoals: 0, awayGoals: 1 } }),
+    ];
+    const report = buildModelBacktest(samples);
+    assert.deepEqual(report.byPeriod.map((p) => p.period), ["2026-08", "2026-11"]);
+  });
+
+  it("adopsi hanya bila menang di validasi, bukan di latih", () => {
+    const combos = [
+      { xgWeight: 0.6, shrinkK: 6 },
+      { xgWeight: 0, shrinkK: 0 },
+    ];
+    const paired = (skill: number) => ({
+      n: 50, modelLogLoss: 1, marketLogLoss: 1 + skill, skill, tStat: 2.5,
+    });
+    // Menang besar di latih, kalah di validasi → overfitting, tolak.
+    const rejected = buildCalibrationExperiment(
+      combos, [-0.02, 0.09], [paired(-0.01), paired(-0.03)], combos[0]!, 50, 50,
+    );
+    assert.equal(rejected.adoptionJustified, false);
+    assert.match(rejected.note, /overfitting/);
+    // Menang di validasi dengan skill positif → layak adopsi.
+    const adopted = buildCalibrationExperiment(
+      combos, [-0.02, 0.09], [paired(-0.01), paired(0.02)], combos[0]!, 50, 50,
+    );
+    assert.equal(adopted.adoptionJustified, true);
   });
 });

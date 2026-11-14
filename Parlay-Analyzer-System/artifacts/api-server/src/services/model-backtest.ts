@@ -16,13 +16,20 @@
  */
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
-import { DEFAULT_LEAGUE, estimateLambdas, marketProbabilities, parseTeamRates } from "../lib/match-context";
+import { DEFAULT_LEAGUE, estimateLambdas, marketProbabilities, parseTeamRates, type LambdaParams, type TeamRatesParsed } from "../lib/match-context";
 import { scoreMatrix } from "../lib/quant/poisson";
 import { normalizeStatsRow } from "../lib/stats-integrity";
 import { teamNamesEquivalent } from "../lib/team-name-cleaner";
 import { classifyOddsMarket } from "../lib/odds-market";
 import { consensusFairProbability } from "../lib/betting-math";
-import { buildModelBacktest, type BacktestSample, type ModelBacktestReport } from "../lib/model-backtest";
+import {
+  buildCalibrationExperiment,
+  buildModelBacktest,
+  type BacktestSample,
+  type CalibrationExperiment,
+  type LambdaParamCombo,
+  type ModelBacktestReport,
+} from "../lib/model-backtest";
 import type { LeagueAverages } from "../lib/quant/strength";
 
 /** Liga yang punya statistik 2025-26 untuk dipakai sebagai prior. */
@@ -45,6 +52,42 @@ export interface ModelBacktestResult {
   skippedNoStats: number;
   skippedNoMarket: number;
   report: ModelBacktestReport;
+  calibration: CalibrationExperiment;
+}
+
+/** Parameter bawaan produksi saat ini (lib/match-context.ts). */
+const DEFAULT_PARAMS: LambdaParamCombo = { xgWeight: 0.6, shrinkK: 6 };
+/** Grid kalibrasi: dipilih kasar dengan sengaja — grid halus di n kecil = overfitting. */
+const PARAM_GRID: LambdaParamCombo[] = [0, 0.3, 0.6, 0.8, 1.0]
+  .flatMap((xgWeight) => [0, 3, 6, 12].map((shrinkK) => ({ xgWeight, shrinkK })));
+
+interface PreparedFixture {
+  id: string;
+  league: string;
+  kickoff: string;
+  homeRates: TeamRatesParsed;
+  awayRates: TeamRatesParsed;
+  leagueAvg: LeagueAverages;
+  market: BacktestSample["market"];
+  actual: BacktestSample["actual"];
+}
+
+function samplesFor(prepared: PreparedFixture[], params: LambdaParams): BacktestSample[] {
+  return prepared.map((fixture) => {
+    const lambdas = estimateLambdas(fixture.homeRates, fixture.awayRates, fixture.leagueAvg, params);
+    const probs = marketProbabilities(scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway));
+    return {
+      id: fixture.id,
+      league: fixture.league,
+      kickoff: fixture.kickoff,
+      model: {
+        home: probs.homeWin, draw: probs.draw, away: probs.awayWin,
+        over25: probs.over25, bttsYes: probs.bttsYes,
+      },
+      market: fixture.market,
+      actual: fixture.actual,
+    };
+  });
 }
 
 type StatsRow = Record<string, unknown> & { league_slug: string; team_name: string };
@@ -119,7 +162,7 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     }
   }
 
-  const samples: BacktestSample[] = [];
+  const prepared: PreparedFixture[] = [];
   let skippedNoStats = 0;
   let skippedNoMarket = 0;
   for (const fixture of fixtureRows) {
@@ -134,12 +177,6 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
       skippedNoStats++;
       continue;
     }
-    const lambdas = estimateLambdas(
-      parseTeamRates(normalizeStatsRow(homeRow).stats),
-      parseTeamRates(normalizeStatsRow(awayRow).stats),
-      averagesByLeague.get(league) ?? DEFAULT_LEAGUE,
-    );
-    const probs = marketProbabilities(scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway));
 
     const kickoffMs = new Date(String(fixture["fixture_date"])).getTime();
     const prematch = (oddsByMatch.get(String(fixture["fixture_id"])) ?? [])
@@ -165,17 +202,43 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     }
     if (market == null) skippedNoMarket++;
 
-    samples.push({
+    prepared.push({
       id: String(fixture["fixture_id"]),
       league,
-      model: {
-        home: probs.homeWin, draw: probs.draw, away: probs.awayWin,
-        over25: probs.over25, bttsYes: probs.bttsYes,
-      },
+      kickoff: String(fixture["fixture_date"]),
+      homeRates: parseTeamRates(normalizeStatsRow(homeRow).stats),
+      awayRates: parseTeamRates(normalizeStatsRow(awayRow).stats),
+      leagueAvg: averagesByLeague.get(league) ?? DEFAULT_LEAGUE,
       market,
       actual: { homeGoals: Number(fixture["home_goals"]), awayGoals: Number(fixture["away_goals"]) },
     });
   }
+
+  const samples = samplesFor(prepared, DEFAULT_PARAMS);
+
+  /*
+   * Eksperimen kalibrasi: separuh pertama (kronologis) memilih kombinasi,
+   * separuh kedua menghakiminya. Hanya fixture dengan pasar yang masuk
+   * penilaian skill — tanpa pembanding pasar, "terbaik" tidak terdefinisi.
+   */
+  const chronological = [...prepared].sort((a, b) => a.kickoff.localeCompare(b.kickoff));
+  const splitAt = Math.floor(chronological.length / 2);
+  const trainPrepared = chronological.slice(0, splitAt);
+  const validationPrepared = chronological.slice(splitAt);
+  const trainSkills = PARAM_GRID.map((combo) =>
+    buildModelBacktest(samplesFor(trainPrepared, combo)).oneX2.vsMarket?.skill ?? null,
+  );
+  const validationMetrics = PARAM_GRID.map((combo) =>
+    buildModelBacktest(samplesFor(validationPrepared, combo)).oneX2.vsMarket,
+  );
+  const calibration = buildCalibrationExperiment(
+    PARAM_GRID,
+    trainSkills,
+    validationMetrics,
+    DEFAULT_PARAMS,
+    trainPrepared.length,
+    validationPrepared.length,
+  );
 
   const value: ModelBacktestResult = {
     generatedAt: new Date().toISOString(),
@@ -183,6 +246,7 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     skippedNoStats,
     skippedNoMarket,
     report: buildModelBacktest(samples),
+    calibration,
   };
   cached = { at: Date.now(), value };
   logger.info(

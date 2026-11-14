@@ -217,14 +217,24 @@ function shrink(ratio: number, matches: number | null, k = SHRINK_MATCHES): numb
  * temuan bahwa Sunderland mencetak 0.40 gol/laga di kandang tetapi 1.20 di
  * tandang — perbedaan yang hilang total bila hanya memakai rata-rata 0.80.
  */
+export interface LambdaParams {
+  /** Bobot xG terhadap gol aktual (bawaan XG_WEIGHT). */
+  xgWeight?: number;
+  /** Kekuatan shrinkage dalam laga (bawaan SHRINK_MATCHES). */
+  shrinkK?: number;
+}
+
 export function estimateLambdas(
   home: TeamRatesParsed,
   away: TeamRatesParsed,
   league: LeagueAverages = DEFAULT_LEAGUE,
+  params: LambdaParams = {},
 ): LambdaEstimate {
+  const xgWeight = params.xgWeight ?? XG_WEIGHT;
+  const shrinkK = params.shrinkK ?? SHRINK_MATCHES;
   const teamAvg = Math.max(0.2, (league.homeGoals + league.awayGoals) / 2);
   const blend = (xg: number | null, actual: number | null, fallback: number) => {
-    if (xg != null && actual != null) return XG_WEIGHT * xg + (1 - XG_WEIGHT) * actual;
+    if (xg != null && actual != null) return xgWeight * xg + (1 - xgWeight) * actual;
     return xg ?? actual ?? fallback;
   };
 
@@ -235,16 +245,16 @@ export function estimateLambdas(
   const defenseAwayRatio =
     blend(away.xgAgainst, away.goalsAgainstAway, away.goalsAgainst ?? teamAvg) / teamAvg;
 
-  const attackHome = shrink(attackHomeRatio, home.matches);
-  const defenseHome = shrink(defenseHomeRatio, home.matches);
-  const attackAway = shrink(attackAwayRatio, away.matches);
-  const defenseAway = shrink(defenseAwayRatio, away.matches);
+  const attackHome = shrink(attackHomeRatio, home.matches, shrinkK);
+  const defenseHome = shrink(defenseHomeRatio, home.matches, shrinkK);
+  const attackAway = shrink(attackAwayRatio, away.matches, shrinkK);
+  const defenseAway = shrink(defenseAwayRatio, away.matches, shrinkK);
 
   const n = Math.max(0, Math.min(home.matches ?? 0, away.matches ?? 0));
   return {
     lambdaHome: clamp(league.homeGoals * attackHome * defenseAway, 0.2, 4.5),
     lambdaAway: clamp(league.awayGoals * attackAway * defenseHome, 0.15, 4.0),
-    reliability: n / (n + SHRINK_MATCHES),
+    reliability: n / (n + shrinkK),
     attackHome,
     defenseHome,
     attackAway,
