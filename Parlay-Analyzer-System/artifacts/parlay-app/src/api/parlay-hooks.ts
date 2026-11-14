@@ -469,6 +469,8 @@ export interface ModelBacktestReportData {
     };
     over25: { n: number; logLoss: number; brier: number; baseRate: number };
     btts: { n: number; logLoss: number; brier: number; baseRate: number };
+    over25VsMarket: { n: number; modelLogLoss: number; marketLogLoss: number; skill: number; tStat: number | null } | null;
+    bttsVsMarket: { n: number; modelLogLoss: number; marketLogLoss: number; skill: number; tStat: number | null } | null;
     calibrationEce: number | null;
     byLeague: Array<{
       league: string;
@@ -502,6 +504,17 @@ export interface ModelBacktestReportData {
     modelLogLoss: number;
     vsMarket: { n: number; skill: number; tStat: number | null } | null;
   }>;
+  blend: {
+    trainN: number;
+    validationN: number;
+    bestWeight: number | null;
+    currentWeight: number;
+    bestValidationLogLoss: number | null;
+    marketOnlyValidationLogLoss: number | null;
+    currentValidationLogLoss: number | null;
+    modelAddsValue: boolean;
+    note: string;
+  };
 }
 
 export const getGetModelBacktestQueryKey = () => ["learning/model-backtest"];

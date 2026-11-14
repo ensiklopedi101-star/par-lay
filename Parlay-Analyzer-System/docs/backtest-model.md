@@ -93,3 +93,23 @@ ingest (termasuk xG berjalan), jadi eksperimen ini juga mengestimasi
 seberapa jauh vonis prior-only meremehkan model live. Eksperimen ini
 eksploratori di sampel yang sama — keputusan mengubah jalur live tetap
 butuh bukti lanjutan, bukan satu tabel.
+
+## Nilai sisa model & ceruk pasar (14 Nov 2026)
+
+Eksperimen informasi membantah hipotesis form: form saja −4,80%,
+campuran prior+form −3,68% (baseline −4,08%) — perbaikan kecil, tetap
+negatif. Pasar unggul bukan karena form gol semata. Dua pertanyaan
+terakhir sebelum keputusan desain:
+
+1. **Bobot campuran** (`blend`): grid w ∈ {0, 0.1, …, 1} untuk
+   p = w·model + (1−w)·pasar dipilih di separuh awal, dihakimi di
+   separuh akhir melawan pasar murni (w=0). `modelAddsValue` hanya
+   true bila campuran berbobot positif mengalahkan pasar murni di
+   validasi. Ini menentukan takaran model yang jujur di jalur live
+   (bawaan saat ini 0,35).
+2. **Ceruk totals/BTTS** (`over25VsMarket`, `bttsVsMarket`): untuk
+   pertama kalinya probabilitas Over 2.5 dan BTTS model dibandingkan
+   dengan harga pasarnya sendiri (snapshot Totals line tepat 2.5 dan
+   BTTS terakhir sebelum kick-off, konsensus fair yang sama). Pasar
+   1X2 adalah yang paling efisien; keunggulan model — bila ada —
+   lebih mungkin bersembunyi di pasar turunan gol.

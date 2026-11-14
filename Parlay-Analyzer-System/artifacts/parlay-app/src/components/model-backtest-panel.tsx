@@ -224,6 +224,60 @@ export function ModelBacktestPanel({
               </p>
             </div>
 
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Model vs pasar di luar 1X2
+                </div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    <tr className="border-b border-border/50">
+                      <td className="py-1.5 pr-3">Over 2.5</td>
+                      <td className="py-1.5 tabular-nums">
+                        {report.over25VsMarket
+                          ? `${pctSigned(report.over25VsMarket.skill)} (t=${report.over25VsMarket.tStat != null ? report.over25VsMarket.tStat.toFixed(2) : "—"}, n=${report.over25VsMarket.n})`
+                          : "snapshot pasar tidak tersedia"}
+                      </td>
+                    </tr>
+                    <tr className="border-b border-border/50">
+                      <td className="py-1.5 pr-3">BTTS</td>
+                      <td className="py-1.5 tabular-nums">
+                        {report.bttsVsMarket
+                          ? `${pctSigned(report.bttsVsMarket.skill)} (t=${report.bttsVsMarket.tStat != null ? report.bttsVsMarket.tStat.toFixed(2) : "—"}, n=${report.bttsVsMarket.n})`
+                          : "snapshot pasar tidak tersedia"}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Pasar 1X2 paling efisien; totals dan BTTS belum tentu. Skill positif di sini berarti
+                  model mungkin punya ceruk — tetap butuh n dan t yang cukup sebelum dipercaya.
+                </p>
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Bobot campuran model ↔ pasar (1X2)
+                </div>
+                <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm leading-relaxed">
+                  <p>
+                    Bobot model terbaik di data latih:{" "}
+                    <strong>{data.blend.bestWeight != null ? data.blend.bestWeight.toFixed(2) : "—"}</strong>{" "}
+                    (jalur live saat ini {data.blend.currentWeight.toFixed(2)}). Di validasi: campuran
+                    terpilih log-loss {data.blend.bestValidationLogLoss != null ? data.blend.bestValidationLogLoss.toFixed(3) : "—"},
+                    pasar murni {data.blend.marketOnlyValidationLogLoss != null ? data.blend.marketOnlyValidationLogLoss.toFixed(3) : "—"},
+                    bobot live {data.blend.currentValidationLogLoss != null ? data.blend.currentValidationLogLoss.toFixed(3) : "—"}.
+                  </p>
+                  <p className="mt-2">{data.blend.note}</p>
+                  <Badge
+                    variant="secondary"
+                    className={data.blend.modelAddsValue ? "mt-2 bg-emerald-500/15 text-emerald-600" : "mt-2"}
+                  >
+                    {data.blend.modelAddsValue ? "Model menambah nilai terukur" : "Nilai tambah model belum terbukti"}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               Cakupan: {data.fixturesTotal} pertandingan selesai · {data.skippedNoStats} dilewati karena
               statistik prior salah satu tim tidak ada (mis. tim promosi) · {data.skippedNoMarket} tanpa

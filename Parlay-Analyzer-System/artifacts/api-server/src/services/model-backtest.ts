@@ -23,9 +23,11 @@ import { teamNamesEquivalent } from "../lib/team-name-cleaner";
 import { classifyOddsMarket } from "../lib/odds-market";
 import { consensusFairProbability } from "../lib/betting-math";
 import {
+  buildBlendExperiment,
   buildCalibrationExperiment,
   buildModelBacktest,
   type BacktestSample,
+  type BlendExperiment,
   type CalibrationExperiment,
   type LambdaParamCombo,
   type ModelBacktestReport,
@@ -56,6 +58,7 @@ export interface ModelBacktestResult {
   report: ModelBacktestReport;
   calibration: CalibrationExperiment;
   infoVariants: InfoVariantResult[];
+  blend: BlendExperiment;
 }
 
 export interface InfoVariantResult {
@@ -83,6 +86,8 @@ interface PreparedFixture {
   formAway: TeamRatesParsed | null;
   leagueAvg: LeagueAverages;
   market: BacktestSample["market"];
+  marketOver25: number | null;
+  marketBttsYes: number | null;
   actual: BacktestSample["actual"];
 }
 
@@ -102,6 +107,8 @@ function buildSamples(
         over25: probs.over25, bttsYes: probs.bttsYes,
       },
       market: fixture.market,
+      marketOver25: fixture.marketOver25,
+      marketBttsYes: fixture.marketBttsYes,
       actual: fixture.actual,
     };
   });
@@ -172,12 +179,12 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
       .from("odds_history")
       .select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at")
       .in("match_id", ids.slice(i, i + 25))
-      .eq("market_type", "ML")
       .order("captured_at", { ascending: false })
       .limit(1000);
     if (error) throw new Error(`odds_history: ${error.message}`);
     for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-      if (classifyOddsMarket(row["market_type"]) !== "ML") continue;
+      const marketClass = classifyOddsMarket(row["market_type"]);
+      if (marketClass !== "ML" && marketClass !== "Totals" && marketClass !== "BTTS") continue;
       const arr = oddsByMatch.get(String(row["match_id"])) ?? [];
       arr.push(row);
       oddsByMatch.set(String(row["match_id"]), arr);
@@ -201,8 +208,40 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     }
 
     const kickoffMs = new Date(String(fixture["fixture_date"])).getTime();
-    const prematch = (oddsByMatch.get(String(fixture["fixture_id"])) ?? [])
+    const prematchAll = (oddsByMatch.get(String(fixture["fixture_id"])) ?? [])
       .filter((r) => r["captured_at"] && new Date(String(r["captured_at"])).getTime() < kickoffMs);
+    const prematch = prematchAll.filter((r) => classifyOddsMarket(r["market_type"]) === "ML");
+
+    /*
+     * Pasar biner (Totals 2.5 & BTTS): per bookmaker ambil snapshot
+     * terakhir sebelum kick-off; Totals hanya line tepat 2.5 (odds_draw
+     * menyimpan line) — line lain adalah taruhan yang berbeda.
+     * Konsensus fair dihitung persis seperti jalur live.
+     */
+    const binaryMarket = (marketClass: "Totals" | "BTTS"): number | null => {
+      const rows = prematchAll.filter((r) => classifyOddsMarket(r["market_type"]) === marketClass);
+      const latestByBook = new Map<string, Record<string, unknown>>();
+      for (const r of rows) {
+        if (marketClass === "Totals" && Math.abs(Number(r["odds_draw"]) - 2.5) > 1e-9) continue;
+        const book = String(r["bookmaker"] ?? "?");
+        const prev = latestByBook.get(book);
+        if (!prev || new Date(String(r["captured_at"])) > new Date(String(prev["captured_at"]))) {
+          latestByBook.set(book, r);
+        }
+      }
+      const books: [number, number][] = [];
+      for (const r of latestByBook.values()) {
+        if (r["odds_1"] != null && r["odds_2"] != null) {
+          books.push([Number(r["odds_1"]), Number(r["odds_2"])]);
+        }
+      }
+      if (books.length === 0) return null;
+      const fair = consensusFairProbability(books, 0);
+      return fair != null && Number.isFinite(fair) ? Math.min(0.999, Math.max(0.001, fair)) : null;
+    };
+    const marketOver25 = binaryMarket("Totals");
+    const marketBttsYes = binaryMarket("BTTS");
+
     let market: BacktestSample["market"] = null;
     if (prematch.length > 0) {
       const latestTs = Math.max(...prematch.map((r) => new Date(String(r["captured_at"])).getTime()));
@@ -234,6 +273,8 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
       formAway: null,
       leagueAvg: averagesByLeague.get(league) ?? DEFAULT_LEAGUE,
       market,
+      marketOver25,
+      marketBttsYes,
       actual: { homeGoals: Number(fixture["home_goals"]), awayGoals: Number(fixture["away_goals"]) },
     });
   }
@@ -321,6 +362,19 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     validationPrepared.length,
   );
 
+  /*
+   * Eksperimen bobot campuran: berapa takaran model yang layak masuk
+   * probabilitas akhir di atas pasar? Dipilih di separuh awal (kronologis),
+   * dihakimi di separuh akhir melawan pasar murni.
+   */
+  const chronologicalSamples = [...samples].sort((a, b) =>
+    String(a.kickoff ?? "").localeCompare(String(b.kickoff ?? "")));
+  const blendSplit = Math.floor(chronologicalSamples.length / 2);
+  const blend = buildBlendExperiment(
+    chronologicalSamples.slice(0, blendSplit),
+    chronologicalSamples.slice(blendSplit),
+  );
+
   const value: ModelBacktestResult = {
     generatedAt: new Date().toISOString(),
     fixturesTotal: fixtureRows.length,
@@ -329,6 +383,7 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     report: buildModelBacktest(samples),
     calibration,
     infoVariants,
+    blend,
   };
   cached = { at: Date.now(), value };
   logger.info(
