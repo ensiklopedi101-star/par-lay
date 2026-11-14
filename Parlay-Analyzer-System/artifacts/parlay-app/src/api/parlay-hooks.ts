@@ -449,6 +449,7 @@ export function useGetSyncStatus() {
 /* ─── Backtest Model Poisson vs Pasar ─── */
 export interface ModelBacktestReportData {
   generatedAt: string;
+  oddsRowsLoaded: number;
   fixturesTotal: number;
   skippedNoStats: number;
   skippedNoMarket: number;
