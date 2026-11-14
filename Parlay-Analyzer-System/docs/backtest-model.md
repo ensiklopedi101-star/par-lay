@@ -66,3 +66,30 @@ berikutnya dijawab otomatis di laporan yang sama:
    parameter bawaan dipertahankan. Adopsi sendiri selalu berupa
    perubahan kode tersendiri setelah membaca hasil validasi — tidak
    pernah otomatis.
+
+## Eksperimen informasi (14 Nov 2026)
+
+Hasil periode: skill sudah negatif sejak Agustus (−1,64%) dan tetap
+−4,43% di Oktober (n=98) — bukan peluruhan prior semata. Kalibrasi
+parameter juga ditolak sistem (pemenang grid pun skill latihnya
+negatif). Kesimpulan sementara: yang kurang bukan parameter, melainkan
+**informasi**. Laporan kini membandingkan tiga varian pada sampel yang
+identik:
+
+| Varian | Informasi |
+|---|---|
+| `prior_only` | Statistik musim lalu saja (baseline, model backtest saat ini) |
+| `form_only` | Form musim berjalan point-in-time saja (fallback prior bila belum ada laga) |
+| `prior_plus_form` | Campuran λ: bobot form = lagaForm/(lagaForm+6) |
+
+Form direkonstruksi dari skor final tabel `fixtures` dengan
+`RollingFormTracker` (`lib/rolling-form.ts`): rates sebuah pertandingan
+dibaca sebelum hasilnya dicatat — urutan terbalik = look-ahead. Hasil
+melawan tim promosi tetap dihitung ke form lawannya walau pertandingan
+tim promosi sendiri di luar sampel.
+
+Catatan kejujuran: jalur LIVE memakai statistik musim berjalan dari
+ingest (termasuk xG berjalan), jadi eksperimen ini juga mengestimasi
+seberapa jauh vonis prior-only meremehkan model live. Eksperimen ini
+eksploratori di sampel yang sama — keputusan mengubah jalur live tetap
+butuh bukti lanjutan, bukan satu tabel.
