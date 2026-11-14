@@ -89355,6 +89355,28 @@ function paired(samples) {
     tStat
   };
 }
+function pairedBinary(samples, modelProb, marketProb, outcome) {
+  const usable = samples.filter((s) => marketProb(s) != null);
+  if (usable.length === 0) return null;
+  const loss = (p, s) => {
+    const y = outcome(s) ? 1 : 0;
+    return -(y * Math.log(clampProb(p)) + (1 - y) * Math.log(clampProb(1 - p)));
+  };
+  const diffs = usable.map((s) => loss(marketProb(s), s) - loss(modelProb(s), s));
+  const skill = mean2(diffs);
+  let tStat = null;
+  if (diffs.length >= 2) {
+    const sd2 = Math.sqrt(mean2(diffs.map((d) => (d - skill) ** 2)));
+    tStat = sd2 > 0 ? skill / (sd2 / Math.sqrt(diffs.length)) : null;
+  }
+  return {
+    n: usable.length,
+    modelLogLoss: mean2(usable.map((s) => loss(modelProb(s), s))),
+    marketLogLoss: mean2(usable.map((s) => loss(marketProb(s), s))),
+    skill,
+    tStat
+  };
+}
 function binaryMetric(samples, prob, outcome) {
   const probs = samples.map(prob);
   const ys = samples.map((s) => outcome(s) ? 1 : 0);
@@ -89430,6 +89452,18 @@ function buildModelBacktest(samples) {
     },
     over25: binaryMetric(samples, (s) => s.model.over25, (s) => s.actual.homeGoals + s.actual.awayGoals > 2.5),
     btts: binaryMetric(samples, (s) => s.model.bttsYes, (s) => s.actual.homeGoals > 0 && s.actual.awayGoals > 0),
+    over25VsMarket: pairedBinary(
+      samples,
+      (s) => s.model.over25,
+      (s) => s.marketOver25,
+      (s) => s.actual.homeGoals + s.actual.awayGoals > 2.5
+    ),
+    bttsVsMarket: pairedBinary(
+      samples,
+      (s) => s.model.bttsYes,
+      (s) => s.marketBttsYes,
+      (s) => s.actual.homeGoals > 0 && s.actual.awayGoals > 0
+    ),
     calibrationEce: ece,
     byLeague: [...leagues.entries()].sort((a, b) => b[1].length - a[1].length).map(([league, rows]) => ({
       league,
@@ -89490,6 +89524,57 @@ function buildCalibrationExperiment(combos, trainSkills, validation, defaultComb
     defaultValidation,
     bestValidation,
     adoptionJustified,
+    note
+  };
+}
+var BLEND_GRID = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1];
+function blendedLogLoss(samples, w) {
+  const usable = samples.filter((s) => s.market != null);
+  if (usable.length === 0) return null;
+  return mean2(usable.map((s) => {
+    const blended = {
+      home: w * s.model.home + (1 - w) * s.market.home,
+      draw: w * s.model.draw + (1 - w) * s.market.draw,
+      away: w * s.model.away + (1 - w) * s.market.away
+    };
+    return logLoss1X2(blended, s);
+  }));
+}
+function buildBlendExperiment(train, validation, currentWeight = 0.35) {
+  let bestWeight = null;
+  let bestTrainLoss = Number.POSITIVE_INFINITY;
+  for (const w of BLEND_GRID) {
+    const loss = blendedLogLoss(train, w);
+    if (loss != null && loss < bestTrainLoss) {
+      bestTrainLoss = loss;
+      bestWeight = w;
+    }
+  }
+  const bestValidationLogLoss = bestWeight != null ? blendedLogLoss(validation, bestWeight) : null;
+  const marketOnlyValidationLogLoss = blendedLogLoss(validation, 0);
+  const currentValidationLogLoss = blendedLogLoss(validation, currentWeight);
+  const modelAddsValue = Boolean(
+    bestWeight != null && bestWeight > 0 && bestValidationLogLoss != null && marketOnlyValidationLogLoss != null && bestValidationLogLoss < marketOnlyValidationLogLoss
+  );
+  let note;
+  if (bestWeight == null) {
+    note = "Pasar tidak tersedia \u2014 bobot campuran tidak bisa diukur.";
+  } else if (bestWeight === 0) {
+    note = "Bobot optimal di data latih adalah 0: model tidak menambah apa pun di atas pasar pada sampel ini. Pasar murni adalah probabilitas terbaik yang tersedia; model hanya layak sebagai pemeriksa kewajaran.";
+  } else if (modelAddsValue) {
+    note = `Campuran berbobot model ${bestWeight} mengalahkan pasar murni di validasi (log-loss ${bestValidationLogLoss?.toFixed(3)} vs ${marketOnlyValidationLogLoss?.toFixed(3)}) \u2014 model punya nilai tambah terukur di atas pasar, sebesar takaran itu.`;
+  } else {
+    note = `Bobot terpilih di latih (${bestWeight}) tidak mengalahkan pasar murni di validasi \u2014 nilai tambah model belum terbukti; jangan menaikkan bobot model di jalur live.`;
+  }
+  return {
+    trainN: train.filter((s) => s.market != null).length,
+    validationN: validation.filter((s) => s.market != null).length,
+    bestWeight,
+    currentWeight,
+    bestValidationLogLoss,
+    marketOnlyValidationLogLoss,
+    currentValidationLogLoss,
+    modelAddsValue,
     note
   };
 }
@@ -89597,6 +89682,8 @@ function buildSamples(prepared, lambdasOf) {
         bttsYes: probs.bttsYes
       },
       market: fixture.market,
+      marketOver25: fixture.marketOver25,
+      marketBttsYes: fixture.marketBttsYes,
       actual: fixture.actual
     };
   });
@@ -89638,10 +89725,11 @@ async function getModelBacktest(force = false) {
   const ids = fixtureRows.map((f) => String(f["fixture_id"]));
   const oddsByMatch = /* @__PURE__ */ new Map();
   for (let i = 0; i < ids.length; i += 25) {
-    const { data, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", ids.slice(i, i + 25)).eq("market_type", "ML").order("captured_at", { ascending: false }).limit(1e3);
+    const { data, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", ids.slice(i, i + 25)).order("captured_at", { ascending: false }).limit(1e3);
     if (error) throw new Error(`odds_history: ${error.message}`);
     for (const row of data ?? []) {
-      if (classifyOddsMarket(row["market_type"]) !== "ML") continue;
+      const marketClass = classifyOddsMarket(row["market_type"]);
+      if (marketClass !== "ML" && marketClass !== "Totals" && marketClass !== "BTTS") continue;
       const arr = oddsByMatch.get(String(row["match_id"])) ?? [];
       arr.push(row);
       oddsByMatch.set(String(row["match_id"]), arr);
@@ -89662,7 +89750,31 @@ async function getModelBacktest(force = false) {
       continue;
     }
     const kickoffMs = new Date(String(fixture["fixture_date"])).getTime();
-    const prematch = (oddsByMatch.get(String(fixture["fixture_id"])) ?? []).filter((r) => r["captured_at"] && new Date(String(r["captured_at"])).getTime() < kickoffMs);
+    const prematchAll = (oddsByMatch.get(String(fixture["fixture_id"])) ?? []).filter((r) => r["captured_at"] && new Date(String(r["captured_at"])).getTime() < kickoffMs);
+    const prematch = prematchAll.filter((r) => classifyOddsMarket(r["market_type"]) === "ML");
+    const binaryMarket = (marketClass) => {
+      const rows2 = prematchAll.filter((r) => classifyOddsMarket(r["market_type"]) === marketClass);
+      const latestByBook = /* @__PURE__ */ new Map();
+      for (const r of rows2) {
+        if (marketClass === "Totals" && Math.abs(Number(r["odds_draw"]) - 2.5) > 1e-9) continue;
+        const book = String(r["bookmaker"] ?? "?");
+        const prev = latestByBook.get(book);
+        if (!prev || new Date(String(r["captured_at"])) > new Date(String(prev["captured_at"]))) {
+          latestByBook.set(book, r);
+        }
+      }
+      const books = [];
+      for (const r of latestByBook.values()) {
+        if (r["odds_1"] != null && r["odds_2"] != null) {
+          books.push([Number(r["odds_1"]), Number(r["odds_2"])]);
+        }
+      }
+      if (books.length === 0) return null;
+      const fair = consensusFairProbability(books, 0);
+      return fair != null && Number.isFinite(fair) ? Math.min(0.999, Math.max(1e-3, fair)) : null;
+    };
+    const marketOver25 = binaryMarket("Totals");
+    const marketBttsYes = binaryMarket("BTTS");
     let market = null;
     if (prematch.length > 0) {
       const latestTs = Math.max(...prematch.map((r) => new Date(String(r["captured_at"])).getTime()));
@@ -89693,6 +89805,8 @@ async function getModelBacktest(force = false) {
       formAway: null,
       leagueAvg: averagesByLeague.get(league) ?? DEFAULT_LEAGUE,
       market,
+      marketOver25,
+      marketBttsYes,
       actual: { homeGoals: Number(fixture["home_goals"]), awayGoals: Number(fixture["away_goals"]) }
     });
   }
@@ -89756,6 +89870,12 @@ async function getModelBacktest(force = false) {
     trainPrepared.length,
     validationPrepared.length
   );
+  const chronologicalSamples = [...samples].sort((a, b) => String(a.kickoff ?? "").localeCompare(String(b.kickoff ?? "")));
+  const blendSplit = Math.floor(chronologicalSamples.length / 2);
+  const blend = buildBlendExperiment(
+    chronologicalSamples.slice(0, blendSplit),
+    chronologicalSamples.slice(blendSplit)
+  );
   const value = {
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
     fixturesTotal: fixtureRows.length,
@@ -89763,7 +89883,8 @@ async function getModelBacktest(force = false) {
     skippedNoMarket,
     report: buildModelBacktest(samples),
     calibration,
-    infoVariants
+    infoVariants,
+    blend
   };
   cached = { at: Date.now(), value };
   logger.info(

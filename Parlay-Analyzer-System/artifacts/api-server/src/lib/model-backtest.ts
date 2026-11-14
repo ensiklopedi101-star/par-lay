@@ -21,6 +21,10 @@ export interface BacktestSample {
   model: { home: number; draw: number; away: number; over25: number; bttsYes: number };
   /** Probabilitas fair pasar (sudah di-devig); null bila pasar tidak tersedia. */
   market: { home: number; draw: number; away: number } | null;
+  /** Probabilitas fair pasar Over 2.5 (null bila snapshot Totals tidak ada). */
+  marketOver25?: number | null;
+  /** Probabilitas fair pasar BTTS Yes (null bila snapshot BTTS tidak ada). */
+  marketBttsYes?: number | null;
   actual: { homeGoals: number; awayGoals: number };
 }
 
@@ -53,6 +57,9 @@ export interface ModelBacktestReport {
   };
   over25: BinaryMetric;
   btts: BinaryMetric;
+  /** Model vs pasar di pasar totals — keunggulan bisa bersembunyi di luar 1X2. */
+  over25VsMarket: PairedMetric | null;
+  bttsVsMarket: PairedMetric | null;
   /** ECE atas semua probabilitas biner model (1X2 per sisi, O2.5, BTTS). */
   calibrationEce: number | null;
   byLeague: Array<{ league: string; n: number; modelLogLoss: number; vsMarket: PairedMetric | null }>;
@@ -132,6 +139,34 @@ function paired(samples: BacktestSample[]): PairedMetric | null {
     n: withMarket.length,
     modelLogLoss: mean(withMarket.map((s) => logLoss1X2(s.model, s))),
     marketLogLoss: mean(withMarket.map((s) => logLoss1X2(s.market!, s))),
+    skill,
+    tStat,
+  };
+}
+
+function pairedBinary(
+  samples: BacktestSample[],
+  modelProb: (s: BacktestSample) => number,
+  marketProb: (s: BacktestSample) => number | null | undefined,
+  outcome: (s: BacktestSample) => boolean,
+): PairedMetric | null {
+  const usable = samples.filter((s) => marketProb(s) != null);
+  if (usable.length === 0) return null;
+  const loss = (p: number, s: BacktestSample) => {
+    const y = outcome(s) ? 1 : 0;
+    return -(y * Math.log(clampProb(p)) + (1 - y) * Math.log(clampProb(1 - p)));
+  };
+  const diffs = usable.map((s) => loss(marketProb(s)!, s) - loss(modelProb(s), s));
+  const skill = mean(diffs);
+  let tStat: number | null = null;
+  if (diffs.length >= 2) {
+    const sd = Math.sqrt(mean(diffs.map((d) => (d - skill) ** 2)));
+    tStat = sd > 0 ? skill / (sd / Math.sqrt(diffs.length)) : null;
+  }
+  return {
+    n: usable.length,
+    modelLogLoss: mean(usable.map((s) => loss(modelProb(s), s))),
+    marketLogLoss: mean(usable.map((s) => loss(marketProb(s)!, s))),
     skill,
     tStat,
   };
@@ -221,6 +256,14 @@ export function buildModelBacktest(samples: BacktestSample[]): ModelBacktestRepo
     },
     over25: binaryMetric(samples, (s) => s.model.over25, (s) => s.actual.homeGoals + s.actual.awayGoals > 2.5),
     btts: binaryMetric(samples, (s) => s.model.bttsYes, (s) => s.actual.homeGoals > 0 && s.actual.awayGoals > 0),
+    over25VsMarket: pairedBinary(
+      samples, (s) => s.model.over25, (s) => s.marketOver25,
+      (s) => s.actual.homeGoals + s.actual.awayGoals > 2.5,
+    ),
+    bttsVsMarket: pairedBinary(
+      samples, (s) => s.model.bttsYes, (s) => s.marketBttsYes,
+      (s) => s.actual.homeGoals > 0 && s.actual.awayGoals > 0,
+    ),
     calibrationEce: ece,
     byLeague: [...leagues.entries()]
       .sort((a, b) => b[1].length - a[1].length)
@@ -305,6 +348,95 @@ export function buildCalibrationExperiment(
     defaultValidation,
     bestValidation,
     adoptionJustified,
+    note,
+  };
+}
+
+export interface BlendExperiment {
+  trainN: number;
+  validationN: number;
+  /** Bobot model optimal di data latih (0 = pasar murni, 1 = model murni). */
+  bestWeight: number | null;
+  /** Bobot bawaan jalur live saat ini (0.35 model / 0.65 pasar). */
+  currentWeight: number;
+  /** Log-loss campuran di validasi pada bobot terpilih; null bila tak terhitung. */
+  bestValidationLogLoss: number | null;
+  /** Log-loss pasar murni (w=0) di validasi — patokan nilai tambah model. */
+  marketOnlyValidationLogLoss: number | null;
+  currentValidationLogLoss: number | null;
+  /**
+   * Model terbukti menambah nilai di atas pasar hanya bila campuran
+   * berbobot positif mengalahkan pasar murni di data validasi.
+   */
+  modelAddsValue: boolean;
+  note: string;
+}
+
+const BLEND_GRID = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1];
+
+function blendedLogLoss(samples: BacktestSample[], w: number): number | null {
+  const usable = samples.filter((s) => s.market != null);
+  if (usable.length === 0) return null;
+  return mean(usable.map((s) => {
+    const blended = {
+      home: w * s.model.home + (1 - w) * s.market!.home,
+      draw: w * s.model.draw + (1 - w) * s.market!.draw,
+      away: w * s.model.away + (1 - w) * s.market!.away,
+    };
+    return logLoss1X2(blended, s);
+  }));
+}
+
+/**
+ * Berapa takaran model yang layak dicampur ke pasar? Dipilih di data
+ * latih, dihakimi di validasi melawan pasar murni (w=0). Model yang
+ * lebih buruk dari pasar tetap bisa menambah nilai bila kesalahannya
+ * tidak berkorelasi penuh — eksperimen ini yang membuktikannya,
+ * bukan asumsi.
+ */
+export function buildBlendExperiment(
+  train: BacktestSample[],
+  validation: BacktestSample[],
+  currentWeight = 0.35,
+): BlendExperiment {
+  let bestWeight: number | null = null;
+  let bestTrainLoss = Number.POSITIVE_INFINITY;
+  for (const w of BLEND_GRID) {
+    const loss = blendedLogLoss(train, w);
+    if (loss != null && loss < bestTrainLoss) {
+      bestTrainLoss = loss;
+      bestWeight = w;
+    }
+  }
+  const bestValidationLogLoss = bestWeight != null ? blendedLogLoss(validation, bestWeight) : null;
+  const marketOnlyValidationLogLoss = blendedLogLoss(validation, 0);
+  const currentValidationLogLoss = blendedLogLoss(validation, currentWeight);
+  const modelAddsValue = Boolean(
+    bestWeight != null && bestWeight > 0
+    && bestValidationLogLoss != null && marketOnlyValidationLogLoss != null
+    && bestValidationLogLoss < marketOnlyValidationLogLoss,
+  );
+
+  let note: string;
+  if (bestWeight == null) {
+    note = "Pasar tidak tersedia — bobot campuran tidak bisa diukur.";
+  } else if (bestWeight === 0) {
+    note = "Bobot optimal di data latih adalah 0: model tidak menambah apa pun di atas pasar pada sampel ini. Pasar murni adalah probabilitas terbaik yang tersedia; model hanya layak sebagai pemeriksa kewajaran.";
+  } else if (modelAddsValue) {
+    note = `Campuran berbobot model ${bestWeight} mengalahkan pasar murni di validasi (log-loss ${bestValidationLogLoss?.toFixed(3)} vs ${marketOnlyValidationLogLoss?.toFixed(3)}) — model punya nilai tambah terukur di atas pasar, sebesar takaran itu.`;
+  } else {
+    note = `Bobot terpilih di latih (${bestWeight}) tidak mengalahkan pasar murni di validasi — nilai tambah model belum terbukti; jangan menaikkan bobot model di jalur live.`;
+  }
+
+  return {
+    trainN: train.filter((s) => s.market != null).length,
+    validationN: validation.filter((s) => s.market != null).length,
+    bestWeight,
+    currentWeight,
+    bestValidationLogLoss,
+    marketOnlyValidationLogLoss,
+    currentValidationLogLoss,
+    modelAddsValue,
     note,
   };
 }

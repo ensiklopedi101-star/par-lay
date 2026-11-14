@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildCalibrationExperiment, buildModelBacktest, type BacktestSample } from "./model-backtest";
+import { buildBlendExperiment, buildCalibrationExperiment, buildModelBacktest, type BacktestSample } from "./model-backtest";
 
 function sample(partial: Partial<BacktestSample> & { actual: BacktestSample["actual"] }): BacktestSample {
   return {
@@ -86,5 +86,38 @@ describe("segmentasi periode & eksperimen kalibrasi", () => {
       combos, [-0.02, 0.09], [paired(-0.01), paired(0.02)], combos[0]!, 50, 50,
     );
     assert.equal(adopted.adoptionJustified, true);
+  });
+});
+
+describe("pasar biner & eksperimen bobot campuran", () => {
+  it("over25VsMarket positif bila probabilitas totals model lebih akurat dari pasar", () => {
+    const rows = Array.from({ length: 30 }, (_, i) => sample({
+      actual: i % 2 === 0 ? { homeGoals: 2, awayGoals: 1 } : { homeGoals: 0, awayGoals: 0 },
+      model: { home: 0.45, draw: 0.27, away: 0.28, over25: i % 2 === 0 ? 0.85 : 0.15, bttsYes: 0.5 },
+      marketOver25: 0.5,
+    }));
+    const report = buildModelBacktest(rows);
+    assert.ok(report.over25VsMarket && report.over25VsMarket.skill > 0);
+    assert.equal(report.bttsVsMarket, null);
+  });
+
+  it("blend memilih bobot pasar murni bila model menyesatkan, dan mengakuinya", () => {
+    const bad = Array.from({ length: 20 }, () => sample({
+      actual: { homeGoals: 1, awayGoals: 0 },
+      model: { home: 0.1, draw: 0.2, away: 0.7, over25: 0.5, bttsYes: 0.5 },
+    }));
+    const exp = buildBlendExperiment(bad, bad);
+    assert.equal(exp.bestWeight, 0);
+    assert.equal(exp.modelAddsValue, false);
+  });
+
+  it("blend memberi bobot positif bila model sempurna", () => {
+    const perfect = Array.from({ length: 20 }, () => sample({
+      actual: { homeGoals: 1, awayGoals: 0 },
+      model: { home: 0.98, draw: 0.01, away: 0.01, over25: 0.5, bttsYes: 0.5 },
+    }));
+    const exp = buildBlendExperiment(perfect, perfect);
+    assert.ok(exp.bestWeight != null && exp.bestWeight > 0);
+    assert.equal(exp.modelAddsValue, true);
   });
 });
