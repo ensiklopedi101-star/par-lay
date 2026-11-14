@@ -495,6 +495,13 @@ export interface ModelBacktestReportData {
     adoptionJustified: boolean;
     note: string;
   };
+  infoVariants: Array<{
+    key: string;
+    label: string;
+    n: number;
+    modelLogLoss: number;
+    vsMarket: { n: number; skill: number; tStat: number | null } | null;
+  }>;
 }
 
 export const getGetModelBacktestQueryKey = () => ["learning/model-backtest"];

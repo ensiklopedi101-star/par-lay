@@ -189,6 +189,41 @@ export function ModelBacktestPanel({
               </div>
             </div>
 
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Eksperimen informasi: apakah form musim berjalan yang hilang?
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                    <th className="py-2 pr-3 font-medium">Varian informasi</th>
+                    <th className="py-2 pr-3 font-medium">Log-loss</th>
+                    <th className="py-2 font-medium">Skill vs pasar</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.infoVariants.map((variant) => (
+                    <tr key={variant.key} className="border-b border-border/50">
+                      <td className="py-2 pr-3">{variant.label}</td>
+                      <td className="py-2 pr-3 tabular-nums">{fmt(variant.modelLogLoss)}</td>
+                      <td className="py-2 tabular-nums">
+                        {variant.vsMarket
+                          ? `${pctSigned(variant.vsMarket.skill)} (t=${variant.vsMarket.tStat != null ? variant.vsMarket.tStat.toFixed(2) : "—"})`
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Form musim berjalan direkonstruksi hanya dari pertandingan yang kick-off-nya lebih
+                dulu (tanpa melihat ke depan), dari skor final di database sendiri. Ketiga varian
+                memakai sampel pertandingan yang sama persis — yang berubah hanya informasinya.
+                Bila varian campuran menutup celah ke pasar, itulah bukti jalur live (yang memang
+                memakai statistik musim berjalan) lebih kuat daripada angka vonis prior-only di atas.
+              </p>
+            </div>
+
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               Cakupan: {data.fixturesTotal} pertandingan selesai · {data.skippedNoStats} dilewati karena
               statistik prior salah satu tim tidak ada (mis. tim promosi) · {data.skippedNoMarket} tanpa

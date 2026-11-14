@@ -29,7 +29,9 @@ import {
   type CalibrationExperiment,
   type LambdaParamCombo,
   type ModelBacktestReport,
+  type PairedMetric,
 } from "../lib/model-backtest";
+import { RollingFormTracker } from "../lib/rolling-form";
 import type { LeagueAverages } from "../lib/quant/strength";
 
 /** Liga yang punya statistik 2025-26 untuk dipakai sebagai prior. */
@@ -53,6 +55,15 @@ export interface ModelBacktestResult {
   skippedNoMarket: number;
   report: ModelBacktestReport;
   calibration: CalibrationExperiment;
+  infoVariants: InfoVariantResult[];
+}
+
+export interface InfoVariantResult {
+  key: "prior_only" | "form_only" | "prior_plus_form";
+  label: string;
+  n: number;
+  modelLogLoss: number;
+  vsMarket: PairedMetric | null;
 }
 
 /** Parameter bawaan produksi saat ini (lib/match-context.ts). */
@@ -67,14 +78,20 @@ interface PreparedFixture {
   kickoff: string;
   homeRates: TeamRatesParsed;
   awayRates: TeamRatesParsed;
+  /** Form musim berjalan point-in-time (null = belum ada laga musim ini). */
+  formHome: TeamRatesParsed | null;
+  formAway: TeamRatesParsed | null;
   leagueAvg: LeagueAverages;
   market: BacktestSample["market"];
   actual: BacktestSample["actual"];
 }
 
-function samplesFor(prepared: PreparedFixture[], params: LambdaParams): BacktestSample[] {
+function buildSamples(
+  prepared: PreparedFixture[],
+  lambdasOf: (fixture: PreparedFixture) => { lambdaHome: number; lambdaAway: number },
+): BacktestSample[] {
   return prepared.map((fixture) => {
-    const lambdas = estimateLambdas(fixture.homeRates, fixture.awayRates, fixture.leagueAvg, params);
+    const lambdas = lambdasOf(fixture);
     const probs = marketProbabilities(scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway));
     return {
       id: fixture.id,
@@ -88,6 +105,11 @@ function samplesFor(prepared: PreparedFixture[], params: LambdaParams): Backtest
       actual: fixture.actual,
     };
   });
+}
+
+function samplesFor(prepared: PreparedFixture[], params: LambdaParams): BacktestSample[] {
+  return buildSamples(prepared, (fixture) =>
+    estimateLambdas(fixture.homeRates, fixture.awayRates, fixture.leagueAvg, params));
 }
 
 type StatsRow = Record<string, unknown> & { league_slug: string; team_name: string };
@@ -208,13 +230,72 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
       kickoff: String(fixture["fixture_date"]),
       homeRates: parseTeamRates(normalizeStatsRow(homeRow).stats),
       awayRates: parseTeamRates(normalizeStatsRow(awayRow).stats),
+      formHome: null,
+      formAway: null,
       leagueAvg: averagesByLeague.get(league) ?? DEFAULT_LEAGUE,
       market,
       actual: { homeGoals: Number(fixture["home_goals"]), awayGoals: Number(fixture["away_goals"]) },
     });
   }
 
+  /*
+   * Rekonstruksi form musim berjalan point-in-time dari SELURUH hasil
+   * liga (termasuk lawan tim promosi yang sampelnya sendiri dilewati):
+   * untuk setiap fixture, rates dibaca sebelum hasilnya dicatat.
+   */
+  const preparedById = new Map(prepared.map((fixture) => [fixture.id, fixture]));
+  const tracker = new RollingFormTracker();
+  const chronologicalFixtures = [...fixtureRows].sort((a, b) =>
+    String(a["fixture_date"]).localeCompare(String(b["fixture_date"])),
+  );
+  for (const fixture of chronologicalFixtures) {
+    const league = BACKTEST_LEAGUES[String(fixture["league_name"])] ?? String(fixture["league_name"]);
+    const homeKey = `${league}:${String(fixture["home_team_name"]).trim().toLowerCase()}`;
+    const awayKey = `${league}:${String(fixture["away_team_name"]).trim().toLowerCase()}`;
+    const target = preparedById.get(String(fixture["fixture_id"]));
+    if (target) {
+      target.formHome = tracker.ratesFor(homeKey);
+      target.formAway = tracker.ratesFor(awayKey);
+    }
+    tracker.record(homeKey, awayKey, Number(fixture["home_goals"]), Number(fixture["away_goals"]));
+  }
+
   const samples = samplesFor(prepared, DEFAULT_PARAMS);
+
+  /*
+   * Eksperimen informasi: apakah yang hilang dari model adalah FORM
+   * MUSIM BERJALAN (yang dimiliki pasar)? Tiga varian, sampel identik:
+   * prior-only (baseline), form-only (fallback prior bila belum ada
+   * laga), dan campuran λ berbobot jumlah laga form /(laga + K).
+   */
+  const formSamples = buildSamples(prepared, (fixture) =>
+    estimateLambdas(
+      fixture.formHome ?? fixture.homeRates,
+      fixture.formAway ?? fixture.awayRates,
+      fixture.leagueAvg,
+    ));
+  const blendedSamples = buildSamples(prepared, (fixture) => {
+    const prior = estimateLambdas(fixture.homeRates, fixture.awayRates, fixture.leagueAvg);
+    if (!fixture.formHome || !fixture.formAway) return prior;
+    const form = estimateLambdas(fixture.formHome, fixture.formAway, fixture.leagueAvg);
+    const formMatches = Math.min(fixture.formHome.matches ?? 0, fixture.formAway.matches ?? 0);
+    const w = formMatches / (formMatches + DEFAULT_PARAMS.shrinkK);
+    return {
+      lambdaHome: w * form.lambdaHome + (1 - w) * prior.lambdaHome,
+      lambdaAway: w * form.lambdaAway + (1 - w) * prior.lambdaAway,
+    };
+  });
+  const variantOf = (
+    key: InfoVariantResult["key"], label: string, variantSamples: BacktestSample[],
+  ): InfoVariantResult => {
+    const result = buildModelBacktest(variantSamples);
+    return { key, label, n: result.samples, modelLogLoss: result.oneX2.modelLogLoss, vsMarket: result.oneX2.vsMarket };
+  };
+  const infoVariants: InfoVariantResult[] = [
+    variantOf("prior_only", "Prior musim lalu saja (model saat ini)", samples),
+    variantOf("form_only", "Form musim berjalan saja", formSamples),
+    variantOf("prior_plus_form", "Prior + form musim berjalan (campuran λ)", blendedSamples),
+  ];
 
   /*
    * Eksperimen kalibrasi: separuh pertama (kronologis) memilih kombinasi,
@@ -247,6 +328,7 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     skippedNoMarket,
     report: buildModelBacktest(samples),
     calibration,
+    infoVariants,
   };
   cached = { at: Date.now(), value };
   logger.info(

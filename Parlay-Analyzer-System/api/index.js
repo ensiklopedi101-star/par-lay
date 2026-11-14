@@ -89494,6 +89494,78 @@ function buildCalibrationExperiment(combos, trainSkills, validation, defaultComb
   };
 }
 
+// src/lib/rolling-form.ts
+function emptyAccum() {
+  return {
+    matches: 0,
+    gf: 0,
+    ga: 0,
+    homeMatches: 0,
+    homeGf: 0,
+    homeGa: 0,
+    awayMatches: 0,
+    awayGf: 0,
+    awayGa: 0
+  };
+}
+var per = (total, matches) => matches > 0 ? total / matches : null;
+var RollingFormTracker = class {
+  teams = /* @__PURE__ */ new Map();
+  accum(teamKey2) {
+    let acc = this.teams.get(teamKey2);
+    if (!acc) {
+      acc = emptyAccum();
+      this.teams.set(teamKey2, acc);
+    }
+    return acc;
+  }
+  /** Rates musim berjalan tim SEBELUM pertandingan berikutnya dicatat. */
+  ratesFor(teamKey2) {
+    const acc = this.teams.get(teamKey2);
+    if (!acc || acc.matches === 0) return null;
+    return {
+      matches: acc.matches,
+      goalsFor: per(acc.gf, acc.matches),
+      goalsAgainst: per(acc.ga, acc.matches),
+      goalsForHome: per(acc.homeGf, acc.homeMatches),
+      goalsForAway: per(acc.awayGf, acc.awayMatches),
+      goalsAgainstHome: per(acc.homeGa, acc.homeMatches),
+      goalsAgainstAway: per(acc.awayGa, acc.awayMatches),
+      xgFor: null,
+      xgAgainst: null,
+      xgResidual: null,
+      btts: null,
+      bttsHome: null,
+      bttsAway: null,
+      fts: null,
+      ftsHome: null,
+      shotsOver105: null,
+      formPoints: null,
+      formMatches: acc.matches,
+      formPpg: null,
+      last6: null,
+      htWin: null
+    };
+  }
+  /** Catat satu hasil final. Panggil hanya setelah rates kedua tim dibaca. */
+  record(homeKey, awayKey, homeGoals, awayGoals) {
+    const home = this.accum(homeKey);
+    home.matches += 1;
+    home.gf += homeGoals;
+    home.ga += awayGoals;
+    home.homeMatches += 1;
+    home.homeGf += homeGoals;
+    home.homeGa += awayGoals;
+    const away = this.accum(awayKey);
+    away.matches += 1;
+    away.gf += awayGoals;
+    away.ga += homeGoals;
+    away.awayMatches += 1;
+    away.awayGf += awayGoals;
+    away.awayGa += homeGoals;
+  }
+};
+
 // src/services/model-backtest.ts
 var BACKTEST_LEAGUES = {
   "england-premier-league": "england-premier-league",
@@ -89509,9 +89581,9 @@ var PRIOR_SEASON = "2025-26";
 var FIXTURES_FROM = "2026-08-01";
 var DEFAULT_PARAMS = { xgWeight: 0.6, shrinkK: 6 };
 var PARAM_GRID = [0, 0.3, 0.6, 0.8, 1].flatMap((xgWeight) => [0, 3, 6, 12].map((shrinkK) => ({ xgWeight, shrinkK })));
-function samplesFor(prepared, params) {
+function buildSamples(prepared, lambdasOf) {
   return prepared.map((fixture) => {
-    const lambdas = estimateLambdas(fixture.homeRates, fixture.awayRates, fixture.leagueAvg, params);
+    const lambdas = lambdasOf(fixture);
     const probs = marketProbabilities(scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway));
     return {
       id: fixture.id,
@@ -89528,6 +89600,9 @@ function samplesFor(prepared, params) {
       actual: fixture.actual
     };
   });
+}
+function samplesFor(prepared, params) {
+  return buildSamples(prepared, (fixture) => estimateLambdas(fixture.homeRates, fixture.awayRates, fixture.leagueAvg, params));
 }
 function leagueAverages(rows) {
   const home = [];
@@ -89614,12 +89689,55 @@ async function getModelBacktest(force = false) {
       kickoff: String(fixture["fixture_date"]),
       homeRates: parseTeamRates(normalizeStatsRow(homeRow).stats),
       awayRates: parseTeamRates(normalizeStatsRow(awayRow).stats),
+      formHome: null,
+      formAway: null,
       leagueAvg: averagesByLeague.get(league) ?? DEFAULT_LEAGUE,
       market,
       actual: { homeGoals: Number(fixture["home_goals"]), awayGoals: Number(fixture["away_goals"]) }
     });
   }
+  const preparedById = new Map(prepared.map((fixture) => [fixture.id, fixture]));
+  const tracker = new RollingFormTracker();
+  const chronologicalFixtures = [...fixtureRows].sort(
+    (a, b) => String(a["fixture_date"]).localeCompare(String(b["fixture_date"]))
+  );
+  for (const fixture of chronologicalFixtures) {
+    const league = BACKTEST_LEAGUES[String(fixture["league_name"])] ?? String(fixture["league_name"]);
+    const homeKey = `${league}:${String(fixture["home_team_name"]).trim().toLowerCase()}`;
+    const awayKey = `${league}:${String(fixture["away_team_name"]).trim().toLowerCase()}`;
+    const target = preparedById.get(String(fixture["fixture_id"]));
+    if (target) {
+      target.formHome = tracker.ratesFor(homeKey);
+      target.formAway = tracker.ratesFor(awayKey);
+    }
+    tracker.record(homeKey, awayKey, Number(fixture["home_goals"]), Number(fixture["away_goals"]));
+  }
   const samples = samplesFor(prepared, DEFAULT_PARAMS);
+  const formSamples = buildSamples(prepared, (fixture) => estimateLambdas(
+    fixture.formHome ?? fixture.homeRates,
+    fixture.formAway ?? fixture.awayRates,
+    fixture.leagueAvg
+  ));
+  const blendedSamples = buildSamples(prepared, (fixture) => {
+    const prior = estimateLambdas(fixture.homeRates, fixture.awayRates, fixture.leagueAvg);
+    if (!fixture.formHome || !fixture.formAway) return prior;
+    const form = estimateLambdas(fixture.formHome, fixture.formAway, fixture.leagueAvg);
+    const formMatches = Math.min(fixture.formHome.matches ?? 0, fixture.formAway.matches ?? 0);
+    const w = formMatches / (formMatches + DEFAULT_PARAMS.shrinkK);
+    return {
+      lambdaHome: w * form.lambdaHome + (1 - w) * prior.lambdaHome,
+      lambdaAway: w * form.lambdaAway + (1 - w) * prior.lambdaAway
+    };
+  });
+  const variantOf = (key, label, variantSamples) => {
+    const result2 = buildModelBacktest(variantSamples);
+    return { key, label, n: result2.samples, modelLogLoss: result2.oneX2.modelLogLoss, vsMarket: result2.oneX2.vsMarket };
+  };
+  const infoVariants = [
+    variantOf("prior_only", "Prior musim lalu saja (model saat ini)", samples),
+    variantOf("form_only", "Form musim berjalan saja", formSamples),
+    variantOf("prior_plus_form", "Prior + form musim berjalan (campuran \u03BB)", blendedSamples)
+  ];
   const chronological = [...prepared].sort((a, b) => a.kickoff.localeCompare(b.kickoff));
   const splitAt = Math.floor(chronological.length / 2);
   const trainPrepared = chronological.slice(0, splitAt);
@@ -89644,7 +89762,8 @@ async function getModelBacktest(force = false) {
     skippedNoStats,
     skippedNoMarket,
     report: buildModelBacktest(samples),
-    calibration
+    calibration,
+    infoVariants
   };
   cached = { at: Date.now(), value };
   logger.info(
