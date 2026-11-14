@@ -14,7 +14,7 @@ import { requireAdmin } from "../middlewares/admin";
 import { createParlayFromCandidates, type ParlayCandidate } from "../services/parlay-builder";
 import { collectPagedRows, latestOddsByMarket } from "../services/odds-history";
 import { recoverStaleScanJob } from "../lib/scan-job-status";
-import { MAX_VERIFIED_ODDS_AGE_MS } from "../lib/market-odds-readiness";
+import { ODDS_FRESHNESS_MAX_MS } from "../lib/market-odds-readiness";
 import { randomUUID } from "node:crypto";
 
 const router: IRouter = Router();
@@ -256,7 +256,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
    *    di dalam jendela validitas yang bisa membuat fixture "valid";
    *    sisanya memang harus menunggu refresh.
    */
-  const freshCutoffIso = new Date(Date.now() - MAX_VERIFIED_ODDS_AGE_MS).toISOString();
+  const freshCutoffIso = new Date(Date.now() - ODDS_FRESHNESS_MAX_MS).toISOString();
   type OddsHistoryRow = {
     match_id: string | number;
     bookmaker: string | null;
@@ -309,7 +309,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
     oddsByFixture.set(key, rows);
   }
   const waitingFixtures = pendingFixtures.filter((fixture) =>
-    assessOddsAvailability(oddsByFixture.get(String(fixture.fixture_id)) ?? []).status !== "valid",
+    assessOddsAvailability(oddsByFixture.get(String(fixture.fixture_id)) ?? [], fixture.fixture_date).status !== "valid",
   );
   const toScan = pendingFixtures
     .filter((fixture) => !waitingFixtures.some((waiting) => waiting.fixture_id === fixture.fixture_id))
@@ -334,7 +334,10 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
   job.waitingOdds = job.waitingOdds + waitingFixtures.length;
   const completedBase = job.completed;
   for (const fx of waitingFixtures) {
-    const oddsAvailability = assessOddsAvailability(oddsByFixture.get(String(fx.fixture_id)) ?? []);
+    const oddsAvailability = assessOddsAvailability(oddsByFixture.get(String(fx.fixture_id)) ?? [], fx.fixture_date);
+    const ageHours = oddsAvailability.ageMs != null
+      ? Math.round((oddsAvailability.ageMs / 3_600_000) * 10) / 10
+      : null;
     job.tickets.push({
       fixture_id: String(fx.fixture_id),
       home_team: fx.home_team_name,
@@ -348,7 +351,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
       kelly_stake: "N/A",
       kelly_edge: 0,
       prediction_text: oddsAvailability.status === "stale"
-        ? "Snapshot odds sudah kedaluwarsa. Menunggu refresh provider sebelum AI dipanggil."
+        ? `Odds ada tapi basi: snapshot terakhir ${oddsAvailability.latestCapturedAt ?? "?"} (umur ${ageHours ?? "?"} jam; batas ${Math.round(oddsAvailability.maxAgeMs / 3_600_000)} jam untuk jarak kick-off ini). Menunggu refresh provider sebelum AI dipanggil.`
         : "Odds provider belum tersedia. AI belum dipanggil.",
       status: "waiting_odds",
        readiness_status: "technical_review",
@@ -404,6 +407,7 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
           home_team_name: fx.home_team_name,
           away_team_name: fx.away_team_name,
           league_name: fx.league_name,
+          fixture_date: fx.fixture_date,
         },
         oddsRows: oddsByFixture.get(String(fx.fixture_id)) ?? [],
         statsCache,

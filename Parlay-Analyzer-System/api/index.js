@@ -54836,6 +54836,23 @@ function resolveOddsMaxAgeHours(raw = process.env.ODDS_MAX_AGE_HOURS) {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_ODDS_MAX_AGE_HOURS;
   return Math.min(24, Math.max(1, parsed));
 }
+function oddsFreshnessBudgetMs(hoursUntilKickoff2) {
+  if (hoursUntilKickoff2 == null || !Number.isFinite(hoursUntilKickoff2) || hoursUntilKickoff2 < 0) {
+    return MAX_VERIFIED_ODDS_AGE_MS;
+  }
+  for (const tier of ODDS_FRESHNESS_TIERS) {
+    if (hoursUntilKickoff2 <= tier.maxHoursToKickoff) {
+      return tier.maxAgeHours * 60 * 60 * 1e3;
+    }
+  }
+  return ODDS_FRESHNESS_MAX_MS;
+}
+function hoursUntilKickoff(fixtureDate, nowMs) {
+  if (fixtureDate == null) return null;
+  const kickoffMs = new Date(fixtureDate).getTime();
+  if (!Number.isFinite(kickoffMs)) return null;
+  return (kickoffMs - nowMs) / (60 * 60 * 1e3);
+}
 function normalizedText(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -55016,7 +55033,7 @@ function resolveMarketOdds(market, rows, options = {}) {
   }
   return result("verified", "Odds provider cocok dengan market, sisi pilihan, line, dan batas freshness.", common);
 }
-var DEFAULT_ODDS_MAX_AGE_HOURS, ODDS_MAX_AGE_HOURS, MAX_VERIFIED_ODDS_AGE_MS;
+var DEFAULT_ODDS_MAX_AGE_HOURS, ODDS_MAX_AGE_HOURS, MAX_VERIFIED_ODDS_AGE_MS, ODDS_FRESHNESS_TIERS, ODDS_FRESHNESS_MAX_MS;
 var init_market_odds_readiness = __esm({
   "src/lib/market-odds-readiness.ts"() {
     "use strict";
@@ -55024,6 +55041,13 @@ var init_market_odds_readiness = __esm({
     DEFAULT_ODDS_MAX_AGE_HOURS = 3;
     ODDS_MAX_AGE_HOURS = resolveOddsMaxAgeHours();
     MAX_VERIFIED_ODDS_AGE_MS = ODDS_MAX_AGE_HOURS * 60 * 60 * 1e3;
+    ODDS_FRESHNESS_TIERS = [
+      { maxHoursToKickoff: 6, maxAgeHours: 6 },
+      { maxHoursToKickoff: 24, maxAgeHours: 12 },
+      { maxHoursToKickoff: 72, maxAgeHours: 24 },
+      { maxHoursToKickoff: Number.POSITIVE_INFINITY, maxAgeHours: 48 }
+    ];
+    ODDS_FRESHNESS_MAX_MS = 48 * 60 * 60 * 1e3;
   }
 });
 
@@ -57792,23 +57816,26 @@ function assessTeamStatsQuality(stats) {
     requiredCount: REQUIRED_STAT_KEYS.length
   };
 }
-function assessOddsAvailability(rows) {
+function assessOddsAvailability(rows, fixtureDate, nowMs = Date.now()) {
+  const maxAgeMs = oddsFreshnessBudgetMs(hoursUntilKickoff(fixtureDate, nowMs));
   const usableRows = rows.filter((row) => {
     const marketType = classifyOddsMarket(row.market_type);
     const selectionPrices = marketType === "ML" || marketType === "HT" ? [row.odds_1, row.odds_2, row.odds_draw] : [row.odds_1, row.odds_2];
     return selectionPrices.some((value) => Number(value) > 1);
   });
   if (usableRows.length === 0) {
-    return { status: "missing", latestCapturedAt: null, rowCount: 0 };
+    return { status: "missing", latestCapturedAt: null, rowCount: 0, ageMs: null, maxAgeMs };
   }
   const latestCapturedAt = usableRows.map((row) => row.captured_at).filter((value) => Boolean(value)).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
   const latestCapturedTime = latestCapturedAt ? new Date(latestCapturedAt).getTime() : Number.NaN;
-  const latestAge = Date.now() - latestCapturedTime;
-  const isStale = !Number.isFinite(latestCapturedTime) || latestAge < 0 || latestAge > ODDS_MAX_AGE_HOURS2 * 60 * 60 * 1e3;
+  const latestAge = nowMs - latestCapturedTime;
+  const isStale = !Number.isFinite(latestCapturedTime) || latestAge < 0 || latestAge > maxAgeMs;
   return {
     status: isStale ? "stale" : "valid",
     latestCapturedAt,
-    rowCount: usableRows.length
+    rowCount: usableRows.length,
+    ageMs: Number.isFinite(latestAge) ? latestAge : null,
+    maxAgeMs
   };
 }
 function impliedProb(odds) {
@@ -58522,6 +58549,7 @@ async function analyzeFixture(fixtureId, context) {
   let awayTeam;
   let leagueName;
   let leagueSlug;
+  let fixtureDate = context?.fixture?.fixture_date ?? null;
   if (context?.fixture) {
     homeTeam = context.fixture.home_team_name ?? "";
     awayTeam = context.fixture.away_team_name ?? "";
@@ -58536,6 +58564,7 @@ async function analyzeFixture(fixtureId, context) {
     awayTeam = fixture.away_team ?? fixture.away_name ?? fixture.away_team_name ?? fixture.team_away ?? "";
     leagueName = fixture.league_name ?? fixture.league ?? "";
     leagueSlug = fixture.league_slug ?? fixture.league_name ?? "";
+    fixtureDate = fixture.fixture_date ?? null;
   }
   if (!homeTeam || !awayTeam) {
     throw new Error("Fixture record is missing home_team or away_team fields");
@@ -58556,9 +58585,10 @@ async function analyzeFixture(fixtureId, context) {
     oddsRows = latestOddsByMarket(data ?? []).slice(0, 60);
   }
   const structuredOdds = extractStructuredOdds(oddsRows);
-  const oddsAvailability = assessOddsAvailability(oddsRows);
+  const oddsAvailability = assessOddsAvailability(oddsRows, fixtureDate);
   if (oddsAvailability.status !== "valid") {
-    const reason = oddsAvailability.status === "stale" ? `Snapshot odds terakhir lebih lama dari ${ODDS_MAX_AGE_HOURS2} jam; AI menunggu odds terbaru.` : "Odds provider belum tersedia untuk fixture ini.";
+    const ageHours = oddsAvailability.ageMs != null ? Math.round(oddsAvailability.ageMs / 36e5 * 10) / 10 : null;
+    const reason = oddsAvailability.status === "stale" ? `Odds ada tapi basi: snapshot terakhir ${oddsAvailability.latestCapturedAt ?? "?"} (umur ${ageHours ?? "?"} jam; batas ${Math.round(oddsAvailability.maxAgeMs / 36e5)} jam untuk jarak kick-off ini). AI menunggu snapshot lebih segar.` : "Odds provider belum tersedia untuk fixture ini.";
     logger.info({ fixtureId, oddsStatus: oddsAvailability.status }, "[AI-ANALYSIS] Menunggu data odds; AI tidak dipanggil");
     throw new OddsUnavailableError(reason);
   }
@@ -58962,7 +58992,7 @@ ${repaired.text}`;
     }
   };
 }
-var DEFAULT_SYSTEM_INSTRUCTION, REQUIRED_STAT_KEYS, OPTIONAL_STAT_KEYS, ODDS_MAX_AGE_HOURS2, OddsUnavailableError, PredictionAlreadyExistsError, STATS_COLUMNS, LEAGUE_AVERAGE_TTL_MS, leagueAverageCache, StatsEmptyError, sleep2;
+var DEFAULT_SYSTEM_INSTRUCTION, REQUIRED_STAT_KEYS, OPTIONAL_STAT_KEYS, OddsUnavailableError, PredictionAlreadyExistsError, STATS_COLUMNS, LEAGUE_AVERAGE_TTL_MS, leagueAverageCache, StatsEmptyError, sleep2;
 var init_ai_analysis = __esm({
   "src/services/ai-analysis.ts"() {
     "use strict";
@@ -59098,7 +59128,6 @@ KOMPOSISI PARLAY (bila lebih dari satu selection tersedia):
       "stats_over_35",
       "stats_ht"
     ];
-    ODDS_MAX_AGE_HOURS2 = MAX_VERIFIED_ODDS_AGE_MS / (60 * 60 * 1e3);
     OddsUnavailableError = class extends Error {
       constructor(message = "Data odds belum tersedia untuk fixture ini.") {
         super(message);
@@ -86132,7 +86161,7 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
     (existing.data ?? []).filter(hasUsableSelectedMarket).map((row) => String(row.fixture_id))
   );
   const pendingFixtures = fixtures.filter((fixture) => !existingSet.has(String(fixture.fixture_id)));
-  const freshCutoffIso = new Date(Date.now() - MAX_VERIFIED_ODDS_AGE_MS).toISOString();
+  const freshCutoffIso = new Date(Date.now() - ODDS_FRESHNESS_MAX_MS).toISOString();
   let oddsData = [];
   if (pendingFixtures.length > 0) {
     try {
@@ -86160,7 +86189,7 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
     oddsByFixture.set(key, rows);
   }
   const waitingFixtures = pendingFixtures.filter(
-    (fixture) => assessOddsAvailability(oddsByFixture.get(String(fixture.fixture_id)) ?? []).status !== "valid"
+    (fixture) => assessOddsAvailability(oddsByFixture.get(String(fixture.fixture_id)) ?? [], fixture.fixture_date).status !== "valid"
   );
   const toScan = pendingFixtures.filter((fixture) => !waitingFixtures.some((waiting) => waiting.fixture_id === fixture.fixture_id)).slice(0, MAX_BATCH_FIXTURES);
   const { persona, agentInstructions } = await loadAIConfig();
@@ -86172,7 +86201,8 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
   job.waitingOdds = job.waitingOdds + waitingFixtures.length;
   const completedBase = job.completed;
   for (const fx of waitingFixtures) {
-    const oddsAvailability = assessOddsAvailability(oddsByFixture.get(String(fx.fixture_id)) ?? []);
+    const oddsAvailability = assessOddsAvailability(oddsByFixture.get(String(fx.fixture_id)) ?? [], fx.fixture_date);
+    const ageHours = oddsAvailability.ageMs != null ? Math.round(oddsAvailability.ageMs / 36e5 * 10) / 10 : null;
     job.tickets.push({
       fixture_id: String(fx.fixture_id),
       home_team: fx.home_team_name,
@@ -86185,7 +86215,7 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
       ev_percent: 0,
       kelly_stake: "N/A",
       kelly_edge: 0,
-      prediction_text: oddsAvailability.status === "stale" ? "Snapshot odds sudah kedaluwarsa. Menunggu refresh provider sebelum AI dipanggil." : "Odds provider belum tersedia. AI belum dipanggil.",
+      prediction_text: oddsAvailability.status === "stale" ? `Odds ada tapi basi: snapshot terakhir ${oddsAvailability.latestCapturedAt ?? "?"} (umur ${ageHours ?? "?"} jam; batas ${Math.round(oddsAvailability.maxAgeMs / 36e5)} jam untuk jarak kick-off ini). Menunggu refresh provider sebelum AI dipanggil.` : "Odds provider belum tersedia. AI belum dipanggil.",
       status: "waiting_odds",
       readiness_status: "technical_review",
       is_parlay_leg: false
@@ -86222,7 +86252,8 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
         fixture: {
           home_team_name: fx.home_team_name,
           away_team_name: fx.away_team_name,
-          league_name: fx.league_name
+          league_name: fx.league_name,
+          fixture_date: fx.fixture_date
         },
         oddsRows: oddsByFixture.get(String(fx.fixture_id)) ?? [],
         statsCache
@@ -87197,7 +87228,7 @@ async function findFixturesAwaitingAnalysis(options = {}) {
       );
     }).map((row) => Number(row.fixture_id))
   );
-  const freshCutoffIso = new Date(Date.now() - MAX_VERIFIED_ODDS_AGE_MS).toISOString();
+  const freshCutoffIso = new Date(Date.now() - ODDS_FRESHNESS_MAX_MS).toISOString();
   const oddsRows = await collectPagedRows(async (from, to) => {
     const { data, error: error2 } = await client.from("odds_history").select("match_id").in("match_id", ids.map((id) => String(id))).gte("captured_at", freshCutoffIso).order("match_id", { ascending: true }).range(from, to);
     return { data: data ?? [], error: error2 };
