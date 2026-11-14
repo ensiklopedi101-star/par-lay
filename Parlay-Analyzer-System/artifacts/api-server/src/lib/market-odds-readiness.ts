@@ -21,6 +21,60 @@ function resolveOddsMaxAgeHours(raw = process.env.ODDS_MAX_AGE_HOURS): number {
 export const ODDS_MAX_AGE_HOURS = resolveOddsMaxAgeHours();
 export const MAX_VERIFIED_ODDS_AGE_MS = ODDS_MAX_AGE_HOURS * 60 * 60 * 1000;
 
+/*
+ * Kesegaran odds BERTINGKAT menurut jarak kick-off (keputusan konsultan,
+ * 14 Nov 2026). Aturan datar 3 jam mengasumsikan sync odds berjalan per
+ * jam untuk semua match; produksi berjalan per 6 jam dan match jauh hari
+ * hanya disentuh sekali-sekali — akibatnya 91 fixture ditolak bukan
+ * karena odds tidak ada, melainkan snapshot-nya "terlalu tua" untuk
+ * pertandingan yang baru mulai 6 hari lagi.
+ *
+ * Prinsipnya: harga bergerak lambat jauh dari kick-off dan cepat di
+ * dekatnya, jadi toleransi menyempit seiring kick-off mendekat. Setiap
+ * tingkat juga ≥ satu siklus sync produksi (6 jam) supaya analisis tidak
+ * kelaparan di antara dua siklus. Harga acuan selalu yang tertangkap
+ * pada snapshot; pergerakannya sesudah itu dinilai oleh CLV terhadap
+ * harga penutup — nilai odds awal (mis. 2.3 di H-3) tertangkap, bukan
+ * dibuang menunggu harga "sempurna" di H-6.
+ *
+ * Batas ini hanya mengatur ANALISIS. Penilaian harga terverifikasi yang
+ * ketat (MAX_VERIFIED_ODDS_AGE_MS) tetap dipakai audit closing/learning.
+ */
+export const ODDS_FRESHNESS_TIERS: Array<{ maxHoursToKickoff: number; maxAgeHours: number }> = [
+  { maxHoursToKickoff: 6, maxAgeHours: 6 },
+  { maxHoursToKickoff: 24, maxAgeHours: 12 },
+  { maxHoursToKickoff: 72, maxAgeHours: 24 },
+  { maxHoursToKickoff: Number.POSITIVE_INFINITY, maxAgeHours: 48 },
+];
+
+/** Batas umur snapshot paling longgar — dipakai pemuat batch sebagai filter awal. */
+export const ODDS_FRESHNESS_MAX_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * Anggaran umur snapshot (ms) untuk fixture yang mulai dalam
+ * `hoursUntilKickoff` jam. Kick-off yang sudah lewat / tidak diketahui
+ * memakai batas terverifikasi yang ketat.
+ */
+export function oddsFreshnessBudgetMs(hoursUntilKickoff: number | null | undefined): number {
+  if (hoursUntilKickoff == null || !Number.isFinite(hoursUntilKickoff) || hoursUntilKickoff < 0) {
+    return MAX_VERIFIED_ODDS_AGE_MS;
+  }
+  for (const tier of ODDS_FRESHNESS_TIERS) {
+    if (hoursUntilKickoff <= tier.maxHoursToKickoff) {
+      return tier.maxAgeHours * 60 * 60 * 1000;
+    }
+  }
+  return ODDS_FRESHNESS_MAX_MS;
+}
+
+/** Jam menuju kick-off dari tanggal fixture; null bila tidak terbaca. */
+export function hoursUntilKickoff(fixtureDate: string | Date | null | undefined, nowMs: number): number | null {
+  if (fixtureDate == null) return null;
+  const kickoffMs = new Date(fixtureDate).getTime();
+  if (!Number.isFinite(kickoffMs)) return null;
+  return (kickoffMs - nowMs) / (60 * 60 * 1000);
+}
+
 export interface MarketOddsSnapshot {
   match_id?: string | number | null;
   bookmaker?: string | null;

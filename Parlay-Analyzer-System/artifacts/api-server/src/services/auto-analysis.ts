@@ -35,7 +35,7 @@
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { collectPagedRows } from "./odds-history";
-import { MAX_VERIFIED_ODDS_AGE_MS } from "../lib/market-odds-readiness";
+import { ODDS_FRESHNESS_MAX_MS } from "../lib/market-odds-readiness";
 
 /**
  * Batas anggaran waktu bawaan.
@@ -178,7 +178,7 @@ export async function findFixturesAwaitingAnalysis(options: {
    * 1000 baris dan fixture di luar potongan itu dikira belum punya odds.
    * Hanya snapshot segar yang dihitung — odds basi toh akan ditolak
    * analyzeFixture sebagai OddsUnavailableError. */
-  const freshCutoffIso = new Date(Date.now() - MAX_VERIFIED_ODDS_AGE_MS).toISOString();
+  const freshCutoffIso = new Date(Date.now() - ODDS_FRESHNESS_MAX_MS).toISOString();
   const oddsRows = await collectPagedRows<{ match_id: string | number }>(async (from, to) => {
     const { data, error } = await client
       .from("odds_history")

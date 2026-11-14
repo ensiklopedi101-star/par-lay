@@ -140,3 +140,39 @@ test("unrecognized selection fails closed", () => {
   assert.equal(result.status, "unsupported");
   assert.equal(result.odds, null);
 });
+
+/*
+ * Kesegaran bertingkat (keputusan konsultan 14 Nov 2026): sync produksi
+ * berjalan per 6 jam, jadi batas datar 3 jam menolak match yang baru
+ * mulai berhari-hari lagi. Toleransi harus menyempit mendekati kick-off
+ * dan tidak boleh lebih kecil dari satu siklus sync.
+ */
+import { hoursUntilKickoff, oddsFreshnessBudgetMs } from "./market-odds-readiness";
+
+const HOUR_MS = 60 * 60 * 1000;
+
+test("freshness budget: jauh dari kick-off longgar, dekat kick-off ketat", () => {
+  assert.equal(oddsFreshnessBudgetMs(100), 48 * HOUR_MS);
+  assert.equal(oddsFreshnessBudgetMs(48), 24 * HOUR_MS);
+  assert.equal(oddsFreshnessBudgetMs(12), 12 * HOUR_MS);
+  assert.equal(oddsFreshnessBudgetMs(3), 6 * HOUR_MS);
+});
+
+test("freshness budget: setiap tingkat >= satu siklus sync 6 jam", () => {
+  for (const hours of [1, 5, 12, 30, 80, 200]) {
+    assert.ok(oddsFreshnessBudgetMs(hours) >= 6 * HOUR_MS, `hours=${hours}`);
+  }
+});
+
+test("freshness budget: kick-off lewat/tidak diketahui memakai batas ketat", () => {
+  assert.equal(oddsFreshnessBudgetMs(-1), oddsFreshnessBudgetMs(null));
+  assert.equal(oddsFreshnessBudgetMs(undefined), oddsFreshnessBudgetMs(null));
+  assert.ok(oddsFreshnessBudgetMs(null) <= 3 * HOUR_MS);
+});
+
+test("hoursUntilKickoff menghitung jam menuju kick-off", () => {
+  const kickoff = new Date(now + 30 * HOUR_MS).toISOString();
+  assert.equal(hoursUntilKickoff(kickoff, now), 30);
+  assert.equal(hoursUntilKickoff(null, now), null);
+  assert.equal(hoursUntilKickoff("bukan-tanggal", now), null);
+});
