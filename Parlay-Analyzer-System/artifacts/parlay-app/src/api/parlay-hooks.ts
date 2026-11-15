@@ -549,6 +549,13 @@ export interface WarehouseMetricData {
   over25VsMarket: { n: number; skill: number; tStat: number | null } | null;
 }
 
+export interface HtExperimentData {
+  n: number;
+  htResult: { modelLogLoss: number; baseLogLoss: number; skill: number; argmaxHitRate: number };
+  over05: { n: number; modelLogLoss: number; baseLogLoss: number; skill: number; hitRate: number };
+  btts: { n: number; modelLogLoss: number; baseLogLoss: number; skill: number; hitRate: number };
+}
+
 export interface WarehouseBacktestData {
   generatedAt: string;
   matchesInWarehouse: number;
@@ -567,6 +574,11 @@ export interface WarehouseBacktestData {
     bestK: number | null;
     validation: WarehouseMetricData | null;
     adoptionJustified: boolean;
+    note: string;
+  };
+  ht: {
+    full: HtExperimentData | null;
+    validation: HtExperimentData | null;
     note: string;
   };
   ticketStrategies: Array<{

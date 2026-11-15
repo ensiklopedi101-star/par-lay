@@ -16,6 +16,7 @@ import { estimateLambdas, marketProbabilities, type TeamRatesParsed } from "./ma
 import { handicapOutcome, scoreMatrix, winShare } from "./quant/poisson";
 import type { LeagueAverages } from "./quant/strength";
 import { buildModelBacktest, type BacktestSample, type ModelBacktestReport } from "./model-backtest";
+import { htProbabilities, type HtSample } from "./quant/ht-model";
 
 export interface WarehouseMatch {
   league_slug: string;
@@ -26,6 +27,8 @@ export interface WarehouseMatch {
   away_elo: number | null;
   ft_home: number | null;
   ft_away: number | null;
+  ht_home?: number | null;
+  ht_away?: number | null;
   odd_home: number | null;
   odd_draw: number | null;
   odd_away: number | null;
@@ -58,13 +61,33 @@ interface TeamAccum {
   awayMatches: number;
   awayGf: number;
   awayGa: number;
+  htGf: number;
+  htGa: number;
+  htHomeGf: number;
+  htHomeGa: number;
+  htAwayGf: number;
+  htAwayGa: number;
 }
 
 const emptyAccum = (): TeamAccum => ({
   matches: 0, gf: 0, ga: 0,
   homeMatches: 0, homeGf: 0, homeGa: 0,
   awayMatches: 0, awayGf: 0, awayGa: 0,
+  htGf: 0, htGa: 0, htHomeGf: 0, htHomeGa: 0, htAwayGf: 0, htAwayGa: 0,
 });
+
+/** Laju HT tim sebagai TeamRatesParsed agar estimateLambdas yang sama bisa dipakai. */
+function toHtRates(acc: TeamAccum): TeamRatesParsed {
+  return {
+    ...toRates(acc),
+    goalsFor: per(acc.htGf, acc.matches),
+    goalsAgainst: per(acc.htGa, acc.matches),
+    goalsForHome: per(acc.htHomeGf, acc.homeMatches),
+    goalsForAway: per(acc.htAwayGf, acc.awayMatches),
+    goalsAgainstHome: per(acc.htHomeGa, acc.homeMatches),
+    goalsAgainstAway: per(acc.htAwayGa, acc.awayMatches),
+  };
+}
 
 const per = (total: number, n: number): number | null => (n > 0 ? total / n : null);
 
@@ -145,6 +168,12 @@ export interface PreparedWarehouseRow {
   lambdas: { lambdaHome: number; lambdaAway: number };
   market: BacktestSample["market"];
   marketOver25: number | null;
+  /** λ HT dari laju gol HT musim sebelumnya; null bila skor HT tak ada. */
+  htLambdas: { lambdaHome: number; lambdaAway: number } | null;
+  /** Patokan naif HT: rata-rata gol HT liga musim sebelumnya. */
+  htBaseLambdas: { lambdaHome: number; lambdaAway: number } | null;
+  /** Rata-rata gol FT liga musim sebelumnya (untuk pangsa HT per liga). */
+  leagueFt: { homeGoals: number; awayGoals: number };
 }
 
 /**
@@ -157,7 +186,7 @@ export function prepareWarehouseSamples(matches: WarehouseMatch[]): WarehousePre
 
   /* Agregat per (divisi, musim): dipakai sebagai prior untuk musim berikutnya. */
   const seasonAccum = new Map<string, Map<string, TeamAccum>>();
-  const seasonLeagueGoals = new Map<string, { home: number; away: number; matches: number }>();
+  const seasonLeagueGoals = new Map<string, { home: number; away: number; htHome: number; htAway: number; htMatches: number; matches: number }>();
   const keyOf = (league: string, season: number) => `${league}|${season}`;
   for (const match of sorted) {
     if (match.ft_home == null || match.ft_away == null) continue;
@@ -167,14 +196,23 @@ export function prepareWarehouseSamples(matches: WarehouseMatch[]): WarehousePre
     const home = teams.get(match.home_team) ?? emptyAccum();
     home.matches++; home.gf += match.ft_home; home.ga += match.ft_away;
     home.homeMatches++; home.homeGf += match.ft_home; home.homeGa += match.ft_away;
-    teams.set(match.home_team, home);
     const away = teams.get(match.away_team) ?? emptyAccum();
     away.matches++; away.gf += match.ft_away; away.ga += match.ft_home;
     away.awayMatches++; away.awayGf += match.ft_away; away.awayGa += match.ft_home;
+    if (match.ht_home != null && match.ht_away != null) {
+      home.htGf += match.ht_home; home.htGa += match.ht_away;
+      home.htHomeGf += match.ht_home; home.htHomeGa += match.ht_away;
+      away.htGf += match.ht_away; away.htGa += match.ht_home;
+      away.htAwayGf += match.ht_away; away.htAwayGa += match.ht_home;
+    }
+    teams.set(match.home_team, home);
     teams.set(match.away_team, away);
     seasonAccum.set(key, teams);
-    const goals = seasonLeagueGoals.get(key) ?? { home: 0, away: 0, matches: 0 };
+    const goals = seasonLeagueGoals.get(key) ?? { home: 0, away: 0, htHome: 0, htAway: 0, htMatches: 0, matches: 0 };
     goals.home += match.ft_home; goals.away += match.ft_away; goals.matches++;
+    if (match.ht_home != null && match.ht_away != null) {
+      goals.htHome += match.ht_home; goals.htAway += match.ht_away; goals.htMatches++;
+    }
     seasonLeagueGoals.set(key, goals);
   }
 
@@ -200,7 +238,18 @@ export function prepareWarehouseSamples(matches: WarehouseMatch[]): WarehousePre
     const lambdas = estimateLambdas(toRates(homeAcc), toRates(awayAcc), league);
     const market = impliedMarket(match);
     if (market == null) skippedNoMarket++;
-    prepared.push({ match, lambdas, market, marketOver25: impliedOver25(match) });
+    const htLeague: LeagueAverages = goals && goals.htMatches >= 50
+      ? { homeGoals: goals.htHome / goals.htMatches, awayGoals: goals.htAway / goals.htMatches }
+      : { homeGoals: 0.62, awayGoals: 0.48 };
+    const htLambdas = match.ht_home != null && match.ht_away != null
+      ? estimateLambdas(toHtRates(homeAcc), toHtRates(awayAcc), htLeague)
+      : null;
+    prepared.push({
+      match, lambdas, market, marketOver25: impliedOver25(match),
+      htLambdas,
+      htBaseLambdas: { lambdaHome: htLeague.homeGoals, lambdaAway: htLeague.awayGoals },
+      leagueFt: league,
+    });
   }
 
   const toSample = (row: PreparedWarehouseRow, lambdas: { lambdaHome: number; lambdaAway: number }): BacktestSample => {
@@ -393,4 +442,31 @@ export function simulateTicketStrategies(
       roi: tickets > 0 ? profit / tickets : null,
     };
   });
+}
+
+/**
+ * Sampel eksperimen HT dari baris terpersiapkan (model vs patokan liga).
+ *
+ * Model yang dipakai adalah varian yang terbukti lebih baik di gudang:
+ * λ FT tim diskalakan pangsa gol HT liganya. Laju HT per tim murni
+ * (htLambdas) justru kalah dari rata-rata liga (skill −1,8%) — terlalu
+ * berisik pada ±19 laga HT per tim per musim — jadi tidak dipakai.
+ */
+export function buildHtSamples(rows: PreparedWarehouseRow[]): HtSample[] {
+  const samples: HtSample[] = [];
+  for (const row of rows) {
+    if (!row.htBaseLambdas) continue;
+    if (row.match.ht_home == null || row.match.ht_away == null) continue;
+    const shareHome = row.leagueFt.homeGoals > 0 ? row.htBaseLambdas.lambdaHome / row.leagueFt.homeGoals : 0.44;
+    const shareAway = row.leagueFt.awayGoals > 0 ? row.htBaseLambdas.lambdaAway / row.leagueFt.awayGoals : 0.44;
+    samples.push({
+      model: htProbabilities(
+        row.lambdas.lambdaHome * shareHome,
+        row.lambdas.lambdaAway * shareAway,
+      ),
+      base: htProbabilities(row.htBaseLambdas.lambdaHome, row.htBaseLambdas.lambdaAway),
+      actual: { homeGoals: row.match.ht_home, awayGoals: row.match.ht_away },
+    });
+  }
+  return samples;
 }

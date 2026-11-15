@@ -13,6 +13,7 @@ import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { collectPagedRows } from "./odds-history";
 import {
+  buildHtSamples,
   buildModelBacktest,
   prepareWarehouseSamples,
   simulateTicketStrategies,
@@ -21,6 +22,7 @@ import {
   type WarehouseMatch,
   type WarehouseMetricSummary,
 } from "../lib/warehouse-backtest";
+import { buildHtExperiment, type HtExperimentResult } from "../lib/quant/ht-model";
 import { asianHandicapVsMarket, type PairedMetric } from "../lib/model-backtest";
 
 const VALIDATION_FROM = "2024-08-01";
@@ -49,6 +51,12 @@ export interface WarehouseBacktestResult {
   };
   /** Simulasi tiket mingguan 5–8 leg: pasar-dulu vs model-dulu vs filter. */
   ticketStrategies: TicketStrategyResult[];
+  /** Model babak pertama vs patokan rata-rata liga (tanpa odds HT historis). */
+  ht: {
+    full: HtExperimentResult | null;
+    validation: HtExperimentResult | null;
+    note: string;
+  };
 }
 
 let cached: { at: number; value: WarehouseBacktestResult } | null = null;
@@ -61,7 +69,7 @@ export async function getWarehouseBacktest(force = false): Promise<WarehouseBack
   const rows = await collectPagedRows<WarehouseMatch>(async (from, to) => {
     const { data, error } = await supabase!
       .from("research_matches")
-      .select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away, max_home, max_draw, max_away, form5_home, form5_away")
+      .select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, ht_home, ht_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away, max_home, max_draw, max_away, form5_home, form5_away")
       .lt("match_date", today)
       .not("ft_home", "is", null)
       .order("match_date", { ascending: true })
@@ -140,6 +148,18 @@ export async function getWarehouseBacktest(force = false): Promise<WarehouseBack
       note: eloNote,
     },
     ticketStrategies: simulateTicketStrategies(preparation.preparedRows),
+    ht: (() => {
+      const allSamples = buildHtSamples(preparation.preparedRows);
+      const validationSamples = buildHtSamples(
+        preparation.preparedRows.filter((r) => r.match.match_date >= VALIDATION_FROM),
+      );
+      const full = buildHtExperiment(allSamples);
+      const validation = buildHtExperiment(validationSamples);
+      const note = validation && validation.htResult.skill > 0
+        ? `Arah hasil HT sedikit informatif di validasi (skill ${(validation.htResult.skill * 100).toFixed(2)}%), tetapi pasar gol HT (Over 0.5/BTTS) tidak mengalahkan rata-rata liga — dan tanpa odds HT historis, nilai melawan bandar belum bisa diklaim. HT belum layak dijadikan andalan leg; probabilitas HT hanya layak tampil sebagai informasi.`
+        : "Model HT belum mengalahkan patokan rata-rata liga secara meyakinkan — pasar HT belum layak dijadikan andalan leg.";
+      return { full, validation, note };
+    })(),
   };
   cached = { at: Date.now(), value };
   logger.info(

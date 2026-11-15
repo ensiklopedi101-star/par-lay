@@ -122,6 +122,25 @@ export function WarehouseBacktestPanel({
               </Badge>
             </div>
 
+            {data.ht?.full && (
+              <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm leading-relaxed">
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Model Babak Pertama (HT) vs rata-rata liga
+                </div>
+                <p className="text-xs">
+                  n={data.ht.full.n.toLocaleString("id-ID")} · Hasil HT skill{" "}
+                  {pctSigned(data.ht.full.htResult.skill)} (tebakan teratas kena{" "}
+                  {(data.ht.full.htResult.argmaxHitRate * 100).toFixed(1)}%) · Over 0.5 HT skill{" "}
+                  {pctSigned(data.ht.full.over05.skill)} (kena {(data.ht.full.over05.hitRate * 100).toFixed(1)}%) ·
+                  BTTS HT skill {pctSigned(data.ht.full.btts.skill)}
+                  {data.ht.validation && (
+                    <> · Validasi: hasil HT {pctSigned(data.ht.validation.htResult.skill)}, Over 0.5 HT {pctSigned(data.ht.validation.over05.skill)}</>
+                  )}
+                </p>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">{data.ht.note}</p>
+              </div>
+            )}
+
             {data.ticketStrategies && data.ticketStrategies.length > 0 && (
               <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm leading-relaxed">
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">

@@ -90576,6 +90576,85 @@ init_odds_history();
 // src/lib/warehouse-backtest.ts
 init_match_context();
 init_poisson();
+
+// src/lib/quant/ht-model.ts
+init_poisson();
+function htProbabilities(lambdaHome, lambdaAway) {
+  const matrix = scoreMatrix(lambdaHome, lambdaAway);
+  let homeWin = 0;
+  let draw = 0;
+  let awayWin = 0;
+  let over05 = 0;
+  let over15 = 0;
+  let bttsYes = 0;
+  for (let h = 0; h < matrix.m.length; h++) {
+    for (let a = 0; a < matrix.m[h].length; a++) {
+      const p = matrix.m[h][a];
+      if (h > a) homeWin += p;
+      else if (h === a) draw += p;
+      else awayWin += p;
+      if (h + a >= 1) over05 += p;
+      if (h + a >= 2) over15 += p;
+      if (h >= 1 && a >= 1) bttsYes += p;
+    }
+  }
+  return { homeWin, draw, awayWin, over05, over15, bttsYes };
+}
+var clampP3 = (p) => Math.min(0.995, Math.max(5e-3, p));
+var binaryLogLoss = (p, y) => -(y === 1 ? Math.log(clampP3(p)) : Math.log(1 - clampP3(p)));
+var multiLogLoss = (probs, outcomeIndex) => -Math.log(clampP3(probs[outcomeIndex]));
+function buildHtExperiment(samples) {
+  const valid = samples.filter(
+    (s) => Number.isFinite(s.actual.homeGoals) && Number.isFinite(s.actual.awayGoals)
+  );
+  if (valid.length === 0) return null;
+  let resultModel = 0;
+  let resultBase = 0;
+  let argmaxHits = 0;
+  const binaries = {
+    over05: { model: 0, base: 0, hits: 0 },
+    btts: { model: 0, base: 0, hits: 0 }
+  };
+  for (const s of valid) {
+    const { homeGoals, awayGoals } = s.actual;
+    const outcomeIndex = homeGoals > awayGoals ? 0 : homeGoals === awayGoals ? 1 : 2;
+    resultModel += multiLogLoss([s.model.homeWin, s.model.draw, s.model.awayWin], outcomeIndex);
+    resultBase += multiLogLoss([s.base.homeWin, s.base.draw, s.base.awayWin], outcomeIndex);
+    const modelArgmax = [s.model.homeWin, s.model.draw, s.model.awayWin].indexOf(
+      Math.max(s.model.homeWin, s.model.draw, s.model.awayWin)
+    );
+    if (modelArgmax === outcomeIndex) argmaxHits++;
+    const overActual = homeGoals + awayGoals >= 1 ? 1 : 0;
+    binaries.over05.model += binaryLogLoss(s.model.over05, overActual);
+    binaries.over05.base += binaryLogLoss(s.base.over05, overActual);
+    if ((s.model.over05 >= 0.5 ? 1 : 0) === overActual) binaries.over05.hits++;
+    const bttsActual = homeGoals >= 1 && awayGoals >= 1 ? 1 : 0;
+    binaries.btts.model += binaryLogLoss(s.model.bttsYes, bttsActual);
+    binaries.btts.base += binaryLogLoss(s.base.bttsYes, bttsActual);
+    if ((s.model.bttsYes >= 0.5 ? 1 : 0) === bttsActual) binaries.btts.hits++;
+  }
+  const n = valid.length;
+  const toBinary = (b) => ({
+    n,
+    modelLogLoss: b.model / n,
+    baseLogLoss: b.base / n,
+    skill: 1 - b.model / b.base,
+    hitRate: b.hits / n
+  });
+  return {
+    n,
+    htResult: {
+      modelLogLoss: resultModel / n,
+      baseLogLoss: resultBase / n,
+      skill: 1 - resultModel / resultBase,
+      argmaxHitRate: argmaxHits / n
+    },
+    over05: toBinary(binaries.over05),
+    btts: toBinary(binaries.btts)
+  };
+}
+
+// src/lib/warehouse-backtest.ts
 function seasonStartYear(matchDate) {
   const year = Number(matchDate.slice(0, 4));
   const month = Number(matchDate.slice(5, 7));
@@ -90590,8 +90669,25 @@ var emptyAccum2 = () => ({
   homeGa: 0,
   awayMatches: 0,
   awayGf: 0,
-  awayGa: 0
+  awayGa: 0,
+  htGf: 0,
+  htGa: 0,
+  htHomeGf: 0,
+  htHomeGa: 0,
+  htAwayGf: 0,
+  htAwayGa: 0
 });
+function toHtRates(acc) {
+  return {
+    ...toRates(acc),
+    goalsFor: per2(acc.htGf, acc.matches),
+    goalsAgainst: per2(acc.htGa, acc.matches),
+    goalsForHome: per2(acc.htHomeGf, acc.homeMatches),
+    goalsForAway: per2(acc.htAwayGf, acc.awayMatches),
+    goalsAgainstHome: per2(acc.htHomeGa, acc.homeMatches),
+    goalsAgainstAway: per2(acc.htAwayGa, acc.awayMatches)
+  };
+}
 var per2 = (total, n) => n > 0 ? total / n : null;
 function toRates(acc) {
   return {
@@ -90656,7 +90752,6 @@ function prepareWarehouseSamples(matches) {
     home.homeMatches++;
     home.homeGf += match.ft_home;
     home.homeGa += match.ft_away;
-    teams.set(match.home_team, home);
     const away = teams.get(match.away_team) ?? emptyAccum2();
     away.matches++;
     away.gf += match.ft_away;
@@ -90664,12 +90759,28 @@ function prepareWarehouseSamples(matches) {
     away.awayMatches++;
     away.awayGf += match.ft_away;
     away.awayGa += match.ft_home;
+    if (match.ht_home != null && match.ht_away != null) {
+      home.htGf += match.ht_home;
+      home.htGa += match.ht_away;
+      home.htHomeGf += match.ht_home;
+      home.htHomeGa += match.ht_away;
+      away.htGf += match.ht_away;
+      away.htGa += match.ht_home;
+      away.htAwayGf += match.ht_away;
+      away.htAwayGa += match.ht_home;
+    }
+    teams.set(match.home_team, home);
     teams.set(match.away_team, away);
     seasonAccum.set(key, teams);
-    const goals = seasonLeagueGoals.get(key) ?? { home: 0, away: 0, matches: 0 };
+    const goals = seasonLeagueGoals.get(key) ?? { home: 0, away: 0, htHome: 0, htAway: 0, htMatches: 0, matches: 0 };
     goals.home += match.ft_home;
     goals.away += match.ft_away;
     goals.matches++;
+    if (match.ht_home != null && match.ht_away != null) {
+      goals.htHome += match.ht_home;
+      goals.htAway += match.ht_away;
+      goals.htMatches++;
+    }
     seasonLeagueGoals.set(key, goals);
   }
   const prepared = [];
@@ -90691,7 +90802,17 @@ function prepareWarehouseSamples(matches) {
     const lambdas = estimateLambdas(toRates(homeAcc), toRates(awayAcc), league);
     const market = impliedMarket(match);
     if (market == null) skippedNoMarket++;
-    prepared.push({ match, lambdas, market, marketOver25: impliedOver25(match) });
+    const htLeague = goals && goals.htMatches >= 50 ? { homeGoals: goals.htHome / goals.htMatches, awayGoals: goals.htAway / goals.htMatches } : { homeGoals: 0.62, awayGoals: 0.48 };
+    const htLambdas = match.ht_home != null && match.ht_away != null ? estimateLambdas(toHtRates(homeAcc), toHtRates(awayAcc), htLeague) : null;
+    prepared.push({
+      match,
+      lambdas,
+      market,
+      marketOver25: impliedOver25(match),
+      htLambdas,
+      htBaseLambdas: { lambdaHome: htLeague.homeGoals, lambdaAway: htLeague.awayGoals },
+      leagueFt: league
+    });
   }
   const toSample = (row, lambdas) => {
     const matrix = scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway);
@@ -90831,6 +90952,24 @@ function simulateTicketStrategies(rows, minProb = 0.6) {
     };
   });
 }
+function buildHtSamples(rows) {
+  const samples = [];
+  for (const row of rows) {
+    if (!row.htBaseLambdas) continue;
+    if (row.match.ht_home == null || row.match.ht_away == null) continue;
+    const shareHome = row.leagueFt.homeGoals > 0 ? row.htBaseLambdas.lambdaHome / row.leagueFt.homeGoals : 0.44;
+    const shareAway = row.leagueFt.awayGoals > 0 ? row.htBaseLambdas.lambdaAway / row.leagueFt.awayGoals : 0.44;
+    samples.push({
+      model: htProbabilities(
+        row.lambdas.lambdaHome * shareHome,
+        row.lambdas.lambdaAway * shareAway
+      ),
+      base: htProbabilities(row.htBaseLambdas.lambdaHome, row.htBaseLambdas.lambdaAway),
+      actual: { homeGoals: row.match.ht_home, awayGoals: row.match.ht_away }
+    });
+  }
+  return samples;
+}
 
 // src/services/warehouse-backtest.ts
 var VALIDATION_FROM = "2024-08-01";
@@ -90842,7 +90981,7 @@ async function getWarehouseBacktest(force = false) {
   if (!supabase) throw new Error("Supabase client not initialised");
   const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const rows = await collectPagedRows(async (from, to) => {
-    const { data, error } = await supabase.from("research_matches").select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away, max_home, max_draw, max_away, form5_home, form5_away").lt("match_date", today).not("ft_home", "is", null).order("match_date", { ascending: true }).range(from, to);
+    const { data, error } = await supabase.from("research_matches").select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, ht_home, ht_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away, max_home, max_draw, max_away, form5_home, form5_away").lt("match_date", today).not("ft_home", "is", null).order("match_date", { ascending: true }).range(from, to);
     return { data: data ?? [], error };
   });
   const preparation = prepareWarehouseSamples(rows);
@@ -90903,7 +91042,17 @@ async function getWarehouseBacktest(force = false) {
       adoptionJustified,
       note: eloNote
     },
-    ticketStrategies: simulateTicketStrategies(preparation.preparedRows)
+    ticketStrategies: simulateTicketStrategies(preparation.preparedRows),
+    ht: (() => {
+      const allSamples = buildHtSamples(preparation.preparedRows);
+      const validationSamples2 = buildHtSamples(
+        preparation.preparedRows.filter((r) => r.match.match_date >= VALIDATION_FROM)
+      );
+      const full = buildHtExperiment(allSamples);
+      const validation = buildHtExperiment(validationSamples2);
+      const note = validation && validation.htResult.skill > 0 ? `Arah hasil HT sedikit informatif di validasi (skill ${(validation.htResult.skill * 100).toFixed(2)}%), tetapi pasar gol HT (Over 0.5/BTTS) tidak mengalahkan rata-rata liga \u2014 dan tanpa odds HT historis, nilai melawan bandar belum bisa diklaim. HT belum layak dijadikan andalan leg; probabilitas HT hanya layak tampil sebagai informasi.` : "Model HT belum mengalahkan patokan rata-rata liga secara meyakinkan \u2014 pasar HT belum layak dijadikan andalan leg.";
+      return { full, validation, note };
+    })()
   };
   cached2 = { at: Date.now(), value };
   logger.info(
