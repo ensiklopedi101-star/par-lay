@@ -367,6 +367,20 @@ const DECLARED_NODE_CRON: Array<{ action: string; schedule: string }> = [
 ];
 
 /**
+ * Job cron-job.org — pemicu produksi sebenarnya (sumber kebenaran:
+ * CRON_JOBS.md). Ini deklarasi agar panel tidak menuduh tugas
+ * "tanpa jadwal"; apakah mereka benar-benar berjalan dibuktikan oleh
+ * `jobEvidence` dari artefak masing-masing, bukan oleh daftar ini.
+ */
+const DECLARED_EXTERNAL_CRONS: Array<{ action: string; schedule: string }> = [
+  { action: "sync", schedule: "0 * * * *" },
+  { action: "analyze", schedule: "10 * * * *" },
+  { action: "results", schedule: "30 * * * *" },
+  { action: "closing", schedule: "*/5 * * * *" },
+  { action: "outcomes", schedule: "35 * * * *" },
+];
+
+/**
  * GET /sync/automation-status — apakah rantai otomatis benar-benar hidup.
  *
  * Menjawab pertanyaan yang tidak bisa dijawab panel sync: bukan "kapan sync
@@ -402,6 +416,7 @@ router.get("/sync/automation-status", async (_req, res) => {
     const status = await buildAutomationStatus({
       vercelCrons: DECLARED_VERCEL_CRONS,
       nodeCronSchedules: DECLARED_NODE_CRON,
+      externalCrons: DECLARED_EXTERNAL_CRONS,
       lastDailyRunAt: lastCompletedRunAt,
     });
     res.json(status);

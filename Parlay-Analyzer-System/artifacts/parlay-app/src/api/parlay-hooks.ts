@@ -554,7 +554,7 @@ export function useGetSettlementSummary() {
 export interface CronTrigger {
   action: string;
   schedule: string;
-  source: "vercel" | "node-cron";
+  source: "vercel" | "node-cron" | "cron-job.org";
   runsPerDay: number;
   covers: string[];
 }
@@ -566,7 +566,18 @@ export interface AutomationGap {
   onlyOnDeadScheduler: boolean;
 }
 
+export interface JobEvidence {
+  action: string;
+  artifact: string;
+  lastArtifactAt: string | null;
+  hoursSince: number | null;
+  state: "proven" | "stale" | "waiting" | "missing";
+  note: string;
+}
+
 export interface AutomationStatus {
+  jobEvidence?: JobEvidence[];
+  schedulerNote?: string;
   triggers: CronTrigger[];
   gaps: AutomationGap[];
   coveredByVercel: string[];
