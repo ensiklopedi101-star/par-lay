@@ -1827,7 +1827,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
     }
 
       const oddsMatch = parsedRecommendation.marketBet
-        ? resolveMarketOdds(parsedRecommendation.marketBet, oddsRows, { homeTeam, awayTeam })
+        ? resolveMarketOdds(parsedRecommendation.marketBet, oddsRows, { homeTeam, awayTeam, fixtureDate })
         : null;
       const verifiedOdds = oddsMatch?.status === "verified" ? oddsMatch.odds : null;
     const computedEvPercent = verifiedOdds != null && parsedRecommendation.probability != null

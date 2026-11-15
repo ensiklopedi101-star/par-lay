@@ -55016,8 +55016,10 @@ function resolveMarketOdds(market, rows, options = {}) {
   const odds = selectionPrice(row, selection.side);
   const capturedAt = row.captured_at ?? null;
   const capturedTime2 = capturedAt ? new Date(capturedAt).getTime() : Number.NaN;
-  const age = (options.now ?? Date.now()) - capturedTime2;
-  const isFresh = Number.isFinite(capturedTime2) && age >= 0 && age <= (options.maxAgeMs ?? MAX_VERIFIED_ODDS_AGE_MS);
+  const nowMs = options.now ?? Date.now();
+  const age = nowMs - capturedTime2;
+  const maxAgeMs = options.maxAgeMs ?? (options.fixtureDate != null ? oddsFreshnessBudgetMs(hoursUntilKickoff(options.fixtureDate, nowMs)) : MAX_VERIFIED_ODDS_AGE_MS);
+  const isFresh = Number.isFinite(capturedTime2) && age >= 0 && age <= maxAgeMs;
   const common = {
     odds,
     capturedAt,
@@ -55029,7 +55031,12 @@ function resolveMarketOdds(market, rows, options = {}) {
     return result("missing_price", "Market dan line cocok, tetapi harga untuk sisi pilihan tidak tersedia.", common);
   }
   if (!isFresh) {
-    return result("stale", "Odds cocok, tetapi snapshot sudah kedaluwarsa atau waktu pengambilannya tidak valid.", common);
+    const ageHours = Number.isFinite(age) ? Math.max(0, Math.round(age / 36e5 * 10) / 10) : null;
+    return result(
+      "stale",
+      ageHours != null ? `Odds cocok, tetapi snapshot terakhir berumur ${ageHours} jam \u2014 melewati batas ${Math.round(maxAgeMs / 36e5)} jam untuk jarak kick-off ini. Tunggu sync berikutnya atau segarkan odds fixture ini.` : "Odds cocok, tetapi waktu pengambilan snapshot tidak valid.",
+      common
+    );
   }
   return result("verified", "Odds provider cocok dengan market, sisi pilihan, line, dan batas freshness.", common);
 }
@@ -58710,7 +58717,7 @@ ${repaired.text}`;
       logger.info({ fixtureId }, "[AI-RETRY] Repaired missing structured probability");
     }
   }
-  const oddsMatch = parsedRecommendation.marketBet ? resolveMarketOdds(parsedRecommendation.marketBet, oddsRows, { homeTeam, awayTeam }) : null;
+  const oddsMatch = parsedRecommendation.marketBet ? resolveMarketOdds(parsedRecommendation.marketBet, oddsRows, { homeTeam, awayTeam, fixtureDate }) : null;
   const verifiedOdds = oddsMatch?.status === "verified" ? oddsMatch.odds : null;
   const computedEvPercent = verifiedOdds != null && parsedRecommendation.probability != null ? (parsedRecommendation.probability * verifiedOdds - 1) * 100 : 0;
   const learningMarketFamily = parsedRecommendation.marketBet ? classifyOddsMarket(parsedRecommendation.marketBet) : null;
@@ -60338,7 +60345,8 @@ async function runRevalidation() {
     const rows = oddsByFixture.get(String(prediction.fixture_id)) ?? [];
     const currentOddsResolution = resolveMarketOdds(marketBet ?? "", rows, {
       homeTeam: prediction.home_team ?? void 0,
-      awayTeam: prediction.away_team ?? void 0
+      awayTeam: prediction.away_team ?? void 0,
+      fixtureDate: fx.fixture_date ?? null
     });
     const currentOdds = currentOddsResolution.status === "verified" ? currentOddsResolution.odds : null;
     const analysisOdds = prediction.best_odds;
@@ -88555,7 +88563,11 @@ router12.get("/parlays/predictions", async (_req, res) => {
       const oddsResolution = resolveMarketOdds(
         market,
         oddsByFixture.get(String(prediction.fixture_id)) ?? [],
-        { homeTeam: fixtureHome, awayTeam: fixtureAway }
+        {
+          homeTeam: fixtureHome,
+          awayTeam: fixtureAway,
+          fixtureDate: fixture?.fixture_date ?? null
+        }
       );
       const currentOdds = oddsResolution.status === "verified" ? oddsResolution.odds : null;
       const hasCurrentEv = currentOdds != null && probability > 0 && probability < 1;

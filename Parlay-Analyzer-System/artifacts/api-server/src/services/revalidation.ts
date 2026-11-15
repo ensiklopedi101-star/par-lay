@@ -197,6 +197,7 @@ export async function runRevalidation(): Promise<RevalidationSummary> {
     const currentOddsResolution = resolveMarketOdds(marketBet ?? "", rows, {
       homeTeam: prediction.home_team ?? undefined,
       awayTeam: prediction.away_team ?? undefined,
+      fixtureDate: fx.fixture_date ?? null,
     });
     const currentOdds = currentOddsResolution.status === "verified"
       ? currentOddsResolution.odds
