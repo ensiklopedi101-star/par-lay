@@ -1,5 +1,6 @@
 import { type Request, type Response, type NextFunction } from "express";
 import { logger } from "../lib/logger";
+import { safeEqual } from "../lib/security";
 
 /**
  * Password untuk admin actions.
@@ -20,7 +21,7 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
     return;
   }
 
-  if (provided !== ADMIN_PASSWORD) {
+  if (!safeEqual(provided, ADMIN_PASSWORD)) {
     logger.warn({ ip: req.ip, path: req.path }, "Unauthorized admin action attempt");
     res.status(401).json({ error: "Unauthorized — invalid admin password" });
     return;

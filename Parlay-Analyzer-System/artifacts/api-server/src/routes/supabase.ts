@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
+import { clampLimit } from "../lib/security";
 import { supabase } from "../lib/supabase-client";
 import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
 import { groupEquivalentTeamStatsRows, mergeTeamStatsRows } from "../lib/team-stats-merge";
@@ -18,8 +19,8 @@ router.get("/supabase/fixtures", async (req, res) => {
     if (status_short) q = q.eq("status_short", status_short as string);
     if (date_from) q = q.gte("fixture_date", date_from as string);
     if (date_to) q = q.lte("fixture_date", date_to as string);
-    const { data, error } = await q.order("fixture_date", { ascending: true }).limit(Number(limit ?? 200));
-    if (error) { logger.error({ error }, "Supabase fixtures error"); res.status(500).json({ error: error.message }); return; }
+    const { data, error } = await q.order("fixture_date", { ascending: true }).limit(clampLimit(limit, 200));
+    if (error) { logger.error({ error }, "Supabase fixtures error"); res.status(500).json({ error: "Gagal membaca data" }); return; }
     res.json(data ?? []);
   } catch (err) {
     logger.error({ err }, "Supabase fixtures exception");
@@ -34,8 +35,8 @@ router.get("/supabase/odds", async (req, res) => {
     let q = supabase.from("odds_history").select("*");
     if (match_id) q = q.eq("match_id", match_id as string);
     if (bookmaker) q = q.eq("bookmaker", bookmaker as string);
-    const { data, error } = await q.order("captured_at", { ascending: false }).limit(Number(limit ?? 200));
-    if (error) { logger.error({ error }, "Supabase odds error"); res.status(500).json({ error: error.message }); return; }
+    const { data, error } = await q.order("captured_at", { ascending: false }).limit(clampLimit(limit, 200));
+    if (error) { logger.error({ error }, "Supabase odds error"); res.status(500).json({ error: "Gagal membaca data" }); return; }
     res.json(data ?? []);
   } catch (err) {
     logger.error({ err }, "Supabase odds exception");
@@ -170,7 +171,7 @@ router.get("/supabase/standings", async (req, res) => {
     if (season) q = q.eq("season", season as string);
 
     const { data, error } = await q.limit(500);
-    if (error) { logger.error({ error }, "Supabase standings error"); res.status(500).json({ error: error.message }); return; }
+    if (error) { logger.error({ error }, "Supabase standings error"); res.status(500).json({ error: "Gagal membaca data" }); return; }
 
     function extractLast6(form: Record<string, unknown>): string {
       const v = form["Last 6"] ?? form["last_6"] ?? form["last6"] ?? form["Last_6"];
@@ -259,7 +260,7 @@ router.get("/supabase/standings", async (req, res) => {
 router.get("/supabase/leagues", async (_req, res) => {
   try {
     const { data, error } = await supabase.from("leagues").select("*").eq("is_active", true);
-    if (error) { logger.error({ error }, "Supabase leagues error"); res.status(500).json({ error: error.message }); return; }
+    if (error) { logger.error({ error }, "Supabase leagues error"); res.status(500).json({ error: "Gagal membaca data" }); return; }
     res.json(data ?? []);
   } catch (err) {
     logger.error({ err }, "Supabase leagues exception");
@@ -273,8 +274,8 @@ router.get("/supabase/odds-movement", async (req, res) => {
     const { match_id, limit } = req.query;
     let q = supabase.from("v_odds_movement").select("*");
     if (match_id) q = q.eq("match_id", match_id as string);
-    const { data, error } = await q.limit(Number(limit ?? 100));
-    if (error) { logger.error({ error }, "Supabase odds movement error"); res.status(500).json({ error: error.message }); return; }
+    const { data, error } = await q.limit(clampLimit(limit, 100));
+    if (error) { logger.error({ error }, "Supabase odds movement error"); res.status(500).json({ error: "Gagal membaca data" }); return; }
     res.json(data ?? []);
   } catch (err) {
     logger.error({ err }, "Supabase odds movement exception");
@@ -289,8 +290,8 @@ router.get("/supabase/team-season-stats", async (req, res) => {
     let q = supabase.from("team_season_stats").select("*");
     if (league_slug) q = q.eq("league_slug", league_slug as string);
     if (season) q = q.eq("season", season as string);
-    const { data, error } = await q.order("team_name", { ascending: true }).limit(Number(limit ?? 500));
-    if (error) { logger.error({ error }, "Supabase team season stats error"); res.status(500).json({ error: error.message }); return; }
+    const { data, error } = await q.order("team_name", { ascending: true }).limit(clampLimit(limit, 500));
+    if (error) { logger.error({ error }, "Supabase team season stats error"); res.status(500).json({ error: "Gagal membaca data" }); return; }
     res.json(data ?? []);
   } catch (err) {
     logger.error({ err }, "Supabase team season stats exception");
