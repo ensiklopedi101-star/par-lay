@@ -32,7 +32,9 @@ jobs:
           version: 9.15.9
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22: supabase-js butuh WebSocket bawaan; di Node 20 client
+          # gagal inisialisasi ("without native WebSocket support").
+          node-version: 22
           cache: pnpm
           cache-dependency-path: Parlay-Analyzer-System/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile

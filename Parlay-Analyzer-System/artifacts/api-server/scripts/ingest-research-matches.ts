@@ -53,7 +53,24 @@ async function main(): Promise<void> {
   }
   console.log(`CSV: ${lines.length - 1} baris → ${rows.length} baris gudang (sejak ${fromDate})`);
 
-  const supabase = createClient(url, key, { auth: { persistSession: false } });
+  /*
+   * supabase-js menginisialisasi RealtimeClient yang butuh WebSocket
+   * global (ada di Node >= 22). Skrip ini tidak memakai realtime sama
+   * sekali, jadi sediakan transport dari paket `ws` bila global tidak
+   * ada — membuat skrip tetap jalan di Node 20 tanpa mengganti client.
+   */
+  const clientOptions: Record<string, unknown> = { auth: { persistSession: false } };
+  if (typeof (globalThis as { WebSocket?: unknown }).WebSocket === "undefined") {
+    try {
+      const wsModule = await import("ws");
+      clientOptions["global"] = { WebSocket: wsModule.default ?? wsModule.WebSocket };
+    } catch {
+      throw new Error(
+        "WebSocket global tidak tersedia (Node < 22) dan paket 'ws' tidak ditemukan. Jalankan dengan Node >= 22.",
+      );
+    }
+  }
+  const supabase = createClient(url, key, clientOptions as never);
   let upserted = 0;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const batch = rows.slice(i, i + BATCH_SIZE);
