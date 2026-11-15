@@ -77357,6 +77357,589 @@ var require_multer = __commonJS({
   }
 });
 
+// src/lib/telegram-format.ts
+function formatTicketMessage(ticket, generatedAt = /* @__PURE__ */ new Date()) {
+  const lines = [];
+  lines.push(`\u{1F3AF} TIKET PASAR-DULU \u2014 ${ticket.legs.length} leg`);
+  lines.push(`Peluang tiket (dari pasar): ${pct2(ticket.pCombined)}`);
+  lines.push(
+    `Odds bandar: ${ticket.combinedOdds.toFixed(2)} \xB7 odds wajar: ${ticket.fairOdds.toFixed(2)}` + (ticket.priceImpact && ticket.priceImpact.uplift > 1e-3 ? ` \xB7 dengan harga terbaik: ${ticket.priceImpact.bestCombined.toFixed(2)}` : "")
+  );
+  lines.push("");
+  ticket.legs.forEach((leg, i) => {
+    const hunt = leg.priceHunt;
+    const best = hunt && hunt.uplift > 1e-3 ? ` \u2192 terbaik @${hunt.bestOdds.toFixed(2)} (${hunt.bestBookmaker})` : "";
+    lines.push(
+      `${i + 1}. ${leg.selection.label} @${leg.selection.odds.toFixed(2)}${best}
+   ${leg.league} \xB7 pasar ${pct2(leg.pUsed)} \xB7 ${leg.character}` + (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui" ? ` \xB7 konteks ${leg.contextRisk.level}` : "") + (hunt?.drift === "menjauh" ? " \xB7 \u26A0\uFE0F harga menjauh" : "")
+    );
+  });
+  const warnings = ticket.notes.filter((n) => n.includes("rapuh") || n.includes("TINGGI") || n.includes("tidak tercapai"));
+  if (warnings.length > 0) {
+    lines.push("");
+    for (const w of warnings) lines.push(`\u26A0\uFE0F ${w}`);
+  }
+  lines.push("");
+  lines.push("Peluang dihitung dari probabilitas fair pasar, bukan janji. EV vs bandar wajar negatif karena margin menumpuk per leg.");
+  lines.push(`Dibuat ${generatedAt.toLocaleString("id-ID", { timeZone: "Asia/Makassar" })} WITA`);
+  return lines.join("\n");
+}
+var pct2;
+var init_telegram_format = __esm({
+  "src/lib/telegram-format.ts"() {
+    "use strict";
+    pct2 = (x) => `${(x * 100).toFixed(1)}%`;
+  }
+});
+
+// src/lib/quant/market-first.ts
+var market_first_exports = {};
+__export(market_first_exports, {
+  AGREE_TOLERANCE: () => AGREE_TOLERANCE,
+  CONTRADICT_TOLERANCE: () => CONTRADICT_TOLERANCE,
+  buildMarketFirstTicket: () => buildMarketFirstTicket,
+  classifyLeg: () => classifyLeg
+});
+function classifyLeg(selection) {
+  const pMarket = selection.pMarket;
+  const pModel = selection.pModelOnly;
+  if (pMarket == null || !(pMarket > 0 && pMarket < 1)) {
+    return {
+      character: "pasar-stabil",
+      stability: 0.4,
+      note: "Probabilitas pasar tidak tersedia \u2014 karakter hanya dari model, perlakukan hati-hati."
+    };
+  }
+  const gap = pModel - pMarket;
+  const sigmaPenalty = Math.min(0.25, Math.max(0, selection.sigma) * 0.5);
+  if (gap >= AGREE_TOLERANCE) {
+    return {
+      character: "didukung-statistik",
+      stability: Math.min(1, 0.55 + pMarket * 0.4 - sigmaPenalty),
+      note: `Statistik lebih optimistis dari pasar (+${(gap * 100).toFixed(1)} poin) \u2014 harga didukung performa.`
+    };
+  }
+  if (gap <= -CONTRADICT_TOLERANCE) {
+    return {
+      character: "kontradiktif",
+      stability: Math.max(0, 0.3 - sigmaPenalty),
+      note: `Statistik jauh lebih pesimistis dari pasar (${(gap * 100).toFixed(1)} poin) \u2014 harga pasar patut dicurigai.`
+    };
+  }
+  if (gap <= -AGREE_TOLERANCE) {
+    return {
+      character: "rapuh",
+      stability: Math.max(0.05, 0.45 + pMarket * 0.25 - sigmaPenalty),
+      note: `Statistik lebih pesimistis dari pasar (${(gap * 100).toFixed(1)} poin) \u2014 leg kurang kokoh dari harganya.`
+    };
+  }
+  return {
+    character: "pasar-stabil",
+    stability: Math.min(0.95, 0.5 + pMarket * 0.4 - sigmaPenalty),
+    note: "Statistik dan pasar sejalan \u2014 leg mengikuti harga pasar apa adanya."
+  };
+}
+function buildMarketFirstTicket(candidates2, options = {}) {
+  const minLegs = Math.max(2, options.minLegs ?? MIN_LEGS_DEFAULT);
+  const maxLegs = Math.max(minLegs, options.maxLegs ?? MAX_LEGS_DEFAULT);
+  const targetOdds = Math.max(1.2, options.targetOdds ?? 2);
+  const minMarketProb = options.minMarketProb ?? 0.55;
+  const notes = [];
+  const rankedCharacter = {
+    "didukung-statistik": 3,
+    "pasar-stabil": 2,
+    "rapuh": 1,
+    "kontradiktif": 0
+  };
+  const byFixture = /* @__PURE__ */ new Map();
+  for (const candidate of candidates2) {
+    const { selection } = candidate;
+    const pUsed = selection.pMarket != null && selection.pMarket > 0 && selection.pMarket < 1 ? selection.pMarket : selection.pFinal;
+    if (!Number.isFinite(selection.odds) || selection.odds <= 1) continue;
+    if (!(pUsed > 0 && pUsed < 1) || pUsed < minMarketProb) continue;
+    const { character, stability, note } = classifyLeg(selection);
+    const contextRisk = options.contextByCandidate?.get(`${candidate.fixtureId}|${candidate.marketKey}`);
+    const leg = {
+      marketKey: candidate.marketKey,
+      fixtureId: candidate.fixtureId,
+      league: candidate.league,
+      date: candidate.date ?? null,
+      selection,
+      pUsed,
+      character,
+      stability: contextRisk ? stability * contextRisk.scoreMultiplier : stability,
+      characterNote: contextRisk && contextRisk.flags.length > 0 ? `${note} Konteks: ${contextRisk.flags.join(" ")}` : note,
+      contextRisk
+    };
+    const existing = byFixture.get(candidate.fixtureId);
+    if (!existing) {
+      byFixture.set(candidate.fixtureId, leg);
+      continue;
+    }
+    const better = rankedCharacter[leg.character] !== rankedCharacter[existing.character] ? rankedCharacter[leg.character] > rankedCharacter[existing.character] : leg.stability * leg.pUsed > existing.stability * existing.pUsed;
+    if (better) byFixture.set(candidate.fixtureId, leg);
+  }
+  const selectionScore = (leg) => leg.pUsed * (leg.contextRisk?.scoreMultiplier ?? 1);
+  const pool = Array.from(byFixture.values()).sort(
+    (a, b) => selectionScore(b) - selectionScore(a) || b.stability - a.stability
+  );
+  if (pool.length < minLegs) {
+    notes.push(
+      `Hanya ${pool.length} pertandingan dengan peluang pasar \u2265 ${(minMarketProb * 100).toFixed(0)}% \u2014 di bawah minimum ${minLegs} leg.`
+    );
+    return null;
+  }
+  const toParlayLegs = (legs) => legs.map((leg) => ({
+    p: leg.pUsed,
+    odds: leg.selection.odds,
+    pMarket: leg.selection.pMarket,
+    league: leg.league,
+    marketFamily: leg.selection.family,
+    date: leg.date ?? void 0
+  }));
+  const attempts = [];
+  for (let size = minLegs; size <= Math.min(maxLegs, pool.length); size++) {
+    const legs = pool.slice(0, size);
+    const analysis = analyzeParlay(toParlayLegs(legs), {
+      sims: 2e4,
+      seed: options.seed ?? 20260101
+    });
+    attempts.push({
+      legs,
+      combinedOdds: analysis.combinedOdds,
+      pCombined: analysis.pDecision,
+      evVsBook: analysis.evDecision,
+      marginPaid: analysis.marginPaid
+    });
+  }
+  const reaching = attempts.filter((a) => a.combinedOdds >= targetOdds);
+  const chosen = reaching.length > 0 ? reaching.sort((a, b) => b.pCombined - a.pCombined)[0] : attempts.sort((a, b) => b.pCombined - a.pCombined)[0];
+  const targetReached = chosen.combinedOdds >= targetOdds;
+  if (!targetReached) {
+    notes.push(
+      `Target odds ${targetOdds.toFixed(2)} tidak tercapai oleh kombinasi berpeluang tertinggi (mentok ${chosen.combinedOdds.toFixed(2)}). Tiket tetap disusun dari leg teraman; mencapai target membutuhkan leg berpeluang lebih rendah.`
+    );
+  }
+  const fragile = chosen.legs.filter((l) => l.character === "rapuh" || l.character === "kontradiktif");
+  if (fragile.length > 0) {
+    notes.push(
+      `${fragile.length} leg berkarakter rapuh/kontradiktif ikut karena keterbatasan kandidat \u2014 periksa sebelum memasang.`
+    );
+  }
+  const contextRisky = chosen.legs.filter((l) => l.contextRisk?.level === "tinggi");
+  if (contextRisky.length > 0) {
+    notes.push(
+      `${contextRisky.length} leg berisiko konteks TINGGI (jadwal) tetap terpilih karena kandidat segar tidak cukup \u2014 leg ini kandidat pertama untuk diganti manual.`
+    );
+  }
+  notes.push(
+    "Peluang tiket dihitung dari probabilitas fair pasar (de-vig), bukan model. EV negatif mencerminkan margin bandar yang menumpuk per leg \u2014 ditampilkan apa adanya."
+  );
+  return {
+    legs: chosen.legs,
+    combinedOdds: chosen.combinedOdds,
+    pCombined: chosen.pCombined,
+    fairOdds: chosen.pCombined > 0 ? 1 / chosen.pCombined : Infinity,
+    evVsBook: chosen.evVsBook,
+    marginPaid: chosen.marginPaid,
+    targetOdds,
+    targetReached,
+    notes
+  };
+}
+var AGREE_TOLERANCE, CONTRADICT_TOLERANCE, MIN_LEGS_DEFAULT, MAX_LEGS_DEFAULT;
+var init_market_first = __esm({
+  "src/lib/quant/market-first.ts"() {
+    "use strict";
+    init_parlay();
+    AGREE_TOLERANCE = 0.05;
+    CONTRADICT_TOLERANCE = 0.12;
+    MIN_LEGS_DEFAULT = 5;
+    MAX_LEGS_DEFAULT = 8;
+  }
+});
+
+// src/services/parlay-candidates.ts
+function candidatesFromSelectionRows(rows, fixtureMeta) {
+  const candidates2 = [];
+  for (const row of rows) {
+    const fixtureId = Number(row.fixture_id);
+    if (!Number.isInteger(fixtureId)) continue;
+    const meta = fixtureMeta.get(fixtureId);
+    if (!meta) continue;
+    const passing = row.ev_conservative > 0;
+    const selection = {
+      key: row.market_key,
+      label: row.market_key.replace(/_/g, " "),
+      family: row.family,
+      odds: row.odds,
+      line: row.line,
+      pFinal: row.p_final,
+      pMarket: row.p_market_fair,
+      pModelOnly: row.p_model_only ?? row.p_final,
+      /* Distribusi hasil tidak disimpan di ledger; hanya baris yang lolos
+       * (EV konservatif > 0) yang dibentuk ulang, dan komposisi memakai
+       * `pFinal` bukan `outcome`. Nol di semua komponen adalah pengisi
+       * netral, bukan klaim tentang hasil. */
+      outcome: { win: row.p_final, halfWin: 0, push: 0, halfLoss: 0, loss: 1 - row.p_final },
+      ev: row.ev,
+      evConservative: row.ev_conservative,
+      sigma: 0,
+      stakePct: 0,
+      minOdds: 0,
+      passes: passing,
+      rejectReasons: passing ? [] : ["EV konservatif \u2264 0"]
+    };
+    if (!passing) continue;
+    candidates2.push({
+      marketKey: row.market_key,
+      fixtureId,
+      league: meta.league,
+      date: meta.date ?? null,
+      selection
+    });
+  }
+  return candidates2;
+}
+var init_parlay_candidates = __esm({
+  "src/services/parlay-candidates.ts"() {
+    "use strict";
+  }
+});
+
+// src/lib/quant/context-risk.ts
+function scoreMultiplierFor(level) {
+  if (level === "tinggi") return 0.85;
+  if (level === "sedang") return 0.95;
+  return 1;
+}
+function assessContext(input) {
+  const { backed, homeRestDays, awayRestDays } = input;
+  if (homeRestDays == null && awayRestDays == null) {
+    return { level: "tidak-diketahui", flags: ["Jadwal sebelumnya tidak tersedia."], scoreMultiplier: 1 };
+  }
+  const flags = [];
+  let level = "rendah";
+  const raise = (to) => {
+    if (to === "tinggi" || level === "rendah") level = to;
+  };
+  if (homeRestDays != null && awayRestDays != null && homeRestDays < SHORT_REST_DAYS && awayRestDays < SHORT_REST_DAYS) {
+    flags.push(`Kedua tim beristirahat pendek (${homeRestDays} vs ${awayRestDays} hari) \u2014 laga cenderung kacau.`);
+    raise("sedang");
+  }
+  if (backed) {
+    const backedRest = backed === "home" ? homeRestDays : awayRestDays;
+    const opponentRest = backed === "home" ? awayRestDays : homeRestDays;
+    const backedMatches = backed === "home" ? input.homeMatches14 : input.awayMatches14;
+    if (backedRest != null && backedRest < SHORT_REST_DAYS) {
+      flags.push(`Tim yang didukung hanya beristirahat ${backedRest} hari \u2014 risiko rotasi & kelelahan.`);
+      raise("tinggi");
+    }
+    if (backedRest != null && opponentRest != null && opponentRest - backedRest >= REST_GAP_DAYS) {
+      flags.push(`Ketimpangan istirahat: tim yang didukung ${backedRest} hari vs lawan ${opponentRest} hari.`);
+      raise("sedang");
+    }
+    if (backedMatches != null && backedMatches >= 3) {
+      flags.push(`Tim yang didukung memainkan ${backedMatches} laga dalam 14 hari terakhir.`);
+      raise("sedang");
+    }
+  }
+  return { level, flags, scoreMultiplier: scoreMultiplierFor(level) };
+}
+function backedSideFromKey(marketKey2) {
+  const key = marketKey2.toLowerCase();
+  if (key.startsWith("ml:home") || key.startsWith("ah:home")) return "home";
+  if (key.startsWith("ml:away") || key.startsWith("ah:away")) return "away";
+  return null;
+}
+var SHORT_REST_DAYS, REST_GAP_DAYS;
+var init_context_risk = __esm({
+  "src/lib/quant/context-risk.ts"() {
+    "use strict";
+    SHORT_REST_DAYS = 4;
+    REST_GAP_DAYS = 3;
+  }
+});
+
+// src/services/context-live.ts
+var context_live_exports = {};
+__export(context_live_exports, {
+  computeContextForCandidates: () => computeContextForCandidates,
+  contextKeyOf: () => contextKeyOf
+});
+async function computeContextForCandidates(requests) {
+  const result2 = /* @__PURE__ */ new Map();
+  if (!supabase || requests.length === 0) return result2;
+  const fixtureIds = [...new Set(requests.map((r) => r.fixtureId))];
+  const { data: legFixtures, error } = await supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name").in("fixture_id", fixtureIds);
+  if (error) {
+    logger.warn({ error }, "[CONTEXT] gagal membaca fixtures leg");
+    return result2;
+  }
+  const legs = (legFixtures ?? []).filter((f) => f.fixture_date);
+  if (legs.length === 0) return result2;
+  const dates = legs.map((f) => new Date(f.fixture_date).getTime());
+  const windowStart = new Date(Math.min(...dates) - 28 * 864e5).toISOString();
+  const windowEnd = new Date(Math.min(...dates)).toISOString();
+  const { data: windowFixtures, error: windowError } = await supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name").gte("fixture_date", windowStart).lt("fixture_date", windowEnd).limit(5e3);
+  if (windowError) {
+    logger.warn({ error: windowError }, "[CONTEXT] gagal membaca jendela jadwal");
+    return result2;
+  }
+  const history = (windowFixtures ?? []).filter((f) => f.fixture_date);
+  const legById = new Map(legs.map((f) => [Number(f.fixture_id), f]));
+  for (const request of requests) {
+    const leg = legById.get(request.fixtureId);
+    if (!leg) continue;
+    const kickoff = new Date(leg.fixture_date).getTime();
+    const teamHistory = (team) => {
+      if (!team) return { restDays: null, matches14: null };
+      const previous = history.filter((f) => f.home_team_name === team || f.away_team_name === team).map((f) => new Date(f.fixture_date).getTime()).filter((t) => t < kickoff).sort((a, b) => b - a);
+      if (previous.length === 0) return { restDays: null, matches14: null };
+      return {
+        restDays: Math.floor((kickoff - previous[0]) / 864e5),
+        matches14: previous.filter((t) => kickoff - t <= 14 * 864e5).length
+      };
+    };
+    const home = teamHistory(leg.home_team_name);
+    const away = teamHistory(leg.away_team_name);
+    result2.set(
+      contextKeyOf(request.fixtureId, request.marketKey),
+      assessContext({
+        backed: backedSideFromKey(request.marketKey),
+        homeRestDays: home.restDays,
+        awayRestDays: away.restDays,
+        homeMatches14: home.matches14,
+        awayMatches14: away.matches14
+      })
+    );
+  }
+  return result2;
+}
+var contextKeyOf;
+var init_context_live = __esm({
+  "src/services/context-live.ts"() {
+    "use strict";
+    init_supabase_client();
+    init_context_risk();
+    init_logger();
+    contextKeyOf = (fixtureId, marketKey2) => `${fixtureId}|${marketKey2}`;
+  }
+});
+
+// src/lib/quant/price-hunt.ts
+function huntBestPrice(usedOdds, offers, series = []) {
+  const valid = offers.filter((o) => Number.isFinite(o.odds) && o.odds > 1);
+  const best = valid.reduce(
+    (acc, o) => acc == null || o.odds > acc.odds ? o : acc,
+    null
+  );
+  const bestOdds = best ? best.odds : usedOdds;
+  const uplift = usedOdds > 0 ? bestOdds / usedOdds - 1 : 0;
+  let drift = "tidak-diketahui";
+  let driftPct = null;
+  const timed = series.filter((s) => Number.isFinite(s.odds) && s.odds > 1 && s.capturedAt).sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime());
+  if (timed.length >= 2) {
+    const first = timed[0].odds;
+    const last = timed[timed.length - 1].odds;
+    driftPct = last / first - 1;
+    drift = driftPct < -DRIFT_EPSILON ? "menajam" : driftPct > DRIFT_EPSILON ? "menjauh" : "stabil";
+  }
+  let note;
+  if (valid.length === 0) {
+    note = "Tidak ada penawaran bandar lain yang bisa dibandingkan \u2014 harga dipakai apa adanya.";
+  } else if (uplift > 1e-3) {
+    note = `Harga terbaik ${bestOdds.toFixed(2)} di ${best.bookmaker} \u2014 naik ${(uplift * 100).toFixed(1)}% dari harga yang dipakai (${usedOdds.toFixed(2)}).`;
+  } else {
+    note = `Harga yang dipakai sudah yang terbaik dari ${valid.length} bandar.`;
+  }
+  if (drift === "menajam") {
+    note += " Harga bergerak menajam ke arah pilihan ini (pasar ikut menguat).";
+  } else if (drift === "menjauh") {
+    note += " Peringatan: harga menjauhi pilihan ini sejak snapshot pertama.";
+  }
+  return {
+    usedOdds,
+    bestOdds,
+    bestBookmaker: best?.bookmaker ?? null,
+    offers: valid.length,
+    uplift,
+    drift,
+    driftPct,
+    note
+  };
+}
+function ticketPriceImpact(legs) {
+  const usedCombined = legs.reduce((acc, l) => acc * l.usedOdds, 1);
+  const bestCombined = legs.reduce((acc, l) => acc * l.bestOdds, 1);
+  return {
+    usedCombined,
+    bestCombined,
+    uplift: usedCombined > 0 ? bestCombined / usedCombined - 1 : 0
+  };
+}
+var DRIFT_EPSILON;
+var init_price_hunt = __esm({
+  "src/lib/quant/price-hunt.ts"() {
+    "use strict";
+    DRIFT_EPSILON = 5e-3;
+  }
+});
+
+// src/services/price-hunt-live.ts
+var price_hunt_live_exports = {};
+__export(price_hunt_live_exports, {
+  enrichTicketWithPriceHunt: () => enrichTicketWithPriceHunt
+});
+async function enrichTicketWithPriceHunt(ticket) {
+  if (!supabase || ticket.legs.length === 0) return ticket;
+  const fixtureIds = [...new Set(ticket.legs.map((l) => l.fixtureId))];
+  const rows = [];
+  for (let offset = 0; ; offset += 1e3) {
+    const { data, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", fixtureIds.map(String)).order("captured_at", { ascending: false }).range(offset, offset + 999);
+    if (error) {
+      logger.warn({ error }, "[PRICE-HUNT] gagal membaca odds_history");
+      return ticket;
+    }
+    rows.push(...data ?? []);
+    if ((data?.length ?? 0) < 1e3) break;
+  }
+  const rowsByFixture = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const key = String(row.match_id ?? "");
+    const list = rowsByFixture.get(key) ?? [];
+    list.push(row);
+    rowsByFixture.set(key, list);
+  }
+  for (const leg of ticket.legs) {
+    const fixtureRows = rowsByFixture.get(String(leg.fixtureId)) ?? [];
+    if (fixtureRows.length === 0) continue;
+    const marketLabel = leg.selection.key.replace(/_/g, " ");
+    const byBookmaker = /* @__PURE__ */ new Map();
+    for (const row of fixtureRows) {
+      const bookmaker = String(row.bookmaker ?? "unknown");
+      const list = byBookmaker.get(bookmaker) ?? [];
+      list.push(row);
+      byBookmaker.set(bookmaker, list);
+    }
+    const offers = [];
+    for (const [bookmaker, bookmakerRows] of byBookmaker) {
+      const resolution = resolveMarketOdds(marketLabel, bookmakerRows, { maxAgeMs: NO_FRESHNESS_LIMIT });
+      if (resolution.odds != null) {
+        offers.push({ bookmaker, odds: resolution.odds, capturedAt: resolution.capturedAt });
+      }
+    }
+    const timestamps = [...new Set(fixtureRows.map((r) => r.captured_at).filter(Boolean))];
+    timestamps.sort();
+    const series = [];
+    if (timestamps.length >= 2) {
+      for (const at of [timestamps[0], timestamps[timestamps.length - 1]]) {
+        const atRows = fixtureRows.filter((r) => r.captured_at === at);
+        const resolution = resolveMarketOdds(marketLabel, atRows, { maxAgeMs: NO_FRESHNESS_LIMIT });
+        if (resolution.odds != null) series.push({ odds: resolution.odds, capturedAt: at });
+      }
+    }
+    leg.priceHunt = huntBestPrice(leg.selection.odds, offers, series);
+  }
+  ticket.priceImpact = ticketPriceImpact(
+    ticket.legs.map((leg) => ({
+      usedOdds: leg.selection.odds,
+      bestOdds: leg.priceHunt?.bestOdds ?? leg.selection.odds
+    }))
+  );
+  return ticket;
+}
+var NO_FRESHNESS_LIMIT;
+var init_price_hunt_live = __esm({
+  "src/services/price-hunt-live.ts"() {
+    "use strict";
+    init_supabase_client();
+    init_market_odds_readiness();
+    init_price_hunt();
+    init_logger();
+    NO_FRESHNESS_LIMIT = Number.MAX_SAFE_INTEGER;
+  }
+});
+
+// src/services/telegram-notify.ts
+var telegram_notify_exports = {};
+__export(telegram_notify_exports, {
+  buildLiveMarketFirstTicket: () => buildLiveMarketFirstTicket,
+  notifyParlayViaTelegram: () => notifyParlayViaTelegram,
+  sendTelegramMessage: () => sendTelegramMessage
+});
+async function buildLiveMarketFirstTicket() {
+  if (!supabase) return null;
+  const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").gt("ev_conservative", 0).order("ev_conservative", { ascending: false }).limit(200);
+  if (error) {
+    logger.warn({ error }, "[TELEGRAM] gagal membaca ledger");
+    return null;
+  }
+  const selectionRows = rows ?? [];
+  if (selectionRows.length === 0) return null;
+  const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
+  const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date").in("fixture_id", fixtureIds);
+  const meta = /* @__PURE__ */ new Map();
+  for (const f of fixtures ?? []) {
+    meta.set(Number(f.fixture_id), {
+      fixtureId: Number(f.fixture_id),
+      league: f.league_name ?? "unknown",
+      date: f.fixture_date ? f.fixture_date.slice(0, 10) : null
+    });
+  }
+  const candidates2 = candidatesFromSelectionRows(selectionRows, meta);
+  const contextByCandidate = await computeContextForCandidates(
+    candidates2.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
+  );
+  const ticket = buildMarketFirstTicket(candidates2, { contextByCandidate });
+  if (!ticket) return null;
+  return enrichTicketWithPriceHunt(ticket);
+}
+async function sendTelegramMessage(text) {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const chatId = process.env["TELEGRAM_CHAT_ID"];
+  if (!token || !chatId) {
+    return { sent: false, reason: "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID belum diset di env server." };
+  }
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text })
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      return { sent: false, reason: `Telegram menolak: HTTP ${response.status} ${detail.slice(0, 200)}` };
+    }
+    return { sent: true, reason: "Terkirim." };
+  } catch (error) {
+    return {
+      sent: false,
+      reason: `Tidak bisa menghubungi Telegram: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+}
+async function notifyParlayViaTelegram() {
+  const ticket = await buildLiveMarketFirstTicket();
+  if (!ticket) {
+    return { sent: false, reason: "Tidak ada tiket pasar-dulu yang bisa disusun dari ledger saat ini." };
+  }
+  const result2 = await sendTelegramMessage(formatTicketMessage(ticket));
+  return { ...result2, legs: ticket.legs.length, combinedOdds: ticket.combinedOdds };
+}
+var init_telegram_notify = __esm({
+  "src/services/telegram-notify.ts"() {
+    "use strict";
+    init_supabase_client();
+    init_logger();
+    init_telegram_format();
+    init_market_first();
+    init_parlay_candidates();
+    init_context_live();
+    init_price_hunt_live();
+  }
+});
+
 // src/lib/quant/composition.ts
 var composition_exports = {};
 __export(composition_exports, {
@@ -77566,427 +78149,6 @@ var init_composition = __esm({
       marketKey: candidate.marketKey,
       fixtureId: candidate.fixtureId
     });
-  }
-});
-
-// src/lib/quant/market-first.ts
-var market_first_exports = {};
-__export(market_first_exports, {
-  AGREE_TOLERANCE: () => AGREE_TOLERANCE,
-  CONTRADICT_TOLERANCE: () => CONTRADICT_TOLERANCE,
-  buildMarketFirstTicket: () => buildMarketFirstTicket,
-  classifyLeg: () => classifyLeg
-});
-function classifyLeg(selection) {
-  const pMarket = selection.pMarket;
-  const pModel = selection.pModelOnly;
-  if (pMarket == null || !(pMarket > 0 && pMarket < 1)) {
-    return {
-      character: "pasar-stabil",
-      stability: 0.4,
-      note: "Probabilitas pasar tidak tersedia \u2014 karakter hanya dari model, perlakukan hati-hati."
-    };
-  }
-  const gap = pModel - pMarket;
-  const sigmaPenalty = Math.min(0.25, Math.max(0, selection.sigma) * 0.5);
-  if (gap >= AGREE_TOLERANCE) {
-    return {
-      character: "didukung-statistik",
-      stability: Math.min(1, 0.55 + pMarket * 0.4 - sigmaPenalty),
-      note: `Statistik lebih optimistis dari pasar (+${(gap * 100).toFixed(1)} poin) \u2014 harga didukung performa.`
-    };
-  }
-  if (gap <= -CONTRADICT_TOLERANCE) {
-    return {
-      character: "kontradiktif",
-      stability: Math.max(0, 0.3 - sigmaPenalty),
-      note: `Statistik jauh lebih pesimistis dari pasar (${(gap * 100).toFixed(1)} poin) \u2014 harga pasar patut dicurigai.`
-    };
-  }
-  if (gap <= -AGREE_TOLERANCE) {
-    return {
-      character: "rapuh",
-      stability: Math.max(0.05, 0.45 + pMarket * 0.25 - sigmaPenalty),
-      note: `Statistik lebih pesimistis dari pasar (${(gap * 100).toFixed(1)} poin) \u2014 leg kurang kokoh dari harganya.`
-    };
-  }
-  return {
-    character: "pasar-stabil",
-    stability: Math.min(0.95, 0.5 + pMarket * 0.4 - sigmaPenalty),
-    note: "Statistik dan pasar sejalan \u2014 leg mengikuti harga pasar apa adanya."
-  };
-}
-function buildMarketFirstTicket(candidates2, options = {}) {
-  const minLegs = Math.max(2, options.minLegs ?? MIN_LEGS_DEFAULT);
-  const maxLegs = Math.max(minLegs, options.maxLegs ?? MAX_LEGS_DEFAULT);
-  const targetOdds = Math.max(1.2, options.targetOdds ?? 2);
-  const minMarketProb = options.minMarketProb ?? 0.55;
-  const notes = [];
-  const rankedCharacter = {
-    "didukung-statistik": 3,
-    "pasar-stabil": 2,
-    "rapuh": 1,
-    "kontradiktif": 0
-  };
-  const byFixture = /* @__PURE__ */ new Map();
-  for (const candidate of candidates2) {
-    const { selection } = candidate;
-    const pUsed = selection.pMarket != null && selection.pMarket > 0 && selection.pMarket < 1 ? selection.pMarket : selection.pFinal;
-    if (!Number.isFinite(selection.odds) || selection.odds <= 1) continue;
-    if (!(pUsed > 0 && pUsed < 1) || pUsed < minMarketProb) continue;
-    const { character, stability, note } = classifyLeg(selection);
-    const contextRisk = options.contextByCandidate?.get(`${candidate.fixtureId}|${candidate.marketKey}`);
-    const leg = {
-      marketKey: candidate.marketKey,
-      fixtureId: candidate.fixtureId,
-      league: candidate.league,
-      date: candidate.date ?? null,
-      selection,
-      pUsed,
-      character,
-      stability: contextRisk ? stability * contextRisk.scoreMultiplier : stability,
-      characterNote: contextRisk && contextRisk.flags.length > 0 ? `${note} Konteks: ${contextRisk.flags.join(" ")}` : note,
-      contextRisk
-    };
-    const existing = byFixture.get(candidate.fixtureId);
-    if (!existing) {
-      byFixture.set(candidate.fixtureId, leg);
-      continue;
-    }
-    const better = rankedCharacter[leg.character] !== rankedCharacter[existing.character] ? rankedCharacter[leg.character] > rankedCharacter[existing.character] : leg.stability * leg.pUsed > existing.stability * existing.pUsed;
-    if (better) byFixture.set(candidate.fixtureId, leg);
-  }
-  const selectionScore = (leg) => leg.pUsed * (leg.contextRisk?.scoreMultiplier ?? 1);
-  const pool = Array.from(byFixture.values()).sort(
-    (a, b) => selectionScore(b) - selectionScore(a) || b.stability - a.stability
-  );
-  if (pool.length < minLegs) {
-    notes.push(
-      `Hanya ${pool.length} pertandingan dengan peluang pasar \u2265 ${(minMarketProb * 100).toFixed(0)}% \u2014 di bawah minimum ${minLegs} leg.`
-    );
-    return null;
-  }
-  const toParlayLegs = (legs) => legs.map((leg) => ({
-    p: leg.pUsed,
-    odds: leg.selection.odds,
-    pMarket: leg.selection.pMarket,
-    league: leg.league,
-    marketFamily: leg.selection.family,
-    date: leg.date ?? void 0
-  }));
-  const attempts = [];
-  for (let size = minLegs; size <= Math.min(maxLegs, pool.length); size++) {
-    const legs = pool.slice(0, size);
-    const analysis = analyzeParlay(toParlayLegs(legs), {
-      sims: 2e4,
-      seed: options.seed ?? 20260101
-    });
-    attempts.push({
-      legs,
-      combinedOdds: analysis.combinedOdds,
-      pCombined: analysis.pDecision,
-      evVsBook: analysis.evDecision,
-      marginPaid: analysis.marginPaid
-    });
-  }
-  const reaching = attempts.filter((a) => a.combinedOdds >= targetOdds);
-  const chosen = reaching.length > 0 ? reaching.sort((a, b) => b.pCombined - a.pCombined)[0] : attempts.sort((a, b) => b.pCombined - a.pCombined)[0];
-  const targetReached = chosen.combinedOdds >= targetOdds;
-  if (!targetReached) {
-    notes.push(
-      `Target odds ${targetOdds.toFixed(2)} tidak tercapai oleh kombinasi berpeluang tertinggi (mentok ${chosen.combinedOdds.toFixed(2)}). Tiket tetap disusun dari leg teraman; mencapai target membutuhkan leg berpeluang lebih rendah.`
-    );
-  }
-  const fragile = chosen.legs.filter((l) => l.character === "rapuh" || l.character === "kontradiktif");
-  if (fragile.length > 0) {
-    notes.push(
-      `${fragile.length} leg berkarakter rapuh/kontradiktif ikut karena keterbatasan kandidat \u2014 periksa sebelum memasang.`
-    );
-  }
-  const contextRisky = chosen.legs.filter((l) => l.contextRisk?.level === "tinggi");
-  if (contextRisky.length > 0) {
-    notes.push(
-      `${contextRisky.length} leg berisiko konteks TINGGI (jadwal) tetap terpilih karena kandidat segar tidak cukup \u2014 leg ini kandidat pertama untuk diganti manual.`
-    );
-  }
-  notes.push(
-    "Peluang tiket dihitung dari probabilitas fair pasar (de-vig), bukan model. EV negatif mencerminkan margin bandar yang menumpuk per leg \u2014 ditampilkan apa adanya."
-  );
-  return {
-    legs: chosen.legs,
-    combinedOdds: chosen.combinedOdds,
-    pCombined: chosen.pCombined,
-    fairOdds: chosen.pCombined > 0 ? 1 / chosen.pCombined : Infinity,
-    evVsBook: chosen.evVsBook,
-    marginPaid: chosen.marginPaid,
-    targetOdds,
-    targetReached,
-    notes
-  };
-}
-var AGREE_TOLERANCE, CONTRADICT_TOLERANCE, MIN_LEGS_DEFAULT, MAX_LEGS_DEFAULT;
-var init_market_first = __esm({
-  "src/lib/quant/market-first.ts"() {
-    "use strict";
-    init_parlay();
-    AGREE_TOLERANCE = 0.05;
-    CONTRADICT_TOLERANCE = 0.12;
-    MIN_LEGS_DEFAULT = 5;
-    MAX_LEGS_DEFAULT = 8;
-  }
-});
-
-// src/lib/quant/price-hunt.ts
-function huntBestPrice(usedOdds, offers, series = []) {
-  const valid = offers.filter((o) => Number.isFinite(o.odds) && o.odds > 1);
-  const best = valid.reduce(
-    (acc, o) => acc == null || o.odds > acc.odds ? o : acc,
-    null
-  );
-  const bestOdds = best ? best.odds : usedOdds;
-  const uplift = usedOdds > 0 ? bestOdds / usedOdds - 1 : 0;
-  let drift = "tidak-diketahui";
-  let driftPct = null;
-  const timed = series.filter((s) => Number.isFinite(s.odds) && s.odds > 1 && s.capturedAt).sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime());
-  if (timed.length >= 2) {
-    const first = timed[0].odds;
-    const last = timed[timed.length - 1].odds;
-    driftPct = last / first - 1;
-    drift = driftPct < -DRIFT_EPSILON ? "menajam" : driftPct > DRIFT_EPSILON ? "menjauh" : "stabil";
-  }
-  let note;
-  if (valid.length === 0) {
-    note = "Tidak ada penawaran bandar lain yang bisa dibandingkan \u2014 harga dipakai apa adanya.";
-  } else if (uplift > 1e-3) {
-    note = `Harga terbaik ${bestOdds.toFixed(2)} di ${best.bookmaker} \u2014 naik ${(uplift * 100).toFixed(1)}% dari harga yang dipakai (${usedOdds.toFixed(2)}).`;
-  } else {
-    note = `Harga yang dipakai sudah yang terbaik dari ${valid.length} bandar.`;
-  }
-  if (drift === "menajam") {
-    note += " Harga bergerak menajam ke arah pilihan ini (pasar ikut menguat).";
-  } else if (drift === "menjauh") {
-    note += " Peringatan: harga menjauhi pilihan ini sejak snapshot pertama.";
-  }
-  return {
-    usedOdds,
-    bestOdds,
-    bestBookmaker: best?.bookmaker ?? null,
-    offers: valid.length,
-    uplift,
-    drift,
-    driftPct,
-    note
-  };
-}
-function ticketPriceImpact(legs) {
-  const usedCombined = legs.reduce((acc, l) => acc * l.usedOdds, 1);
-  const bestCombined = legs.reduce((acc, l) => acc * l.bestOdds, 1);
-  return {
-    usedCombined,
-    bestCombined,
-    uplift: usedCombined > 0 ? bestCombined / usedCombined - 1 : 0
-  };
-}
-var DRIFT_EPSILON;
-var init_price_hunt = __esm({
-  "src/lib/quant/price-hunt.ts"() {
-    "use strict";
-    DRIFT_EPSILON = 5e-3;
-  }
-});
-
-// src/services/price-hunt-live.ts
-var price_hunt_live_exports = {};
-__export(price_hunt_live_exports, {
-  enrichTicketWithPriceHunt: () => enrichTicketWithPriceHunt
-});
-async function enrichTicketWithPriceHunt(ticket) {
-  if (!supabase || ticket.legs.length === 0) return ticket;
-  const fixtureIds = [...new Set(ticket.legs.map((l) => l.fixtureId))];
-  const rows = [];
-  for (let offset = 0; ; offset += 1e3) {
-    const { data, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", fixtureIds.map(String)).order("captured_at", { ascending: false }).range(offset, offset + 999);
-    if (error) {
-      logger.warn({ error }, "[PRICE-HUNT] gagal membaca odds_history");
-      return ticket;
-    }
-    rows.push(...data ?? []);
-    if ((data?.length ?? 0) < 1e3) break;
-  }
-  const rowsByFixture = /* @__PURE__ */ new Map();
-  for (const row of rows) {
-    const key = String(row.match_id ?? "");
-    const list = rowsByFixture.get(key) ?? [];
-    list.push(row);
-    rowsByFixture.set(key, list);
-  }
-  for (const leg of ticket.legs) {
-    const fixtureRows = rowsByFixture.get(String(leg.fixtureId)) ?? [];
-    if (fixtureRows.length === 0) continue;
-    const marketLabel = leg.selection.key.replace(/_/g, " ");
-    const byBookmaker = /* @__PURE__ */ new Map();
-    for (const row of fixtureRows) {
-      const bookmaker = String(row.bookmaker ?? "unknown");
-      const list = byBookmaker.get(bookmaker) ?? [];
-      list.push(row);
-      byBookmaker.set(bookmaker, list);
-    }
-    const offers = [];
-    for (const [bookmaker, bookmakerRows] of byBookmaker) {
-      const resolution = resolveMarketOdds(marketLabel, bookmakerRows, { maxAgeMs: NO_FRESHNESS_LIMIT });
-      if (resolution.odds != null) {
-        offers.push({ bookmaker, odds: resolution.odds, capturedAt: resolution.capturedAt });
-      }
-    }
-    const timestamps = [...new Set(fixtureRows.map((r) => r.captured_at).filter(Boolean))];
-    timestamps.sort();
-    const series = [];
-    if (timestamps.length >= 2) {
-      for (const at of [timestamps[0], timestamps[timestamps.length - 1]]) {
-        const atRows = fixtureRows.filter((r) => r.captured_at === at);
-        const resolution = resolveMarketOdds(marketLabel, atRows, { maxAgeMs: NO_FRESHNESS_LIMIT });
-        if (resolution.odds != null) series.push({ odds: resolution.odds, capturedAt: at });
-      }
-    }
-    leg.priceHunt = huntBestPrice(leg.selection.odds, offers, series);
-  }
-  ticket.priceImpact = ticketPriceImpact(
-    ticket.legs.map((leg) => ({
-      usedOdds: leg.selection.odds,
-      bestOdds: leg.priceHunt?.bestOdds ?? leg.selection.odds
-    }))
-  );
-  return ticket;
-}
-var NO_FRESHNESS_LIMIT;
-var init_price_hunt_live = __esm({
-  "src/services/price-hunt-live.ts"() {
-    "use strict";
-    init_supabase_client();
-    init_market_odds_readiness();
-    init_price_hunt();
-    init_logger();
-    NO_FRESHNESS_LIMIT = Number.MAX_SAFE_INTEGER;
-  }
-});
-
-// src/lib/quant/context-risk.ts
-function scoreMultiplierFor(level) {
-  if (level === "tinggi") return 0.85;
-  if (level === "sedang") return 0.95;
-  return 1;
-}
-function assessContext(input) {
-  const { backed, homeRestDays, awayRestDays } = input;
-  if (homeRestDays == null && awayRestDays == null) {
-    return { level: "tidak-diketahui", flags: ["Jadwal sebelumnya tidak tersedia."], scoreMultiplier: 1 };
-  }
-  const flags = [];
-  let level = "rendah";
-  const raise = (to) => {
-    if (to === "tinggi" || level === "rendah") level = to;
-  };
-  if (homeRestDays != null && awayRestDays != null && homeRestDays < SHORT_REST_DAYS && awayRestDays < SHORT_REST_DAYS) {
-    flags.push(`Kedua tim beristirahat pendek (${homeRestDays} vs ${awayRestDays} hari) \u2014 laga cenderung kacau.`);
-    raise("sedang");
-  }
-  if (backed) {
-    const backedRest = backed === "home" ? homeRestDays : awayRestDays;
-    const opponentRest = backed === "home" ? awayRestDays : homeRestDays;
-    const backedMatches = backed === "home" ? input.homeMatches14 : input.awayMatches14;
-    if (backedRest != null && backedRest < SHORT_REST_DAYS) {
-      flags.push(`Tim yang didukung hanya beristirahat ${backedRest} hari \u2014 risiko rotasi & kelelahan.`);
-      raise("tinggi");
-    }
-    if (backedRest != null && opponentRest != null && opponentRest - backedRest >= REST_GAP_DAYS) {
-      flags.push(`Ketimpangan istirahat: tim yang didukung ${backedRest} hari vs lawan ${opponentRest} hari.`);
-      raise("sedang");
-    }
-    if (backedMatches != null && backedMatches >= 3) {
-      flags.push(`Tim yang didukung memainkan ${backedMatches} laga dalam 14 hari terakhir.`);
-      raise("sedang");
-    }
-  }
-  return { level, flags, scoreMultiplier: scoreMultiplierFor(level) };
-}
-function backedSideFromKey(marketKey2) {
-  const key = marketKey2.toLowerCase();
-  if (key.startsWith("ml:home") || key.startsWith("ah:home")) return "home";
-  if (key.startsWith("ml:away") || key.startsWith("ah:away")) return "away";
-  return null;
-}
-var SHORT_REST_DAYS, REST_GAP_DAYS;
-var init_context_risk = __esm({
-  "src/lib/quant/context-risk.ts"() {
-    "use strict";
-    SHORT_REST_DAYS = 4;
-    REST_GAP_DAYS = 3;
-  }
-});
-
-// src/services/context-live.ts
-var context_live_exports = {};
-__export(context_live_exports, {
-  computeContextForCandidates: () => computeContextForCandidates,
-  contextKeyOf: () => contextKeyOf
-});
-async function computeContextForCandidates(requests) {
-  const result2 = /* @__PURE__ */ new Map();
-  if (!supabase || requests.length === 0) return result2;
-  const fixtureIds = [...new Set(requests.map((r) => r.fixtureId))];
-  const { data: legFixtures, error } = await supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name").in("fixture_id", fixtureIds);
-  if (error) {
-    logger.warn({ error }, "[CONTEXT] gagal membaca fixtures leg");
-    return result2;
-  }
-  const legs = (legFixtures ?? []).filter((f) => f.fixture_date);
-  if (legs.length === 0) return result2;
-  const dates = legs.map((f) => new Date(f.fixture_date).getTime());
-  const windowStart = new Date(Math.min(...dates) - 28 * 864e5).toISOString();
-  const windowEnd = new Date(Math.min(...dates)).toISOString();
-  const { data: windowFixtures, error: windowError } = await supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name").gte("fixture_date", windowStart).lt("fixture_date", windowEnd).limit(5e3);
-  if (windowError) {
-    logger.warn({ error: windowError }, "[CONTEXT] gagal membaca jendela jadwal");
-    return result2;
-  }
-  const history = (windowFixtures ?? []).filter((f) => f.fixture_date);
-  const legById = new Map(legs.map((f) => [Number(f.fixture_id), f]));
-  for (const request of requests) {
-    const leg = legById.get(request.fixtureId);
-    if (!leg) continue;
-    const kickoff = new Date(leg.fixture_date).getTime();
-    const teamHistory = (team) => {
-      if (!team) return { restDays: null, matches14: null };
-      const previous = history.filter((f) => f.home_team_name === team || f.away_team_name === team).map((f) => new Date(f.fixture_date).getTime()).filter((t) => t < kickoff).sort((a, b) => b - a);
-      if (previous.length === 0) return { restDays: null, matches14: null };
-      return {
-        restDays: Math.floor((kickoff - previous[0]) / 864e5),
-        matches14: previous.filter((t) => kickoff - t <= 14 * 864e5).length
-      };
-    };
-    const home = teamHistory(leg.home_team_name);
-    const away = teamHistory(leg.away_team_name);
-    result2.set(
-      contextKeyOf(request.fixtureId, request.marketKey),
-      assessContext({
-        backed: backedSideFromKey(request.marketKey),
-        homeRestDays: home.restDays,
-        awayRestDays: away.restDays,
-        homeMatches14: home.matches14,
-        awayMatches14: away.matches14
-      })
-    );
-  }
-  return result2;
-}
-var contextKeyOf;
-var init_context_live = __esm({
-  "src/services/context-live.ts"() {
-    "use strict";
-    init_supabase_client();
-    init_context_risk();
-    init_logger();
-    contextKeyOf = (fixtureId, marketKey2) => `${fixtureId}|${marketKey2}`;
   }
 });
 
@@ -88039,6 +88201,16 @@ async function handleCron(req, res) {
     });
     return;
   }
+  if (action === "notify-parlay") {
+    const { notifyParlayViaTelegram: notifyParlayViaTelegram2 } = await Promise.resolve().then(() => (init_telegram_notify(), telegram_notify_exports));
+    notifyParlayViaTelegram2().then((summary) => {
+      res.json({ message: "Notifikasi parlay diproses", ...summary, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+    }).catch((err) => {
+      logger.error({ err }, "Cron-triggered parlay notification gagal");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    });
+    return;
+  }
   if (action === "outcomes") {
     runOutcomeSettlement().then((result2) => {
       res.json({ message: "Settlement outcome selesai", ...result2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
@@ -88633,51 +88805,7 @@ function buildReasoning(composition) {
 
 // src/routes/parlays.ts
 init_composition();
-
-// src/services/parlay-candidates.ts
-function candidatesFromSelectionRows(rows, fixtureMeta) {
-  const candidates2 = [];
-  for (const row of rows) {
-    const fixtureId = Number(row.fixture_id);
-    if (!Number.isInteger(fixtureId)) continue;
-    const meta = fixtureMeta.get(fixtureId);
-    if (!meta) continue;
-    const passing = row.ev_conservative > 0;
-    const selection = {
-      key: row.market_key,
-      label: row.market_key.replace(/_/g, " "),
-      family: row.family,
-      odds: row.odds,
-      line: row.line,
-      pFinal: row.p_final,
-      pMarket: row.p_market_fair,
-      pModelOnly: row.p_model_only ?? row.p_final,
-      /* Distribusi hasil tidak disimpan di ledger; hanya baris yang lolos
-       * (EV konservatif > 0) yang dibentuk ulang, dan komposisi memakai
-       * `pFinal` bukan `outcome`. Nol di semua komponen adalah pengisi
-       * netral, bukan klaim tentang hasil. */
-      outcome: { win: row.p_final, halfWin: 0, push: 0, halfLoss: 0, loss: 1 - row.p_final },
-      ev: row.ev,
-      evConservative: row.ev_conservative,
-      sigma: 0,
-      stakePct: 0,
-      minOdds: 0,
-      passes: passing,
-      rejectReasons: passing ? [] : ["EV konservatif \u2264 0"]
-    };
-    if (!passing) continue;
-    candidates2.push({
-      marketKey: row.market_key,
-      fixtureId,
-      league: meta.league,
-      date: meta.date ?? null,
-      selection
-    });
-  }
-  return candidates2;
-}
-
-// src/routes/parlays.ts
+init_parlay_candidates();
 var router12 = (0, import_express12.Router)();
 var READINESS_MAX_AGE_MINUTES = 3 * 60;
 function asIds(value) {
