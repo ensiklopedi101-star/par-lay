@@ -77360,7 +77360,8 @@ var require_multer = __commonJS({
 // src/lib/telegram-format.ts
 function formatTicketMessage(ticket, generatedAt = /* @__PURE__ */ new Date()) {
   const lines = [];
-  lines.push(`\u{1F3AF} TIKET PASAR-DULU \u2014 ${ticket.legs.length} leg`);
+  const title = ticket.variant === "booster" ? "\u{1F680} PARLAY BOOSTER" : ticket.variant === "jackpot" ? "\u{1F48E} PARLAY JACKPOT" : "\u{1F3AF} PARLAY UTAMA";
+  lines.push(`${title} \u2014 ${ticket.legs.length} leg`);
   lines.push(`Peluang tiket (dari pasar): ${pct2(ticket.pCombined)}`);
   lines.push(
     `Odds bandar: ${ticket.combinedOdds.toFixed(2)} \xB7 odds wajar: ${ticket.fairOdds.toFixed(2)}` + (ticket.priceImpact && ticket.priceImpact.uplift > 1e-3 ? ` \xB7 dengan harga terbaik: ${ticket.priceImpact.bestCombined.toFixed(2)}` : "")
@@ -77370,8 +77371,9 @@ function formatTicketMessage(ticket, generatedAt = /* @__PURE__ */ new Date()) {
     const hunt = leg.priceHunt;
     const best = hunt && hunt.uplift > 1e-3 ? ` \u2192 terbaik @${hunt.bestOdds.toFixed(2)} (${hunt.bestBookmaker})` : "";
     const match = leg.homeTeam && leg.awayTeam ? `${leg.homeTeam} vs ${leg.awayTeam}` : leg.league;
+    const isBoosterLeg2 = ticket.boosterMarketKey != null && leg.marketKey === ticket.boosterMarketKey && leg.fixtureId === ticket.legs.find((l) => l.marketKey === ticket.boosterMarketKey)?.fixtureId;
     lines.push(
-      `${i + 1}. ${match}
+      `${i + 1}. ${match}${isBoosterLeg2 ? " \u2B50 PENGUAT" : ""}
    ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${best}
    ${leg.league} \xB7 pasar ${pct2(leg.pUsed)} \xB7 ${leg.character}` + (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui" ? ` \xB7 konteks ${leg.contextRisk.level}` : "") + (hunt?.drift === "menjauh" ? " \xB7 \u26A0\uFE0F harga menjauh" : "")
     );
@@ -77385,6 +77387,15 @@ function formatTicketMessage(ticket, generatedAt = /* @__PURE__ */ new Date()) {
   lines.push("Peluang dihitung dari probabilitas fair pasar, bukan janji. EV vs bandar wajar negatif karena margin menumpuk per leg.");
   lines.push(`Dibuat ${generatedAt.toLocaleString("id-ID", { timeZone: "Asia/Makassar" })} WITA`);
   return lines.join("\n");
+}
+function formatVariantsMessage(variants, generatedAt = /* @__PURE__ */ new Date()) {
+  const parts = [];
+  if (variants.utama) parts.push(formatTicketMessage(variants.utama, generatedAt));
+  if (variants.booster) parts.push(formatTicketMessage(variants.booster, generatedAt));
+  else if (variants.variantNotes["booster"]) parts.push(`\u{1F680} PARLAY BOOSTER \u2014 tidak disusun: ${variants.variantNotes["booster"]}`);
+  if (variants.jackpot) parts.push(formatTicketMessage(variants.jackpot, generatedAt));
+  else if (variants.variantNotes["jackpot"]) parts.push(`\u{1F48E} PARLAY JACKPOT \u2014 tidak disusun: ${variants.variantNotes["jackpot"]}`);
+  return parts.join("\n\n\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\n\n");
 }
 var pct2;
 var init_telegram_format = __esm({
@@ -77437,6 +77448,7 @@ __export(market_first_exports, {
   AGREE_TOLERANCE: () => AGREE_TOLERANCE,
   CONTRADICT_TOLERANCE: () => CONTRADICT_TOLERANCE,
   buildMarketFirstTicket: () => buildMarketFirstTicket,
+  buildParlayVariants: () => buildParlayVariants,
   classifyLeg: () => classifyLeg
 });
 function classifyLeg(selection) {
@@ -77478,15 +77490,8 @@ function classifyLeg(selection) {
     note: "Statistik dan pasar sejalan \u2014 leg mengikuti harga pasar apa adanya."
   };
 }
-function buildMarketFirstTicket(candidates2, options = {}) {
-  const minLegs = Math.max(2, options.minLegs ?? MIN_LEGS_DEFAULT);
-  const maxLegs = Math.max(minLegs, options.maxLegs ?? MAX_LEGS_DEFAULT);
-  const targetOdds = Math.max(1.2, options.targetOdds ?? 2);
-  const minMarketProb = options.minMarketProb ?? 0.55;
-  const minOdds = options.minOdds ?? 1.25;
-  const maxMarketProb = options.maxMarketProb ?? 0.9;
+function preparePool(candidates2, options, bounds) {
   let excludedWorthless = 0;
-  const notes = [];
   const rankedCharacter = {
     "didukung-statistik": 3,
     "pasar-stabil": 2,
@@ -77498,8 +77503,8 @@ function buildMarketFirstTicket(candidates2, options = {}) {
     const { selection } = candidate;
     const pUsed = selection.pMarket != null && selection.pMarket > 0 && selection.pMarket < 1 ? selection.pMarket : selection.pFinal;
     if (!Number.isFinite(selection.odds) || selection.odds <= 1) continue;
-    if (!(pUsed > 0 && pUsed < 1) || pUsed < minMarketProb) continue;
-    if (selection.odds < minOdds || pUsed > maxMarketProb) {
+    if (!(pUsed > 0 && pUsed < 1) || pUsed < bounds.minProb || pUsed > bounds.maxProb) continue;
+    if (selection.odds < bounds.minOdds || bounds.maxOdds != null && selection.odds > bounds.maxOdds) {
       excludedWorthless++;
       continue;
     }
@@ -77540,18 +77545,10 @@ function buildMarketFirstTicket(candidates2, options = {}) {
   const pool = Array.from(byFixture.values()).sort(
     (a, b) => selectionScore(b) - selectionScore(a) || b.stability - a.stability
   );
-  if (pool.length < minLegs) {
-    notes.push(
-      `Hanya ${pool.length} pertandingan dengan peluang pasar \u2265 ${(minMarketProb * 100).toFixed(0)}% \u2014 di bawah minimum ${minLegs} leg.`
-    );
-    return null;
-  }
-  if (excludedWorthless > 0) {
-    notes.push(
-      `${excludedWorthless} kandidat dibuang oleh gerbang kualitas (odds < ${minOdds.toFixed(2)} atau peluang > ${(maxMarketProb * 100).toFixed(0)}% \u2014 leg nyaris-pasti tanpa hasil).`
-    );
-  }
-  const toParlayLegs = (legs) => legs.map((leg) => ({
+  return { pool, excludedWorthless };
+}
+function evaluateLegs(legs, seed) {
+  const parlayLegs = legs.map((leg) => ({
     p: leg.pUsed,
     odds: leg.selection.odds,
     pMarket: leg.selection.pMarket,
@@ -77559,23 +77556,17 @@ function buildMarketFirstTicket(candidates2, options = {}) {
     marketFamily: leg.selection.family,
     date: leg.date ?? void 0
   }));
-  const attempts = [];
-  for (let size = minLegs; size <= Math.min(maxLegs, pool.length); size++) {
-    const legs = pool.slice(0, size);
-    const analysis = analyzeParlay(toParlayLegs(legs), {
-      sims: 2e4,
-      seed: options.seed ?? 20260101
-    });
-    attempts.push({
-      legs,
-      combinedOdds: analysis.combinedOdds,
-      pCombined: analysis.pDecision,
-      evVsBook: analysis.evDecision,
-      marginPaid: analysis.marginPaid
-    });
-  }
-  const reaching = attempts.filter((a) => a.combinedOdds >= targetOdds);
-  const chosen = reaching.length > 0 ? reaching.sort((a, b) => b.pCombined - a.pCombined)[0] : attempts.sort((a, b) => b.pCombined - a.pCombined)[0];
+  const analysis = analyzeParlay(parlayLegs, { sims: 2e4, seed: seed ?? 20260101 });
+  return {
+    legs,
+    combinedOdds: analysis.combinedOdds,
+    pCombined: analysis.pDecision,
+    evVsBook: analysis.evDecision,
+    marginPaid: analysis.marginPaid
+  };
+}
+function finalizeTicket(chosen, targetOdds, prefixNotes) {
+  const notes = [...prefixNotes];
   const targetReached = chosen.combinedOdds >= targetOdds;
   if (!targetReached) {
     notes.push(
@@ -77608,6 +77599,106 @@ function buildMarketFirstTicket(candidates2, options = {}) {
     targetReached,
     notes
   };
+}
+function qualityNote(excludedWorthless, minOdds, maxMarketProb) {
+  return excludedWorthless > 0 ? [`${excludedWorthless} kandidat dibuang oleh gerbang kualitas (odds < ${minOdds.toFixed(2)}, peluang > ${(maxMarketProb * 100).toFixed(0)}%, atau line di luar rentang utama \u2014 leg nyaris-pasti tanpa hasil).`] : [];
+}
+function buildMarketFirstTicket(candidates2, options = {}) {
+  const minLegs = Math.max(2, options.minLegs ?? MIN_LEGS_DEFAULT);
+  const maxLegs = Math.max(minLegs, options.maxLegs ?? MAX_LEGS_DEFAULT);
+  const targetOdds = Math.max(1.2, options.targetOdds ?? 2);
+  const minMarketProb = options.minMarketProb ?? 0.55;
+  const minOdds = options.minOdds ?? 1.25;
+  const maxMarketProb = options.maxMarketProb ?? 0.9;
+  const { pool, excludedWorthless } = preparePool(candidates2, options, {
+    minProb: minMarketProb,
+    maxProb: maxMarketProb,
+    minOdds
+  });
+  if (pool.length < minLegs) return null;
+  const attempts = [];
+  for (let size = minLegs; size <= Math.min(maxLegs, pool.length); size++) {
+    attempts.push(evaluateLegs(pool.slice(0, size), options.seed));
+  }
+  const reaching = attempts.filter((a) => a.combinedOdds >= targetOdds);
+  const chosen = reaching.length > 0 ? reaching.sort((a, b) => b.pCombined - a.pCombined)[0] : attempts.sort((a, b) => b.pCombined - a.pCombined)[0];
+  return finalizeTicket(chosen, targetOdds, qualityNote(excludedWorthless, minOdds, maxMarketProb));
+}
+function isBoosterLeg(leg) {
+  return leg.selection.odds >= 1.85 && leg.selection.odds <= 2.3 && leg.pUsed >= 0.48 && leg.pUsed < 0.55 && leg.character === "didukung-statistik";
+}
+function hasJackpotValue(leg) {
+  const gap = leg.selection.pModelOnly - (leg.selection.pMarket ?? leg.pUsed);
+  return gap >= AGREE_TOLERANCE || leg.selection.evConservative > 0;
+}
+function buildParlayVariants(candidates2, options = {}) {
+  const minLegs = Math.max(2, options.minLegs ?? MIN_LEGS_DEFAULT);
+  const maxLegs = Math.max(minLegs, options.maxLegs ?? MAX_LEGS_DEFAULT);
+  const minOdds = options.minOdds ?? 1.25;
+  const maxMarketProb = options.maxMarketProb ?? 0.9;
+  const notes = { utama: null, booster: null, jackpot: null };
+  const utamaBase = buildMarketFirstTicket(candidates2, { ...options, targetOdds: options.mainTargetOdds ?? 4 });
+  const utama = utamaBase ? { ...utamaBase, variant: "utama" } : null;
+  if (!utama) notes.utama = "Kandidat stabil tidak cukup untuk 5 leg.";
+  let booster = null;
+  const stable = preparePool(candidates2, options, { minProb: 0.55, maxProb: maxMarketProb, minOdds });
+  const boosterPoolAll = preparePool(candidates2, options, {
+    minProb: 0.4,
+    maxProb: 0.55,
+    minOdds,
+    maxOdds: 2.3
+  }).pool.filter(isBoosterLeg);
+  const stableFixtures = new Set(stable.pool.map((l) => l.fixtureId));
+  const boosterCandidates = boosterPoolAll.filter((l) => !stableFixtures.has(l.fixtureId));
+  if (stable.pool.length >= minLegs - 1 && boosterCandidates.length > 0) {
+    const boosterLeg = [...boosterCandidates].sort(
+      (a, b) => b.stability * b.pUsed - a.stability * a.pUsed
+    )[0];
+    const attempts = [];
+    for (let size = minLegs; size <= Math.min(maxLegs, stable.pool.length + 1); size++) {
+      const legs = [...stable.pool.slice(0, size - 1), boosterLeg].filter((l, i, arr) => arr.findIndex((x) => x.fixtureId === l.fixtureId) === i);
+      if (legs.length < minLegs) continue;
+      attempts.push(evaluateLegs(legs, options.seed));
+    }
+    if (attempts.length > 0) {
+      const chosen = attempts.sort((a, b) => b.pCombined - a.pCombined)[0];
+      const ticket = finalizeTicket(chosen, options.mainTargetOdds ?? 4, [
+        `Satu leg penguat: ${boosterLeg.displayLabel} @${boosterLeg.selection.odds.toFixed(2)} (${boosterLeg.homeTeam ?? ""} vs ${boosterLeg.awayTeam ?? ""}) \u2014 leg paling berisiko di tiket ini, dipilih karena statistik mendukungnya di atas pasar.`,
+        ...qualityNote(stable.excludedWorthless, minOdds, maxMarketProb)
+      ]);
+      booster = { ...ticket, variant: "booster", boosterMarketKey: boosterLeg.marketKey };
+    }
+  }
+  if (!booster) {
+    notes.booster = boosterCandidates.length === 0 ? "Tidak ada leg penguat yang didukung statistik pada rentang odds 1,85\u20132,30 hari ini." : "Leg stabil tidak cukup untuk menemani satu leg penguat.";
+  }
+  let jackpot = null;
+  const jackpotTarget = options.jackpotTargetOdds ?? 20;
+  const jackpotFloor = options.jackpotMinProb ?? 0.025;
+  const jackpotPool = preparePool(candidates2, options, {
+    minProb: 0.3,
+    maxProb: maxMarketProb,
+    minOdds: 1.8,
+    maxOdds: 3
+  }).pool.filter(hasJackpotValue);
+  if (jackpotPool.length >= minLegs) {
+    const attempts = [];
+    for (let size = minLegs; size <= Math.min(maxLegs, jackpotPool.length); size++) {
+      attempts.push(evaluateLegs(jackpotPool.slice(0, size), options.seed));
+    }
+    const layak = attempts.filter((a) => a.combinedOdds >= jackpotTarget && a.pCombined >= jackpotFloor).sort((a, b) => b.pCombined - a.pCombined)[0];
+    if (layak) {
+      const ticket = finalizeTicket(layak, jackpotTarget, [
+        `Jackpot: semua leg lolos syarat nilai (statistik mendukung \u2265 ${(AGREE_TOLERANCE * 100).toFixed(0)} poin di atas pasar atau EV konservatif positif). Peluang tiket ${(layak.pCombined * 100).toFixed(1)}% \u2014 setara kira-kira 1 dari ${Math.max(1, Math.round(1 / layak.pCombined))} tiket.`
+      ]);
+      jackpot = { ...ticket, variant: "jackpot" };
+    } else {
+      notes.jackpot = `Tidak ada kombinasi jackpot yang mencapai odds ${jackpotTarget}\xD7 dengan peluang \u2265 ${(jackpotFloor * 100).toFixed(1)}% \u2014 ditolak daripada mengarang leg panjang.`;
+    }
+  } else {
+    notes.jackpot = `Hanya ${jackpotPool.length} leg berodds 1,80\u20133,00 yang lolos syarat nilai \u2014 jackpot tidak disusun.`;
+  }
+  return { utama, booster, jackpot, variantNotes: notes };
 }
 var AGREE_TOLERANCE, CONTRADICT_TOLERANCE, MIN_LEGS_DEFAULT, MAX_LEGS_DEFAULT;
 var init_market_first = __esm({
@@ -77959,9 +78050,9 @@ async function buildLiveMarketFirstTicket() {
   const contextByCandidate = await computeContextForCandidates(
     candidates2.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
   );
-  const ticket = buildMarketFirstTicket(candidates2, { contextByCandidate });
-  if (!ticket) return null;
-  return enrichTicketWithPriceHunt(ticket);
+  const variants = buildParlayVariants(candidates2, { contextByCandidate });
+  if (!variants.utama && !variants.booster && !variants.jackpot) return null;
+  return variants;
 }
 async function sendTelegramMessage(text) {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
@@ -77988,12 +78079,16 @@ async function sendTelegramMessage(text) {
   }
 }
 async function notifyParlayViaTelegram() {
-  const ticket = await buildLiveMarketFirstTicket();
-  if (!ticket) {
+  const variants = await buildLiveMarketFirstTicket();
+  if (!variants) {
     return { sent: false, reason: "Tidak ada tiket pasar-dulu yang bisa disusun dari ledger saat ini." };
   }
-  const result2 = await sendTelegramMessage(formatTicketMessage(ticket));
-  return { ...result2, legs: ticket.legs.length, combinedOdds: ticket.combinedOdds };
+  for (const ticket of [variants.utama, variants.booster, variants.jackpot]) {
+    if (ticket) await enrichTicketWithPriceHunt(ticket);
+  }
+  const result2 = await sendTelegramMessage(formatVariantsMessage(variants));
+  const main = variants.utama ?? variants.booster ?? variants.jackpot;
+  return { ...result2, legs: main.legs.length, combinedOdds: main.combinedOdds };
 }
 var init_telegram_notify = __esm({
   "src/services/telegram-notify.ts"() {
@@ -89064,7 +89159,7 @@ router12.get("/parlays/compose-preview", async (req, res) => {
     const candidates2 = candidatesFromSelectionRows(selectionRows, meta);
     const marketFirstCandidates = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
     const { buildParlayComposition: buildParlayComposition2 } = await Promise.resolve().then(() => (init_composition(), composition_exports));
-    const { buildMarketFirstTicket: buildMarketFirstTicket2 } = await Promise.resolve().then(() => (init_market_first(), market_first_exports));
+    const { buildParlayVariants: buildParlayVariants2 } = await Promise.resolve().then(() => (init_market_first(), market_first_exports));
     const { enrichTicketWithPriceHunt: enrichTicketWithPriceHunt2 } = await Promise.resolve().then(() => (init_price_hunt_live(), price_hunt_live_exports));
     const { computeContextForCandidates: computeContextForCandidates2 } = await Promise.resolve().then(() => (init_context_live(), context_live_exports));
     const limit = Number(req.query["maxCandidates"]) || void 0;
@@ -89072,9 +89167,15 @@ router12.get("/parlays/compose-preview", async (req, res) => {
     const contextByCandidate = await computeContextForCandidates2(
       marketFirstCandidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
     );
-    const marketFirstRaw = buildMarketFirstTicket2(marketFirstCandidates, { contextByCandidate });
-    const marketFirst = marketFirstRaw ? await enrichTicketWithPriceHunt2(marketFirstRaw) : null;
-    res.json({ ...composition, marketFirst, ledgerRows: selectionRows.length });
+    const variantsRaw = buildParlayVariants2(marketFirstCandidates, { contextByCandidate });
+    const variants = {
+      ...variantsRaw,
+      utama: variantsRaw.utama ? await enrichTicketWithPriceHunt2(variantsRaw.utama) : null,
+      booster: variantsRaw.booster ? await enrichTicketWithPriceHunt2(variantsRaw.booster) : null,
+      jackpot: variantsRaw.jackpot ? await enrichTicketWithPriceHunt2(variantsRaw.jackpot) : null
+    };
+    const marketFirst = variants.utama;
+    res.json({ ...composition, marketFirst, variants, ledgerRows: selectionRows.length });
   } catch (err) {
     logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
     res.status(500).json({ error: "Gagal menyusun pratinjau komposisi parlay" });

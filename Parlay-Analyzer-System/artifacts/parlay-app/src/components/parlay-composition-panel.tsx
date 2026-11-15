@@ -258,6 +258,46 @@ export function ParlayCompositionPanel({
           </div>
         )}
 
+        {/* ── Varian Booster & Jackpot ── */}
+        {composition.variants && (["booster", "jackpot"] as const).map((name) => {
+          const ticket = composition.variants?.[name];
+          const note = composition.variants?.variantNotes?.[name];
+          const title = name === "booster" ? "🚀 Parlay Booster" : "💎 Parlay Jackpot";
+          if (!ticket) {
+            return note ? (
+              <div key={name} className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">{title}</span> — tidak disusun: {note}
+              </div>
+            ) : null;
+          }
+          return (
+            <div key={name} className={`space-y-2 rounded-md border p-3 ${name === "booster" ? "border-violet-500/30 bg-violet-500/5" : "border-fuchsia-500/30 bg-fuchsia-500/5"}`}>
+              <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                <Layers className="h-4 w-4" />
+                {title} ({ticket.legs.length} leg)
+                <span className="font-mono">@{ticket.combinedOdds.toFixed(2)}</span>
+                <Badge variant="outline" className="text-[10px]">peluang {pct(ticket.pCombined)}</Badge>
+              </div>
+              <div className="space-y-1">
+                {ticket.legs.map((leg) => (
+                  <div key={`${leg.fixtureId}-${leg.marketKey}`} className="flex flex-wrap items-center gap-2 rounded border bg-background px-2 py-1 text-xs">
+                    <Badge variant="outline" className="text-[10px]">{leg.selection.family}</Badge>
+                    <span className="font-medium">
+                      {leg.homeTeam && leg.awayTeam ? `${leg.homeTeam} vs ${leg.awayTeam} — ` : ""}{leg.displayLabel}
+                      {("boosterMarketKey" in ticket && ticket.boosterMarketKey === leg.marketKey) ? " ⭐ PENGUAT" : ""}
+                    </span>
+                    <span className="text-muted-foreground">@{leg.selection.odds}</span>
+                    <span className="ml-auto text-muted-foreground">pasar {pct(leg.pUsed)} · {leg.character}</span>
+                  </div>
+                ))}
+              </div>
+              <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+                {ticket.notes.slice(0, 3).map((n, i) => (<li key={i}>• {n}</li>))}
+              </ul>
+            </div>
+          );
+        })}
+
         {/* ── Alternatif ── */}
         {composition.alternatives.length > 0 && (
           <div className="space-y-1.5">

@@ -393,7 +393,7 @@ router.get("/parlays/compose-preview", async (req, res) => {
     /* `buildParlayComposition` diimpor malas agar rute ini tidak menambah
      * beban muat pada jalur yang tidak memakainya. */
     const { buildParlayComposition } = await import("../lib/quant/composition");
-    const { buildMarketFirstTicket } = await import("../lib/quant/market-first");
+    const { buildParlayVariants } = await import("../lib/quant/market-first");
     const { enrichTicketWithPriceHunt } = await import("../services/price-hunt-live");
     const { computeContextForCandidates } = await import("../services/context-live");
     const limit = Number(req.query["maxCandidates"]) || undefined;
@@ -405,10 +405,17 @@ router.get("/parlays/compose-preview", async (req, res) => {
     const contextByCandidate = await computeContextForCandidates(
       marketFirstCandidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey })),
     );
-    const marketFirstRaw = buildMarketFirstTicket(marketFirstCandidates, { contextByCandidate });
-    const marketFirst = marketFirstRaw ? await enrichTicketWithPriceHunt(marketFirstRaw) : null;
+    const variantsRaw = buildParlayVariants(marketFirstCandidates, { contextByCandidate });
+    const variants = {
+      ...variantsRaw,
+      utama: variantsRaw.utama ? await enrichTicketWithPriceHunt(variantsRaw.utama) : null,
+      booster: variantsRaw.booster ? await enrichTicketWithPriceHunt(variantsRaw.booster) : null,
+      jackpot: variantsRaw.jackpot ? await enrichTicketWithPriceHunt(variantsRaw.jackpot) : null,
+    };
+    /* marketFirst dipertahankan sebagai alias varian Utama (kompatibilitas panel lama). */
+    const marketFirst = variants.utama;
 
-    res.json({ ...composition, marketFirst, ledgerRows: selectionRows.length });
+    res.json({ ...composition, marketFirst, variants, ledgerRows: selectionRows.length });
   } catch (err) {
     logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
     res.status(500).json({ error: "Gagal menyusun pratinjau komposisi parlay" });
