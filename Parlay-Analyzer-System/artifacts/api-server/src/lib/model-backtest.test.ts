@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { binaryVsMarket, buildBlendExperiment, buildCalibrationExperiment, buildModelBacktest, type BacktestSample } from "./model-backtest";
+import { asianHandicapVsMarket, binaryVsMarket, buildBlendExperiment, buildCalibrationExperiment, buildModelBacktest, type BacktestSample } from "./model-backtest";
 
 function sample(partial: Partial<BacktestSample> & { actual: BacktestSample["actual"] }): BacktestSample {
   return {
@@ -132,5 +132,21 @@ describe("binaryVsMarket (uji konfirmasi)", () => {
     const btts = binaryVsMarket(rows, "btts");
     assert.ok(btts && btts.skill > 0 && btts.n === 10);
     assert.equal(binaryVsMarket(rows, "over25"), null);
+  });
+});
+
+describe("asianHandicapVsMarket", () => {
+  it("push dikeluarkan; model akurat pada line -0.5 mendapat skill positif", () => {
+    const rows = Array.from({ length: 20 }, (_, i) => sample({
+      actual: i % 2 === 0 ? { homeGoals: 2, awayGoals: 0 } : { homeGoals: 0, awayGoals: 1 },
+      ah: { line: -0.5, modelHomeCover: i % 2 === 0 ? 0.9 : 0.1, marketHomeFair: 0.5 },
+    }));
+    const result = asianHandicapVsMarket(rows);
+    assert.ok(result && result.skill > 0 && result.n === 20);
+    const pushed = asianHandicapVsMarket([sample({
+      actual: { homeGoals: 1, awayGoals: 0 },
+      ah: { line: -1, modelHomeCover: 0.9, marketHomeFair: 0.5 },
+    })]);
+    assert.equal(pushed, null);
   });
 });

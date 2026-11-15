@@ -25,6 +25,12 @@ export interface BacktestSample {
   marketOver25?: number | null;
   /** Probabilitas fair pasar BTTS Yes (null bila snapshot BTTS tidak ada). */
   marketBttsYes?: number | null;
+  /**
+   * Asian Handicap sisi kandang pada line konsensus: probabilitas cover
+   * model (winShare, push dikeluarkan) vs fair pasar. Null bila snapshot
+   * AH tidak tersedia.
+   */
+  ah?: { line: number; modelHomeCover: number; marketHomeFair: number } | null;
   actual: { homeGoals: number; awayGoals: number };
 }
 
@@ -170,6 +176,58 @@ function pairedBinary(
     skill,
     tStat,
   };
+}
+
+/**
+ * Skill model vs pasar di Asian Handicap (sisi kandang, line konsensus).
+ *
+ * Hasil aktual dinyatakan fraksional mengikuti semantik line Asia:
+ * menang penuh y=1, menang setengah y=0,75, kalah setengah y=0,25,
+ * kalah penuh y=0; push murni dikeluarkan dari sampel (taruhan kembali,
+ * tidak ada yang dipertaruhkan). Probabilitas model adalah winShare —
+ * definisi yang sama seperti jalur live.
+ */
+export function asianHandicapVsMarket(samples: BacktestSample[]): PairedMetric | null {
+  const usable: Array<{ model: number; market: number; y: number }> = [];
+  for (const s of samples) {
+    if (!s.ah) continue;
+    const margin = s.actual.homeGoals - s.actual.awayGoals + s.ah.line;
+    const isQuarter = Math.abs(line2x(s.ah.line)) > 0;
+    let y: number;
+    if (!isQuarter) {
+      if (Math.abs(margin) < 1e-9) continue; // push — taruhan kembali
+      y = margin > 0 ? 1 : 0;
+    } else {
+      const s1 = Math.sign(s.actual.homeGoals - s.actual.awayGoals + (s.ah.line - 0.25));
+      const s2 = Math.sign(s.actual.homeGoals - s.actual.awayGoals + (s.ah.line + 0.25));
+      const sum = s1 + s2;
+      if (sum === 0 && s1 === 0) continue; // kedua komponen push (tidak terjadi di line perempat, jaga-jaga)
+      y = sum >= 2 ? 1 : sum === 1 ? 0.75 : sum === -1 ? 0.25 : 0;
+    }
+    usable.push({ model: s.ah.modelHomeCover, market: s.ah.marketHomeFair, y });
+  }
+  if (usable.length === 0) return null;
+  const loss = (p: number, y: number) =>
+    -(y * Math.log(clampProb(p)) + (1 - y) * Math.log(clampProb(1 - p)));
+  const diffs = usable.map((u) => loss(u.market, u.y) - loss(u.model, u.y));
+  const skill = mean(diffs);
+  let tStat: number | null = null;
+  if (diffs.length >= 2) {
+    const sd = Math.sqrt(mean(diffs.map((d) => (d - skill) ** 2)));
+    tStat = sd > 0 ? skill / (sd / Math.sqrt(diffs.length)) : null;
+  }
+  return {
+    n: usable.length,
+    modelLogLoss: mean(usable.map((u) => loss(u.model, u.y))),
+    marketLogLoss: mean(usable.map((u) => loss(u.market, u.y))),
+    skill,
+    tStat,
+  };
+}
+
+function line2x(line: number): number {
+  const twice = line * 2;
+  return Math.abs(twice - Math.round(twice)) > 1e-9 ? 1 : 0;
 }
 
 /** Skill model vs pasar untuk satu pasar biner — dipakai uji konfirmasi per paruh/per liga. */

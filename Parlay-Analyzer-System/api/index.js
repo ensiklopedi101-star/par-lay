@@ -89377,6 +89377,46 @@ function pairedBinary(samples, modelProb, marketProb, outcome) {
     tStat
   };
 }
+function asianHandicapVsMarket(samples) {
+  const usable = [];
+  for (const s of samples) {
+    if (!s.ah) continue;
+    const margin = s.actual.homeGoals - s.actual.awayGoals + s.ah.line;
+    const isQuarter = Math.abs(line2x(s.ah.line)) > 0;
+    let y;
+    if (!isQuarter) {
+      if (Math.abs(margin) < 1e-9) continue;
+      y = margin > 0 ? 1 : 0;
+    } else {
+      const s1 = Math.sign(s.actual.homeGoals - s.actual.awayGoals + (s.ah.line - 0.25));
+      const s2 = Math.sign(s.actual.homeGoals - s.actual.awayGoals + (s.ah.line + 0.25));
+      const sum = s1 + s2;
+      if (sum === 0 && s1 === 0) continue;
+      y = sum >= 2 ? 1 : sum === 1 ? 0.75 : sum === -1 ? 0.25 : 0;
+    }
+    usable.push({ model: s.ah.modelHomeCover, market: s.ah.marketHomeFair, y });
+  }
+  if (usable.length === 0) return null;
+  const loss = (p, y) => -(y * Math.log(clampProb(p)) + (1 - y) * Math.log(clampProb(1 - p)));
+  const diffs = usable.map((u) => loss(u.market, u.y) - loss(u.model, u.y));
+  const skill = mean2(diffs);
+  let tStat = null;
+  if (diffs.length >= 2) {
+    const sd2 = Math.sqrt(mean2(diffs.map((d) => (d - skill) ** 2)));
+    tStat = sd2 > 0 ? skill / (sd2 / Math.sqrt(diffs.length)) : null;
+  }
+  return {
+    n: usable.length,
+    modelLogLoss: mean2(usable.map((u) => loss(u.model, u.y))),
+    marketLogLoss: mean2(usable.map((u) => loss(u.market, u.y))),
+    skill,
+    tStat
+  };
+}
+function line2x(line) {
+  const twice = line * 2;
+  return Math.abs(twice - Math.round(twice)) > 1e-9 ? 1 : 0;
+}
 function binaryVsMarket(samples, market) {
   return market === "over25" ? pairedBinary(
     samples,
@@ -89683,7 +89723,8 @@ var PARAM_GRID = [0, 0.3, 0.6, 0.8, 1].flatMap((xgWeight) => [0, 3, 6, 12].map((
 function buildSamples(prepared, lambdasOf) {
   return prepared.map((fixture) => {
     const lambdas = lambdasOf(fixture);
-    const probs = marketProbabilities(scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway));
+    const matrix = scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway);
+    const probs = marketProbabilities(matrix);
     return {
       id: fixture.id,
       league: fixture.league,
@@ -89698,6 +89739,11 @@ function buildSamples(prepared, lambdasOf) {
       market: fixture.market,
       marketOver25: fixture.marketOver25,
       marketBttsYes: fixture.marketBttsYes,
+      ah: fixture.marketAh ? {
+        line: fixture.marketAh.line,
+        modelHomeCover: winShare(handicapOutcome(matrix, fixture.marketAh.line, "home")),
+        marketHomeFair: fixture.marketAh.marketHomeFair
+      } : null,
       actual: fixture.actual
     };
   });
@@ -89746,7 +89792,7 @@ async function getModelBacktest(force = false) {
     });
     for (const row of rows) {
       const marketClass = classifyOddsMarket(row["market_type"]);
-      if (marketClass !== "ML" && marketClass !== "Totals" && marketClass !== "BTTS") continue;
+      if (marketClass !== "ML" && marketClass !== "Totals" && marketClass !== "BTTS" && marketClass !== "AH") continue;
       oddsRowsLoaded++;
       const arr = oddsByMatch.get(String(row["match_id"])) ?? [];
       arr.push(row);
@@ -89793,6 +89839,34 @@ async function getModelBacktest(force = false) {
     };
     const marketOver25 = binaryMarket("Totals");
     const marketBttsYes = binaryMarket("BTTS");
+    const marketAh = (() => {
+      const rows2 = prematchAll.filter((r) => classifyOddsMarket(r["market_type"]) === "AH");
+      const latestByBook = /* @__PURE__ */ new Map();
+      for (const r of rows2) {
+        const book = String(r["bookmaker"] ?? "?");
+        const prev = latestByBook.get(book);
+        if (!prev || new Date(String(r["captured_at"])) > new Date(String(prev["captured_at"]))) {
+          latestByBook.set(book, r);
+        }
+      }
+      const byLine = /* @__PURE__ */ new Map();
+      for (const r of latestByBook.values()) {
+        const line = Number(r["odds_draw"]);
+        if (!Number.isFinite(line) || r["odds_1"] == null || r["odds_2"] == null) continue;
+        const arr = byLine.get(line) ?? [];
+        arr.push([Number(r["odds_1"]), Number(r["odds_2"])]);
+        byLine.set(line, arr);
+      }
+      let bestLine = null;
+      for (const [line, books] of byLine) {
+        if (bestLine == null || books.length > (byLine.get(bestLine)?.length ?? 0) || books.length === (byLine.get(bestLine)?.length ?? 0) && Math.abs(line) < Math.abs(bestLine)) {
+          bestLine = line;
+        }
+      }
+      if (bestLine == null) return null;
+      const fair = consensusFairProbability(byLine.get(bestLine), 0);
+      return fair != null && Number.isFinite(fair) ? { line: bestLine, marketHomeFair: Math.min(0.999, Math.max(1e-3, fair)) } : null;
+    })();
     let market = null;
     if (prematch.length > 0) {
       const latestTs = Math.max(...prematch.map((r) => new Date(String(r["captured_at"])).getTime()));
@@ -89825,6 +89899,7 @@ async function getModelBacktest(force = false) {
       market,
       marketOver25,
       marketBttsYes,
+      marketAh,
       actual: { homeGoals: Number(fixture["home_goals"]), awayGoals: Number(fixture["away_goals"]) }
     });
   }
@@ -89915,6 +89990,18 @@ async function getModelBacktest(force = false) {
       blendedFull: binaryVsMarket(blendedSamples, "btts")
     }
   ];
+  const ahValidation = {
+    full: asianHandicapVsMarket(chronologicalSamples),
+    firstHalf: asianHandicapVsMarket(binaryFirst),
+    secondHalf: asianHandicapVsMarket(binarySecond)
+  };
+  const marketCoverage = [
+    { market: "1X2 (ML)", status: "teruji", note: "Skill vs konsensus fair pasar, sampel penuh + per liga/periode." },
+    { market: "Over/Under 2.5", status: "teruji", note: "Vs harga Totals line tepat 2.5 + uji konfirmasi per paruh." },
+    { market: "BTTS", status: "teruji", note: "Vs harga BTTS pasar + uji konfirmasi per paruh." },
+    { market: "Asian Handicap", status: "teruji", note: "Cover kandang pada line konsensus antar-bookmaker; push dikeluarkan, hasil fraksional untuk line perempat." },
+    { market: "Half-Time (HT)", status: "belum bisa diuji", note: "Sistem belum punya model gol babak pertama (matriks Poisson full-time; jalur live mengembalikan null untuk HT). Menguji HT dengan matriks full-time akan menghasilkan angka bohong \u2014 pasaran ini menunggu model HT tersendiri." }
+  ];
   const value = {
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
     oddsRowsLoaded,
@@ -89925,7 +90012,9 @@ async function getModelBacktest(force = false) {
     calibration,
     infoVariants,
     blend,
-    binaryValidation
+    binaryValidation,
+    ahValidation,
+    marketCoverage
   };
   cached = { at: Date.now(), value };
   logger.info(

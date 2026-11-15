@@ -17,12 +17,13 @@
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { DEFAULT_LEAGUE, estimateLambdas, marketProbabilities, parseTeamRates, type LambdaParams, type TeamRatesParsed } from "../lib/match-context";
-import { scoreMatrix } from "../lib/quant/poisson";
+import { handicapOutcome, scoreMatrix, winShare } from "../lib/quant/poisson";
 import { normalizeStatsRow } from "../lib/stats-integrity";
 import { teamNamesEquivalent } from "../lib/team-name-cleaner";
 import { classifyOddsMarket } from "../lib/odds-market";
 import { consensusFairProbability } from "../lib/betting-math";
 import {
+  asianHandicapVsMarket,
   binaryVsMarket,
   buildBlendExperiment,
   buildCalibrationExperiment,
@@ -64,6 +65,13 @@ export interface ModelBacktestResult {
   infoVariants: InfoVariantResult[];
   blend: BlendExperiment;
   binaryValidation: BinaryValidationRow[];
+  ahValidation: {
+    full: PairedMetric | null;
+    firstHalf: PairedMetric | null;
+    secondHalf: PairedMetric | null;
+  };
+  /** Status cakupan lima pasaran — tidak ada pasaran yang diam-diam tak teruji. */
+  marketCoverage: Array<{ market: string; status: string; note: string }>;
 }
 
 export interface BinaryValidationRow {
@@ -103,6 +111,8 @@ interface PreparedFixture {
   market: BacktestSample["market"];
   marketOver25: number | null;
   marketBttsYes: number | null;
+  /** AH: line konsensus antar-bookmaker + probabilitas fair cover kandang. */
+  marketAh: { line: number; marketHomeFair: number } | null;
   actual: BacktestSample["actual"];
 }
 
@@ -112,7 +122,8 @@ function buildSamples(
 ): BacktestSample[] {
   return prepared.map((fixture) => {
     const lambdas = lambdasOf(fixture);
-    const probs = marketProbabilities(scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway));
+    const matrix = scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway);
+    const probs = marketProbabilities(matrix);
     return {
       id: fixture.id,
       league: fixture.league,
@@ -124,6 +135,13 @@ function buildSamples(
       market: fixture.market,
       marketOver25: fixture.marketOver25,
       marketBttsYes: fixture.marketBttsYes,
+      ah: fixture.marketAh
+        ? {
+          line: fixture.marketAh.line,
+          modelHomeCover: winShare(handicapOutcome(matrix, fixture.marketAh.line, "home")),
+          marketHomeFair: fixture.marketAh.marketHomeFair,
+        }
+        : null,
       actual: fixture.actual,
     };
   });
@@ -209,7 +227,7 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     });
     for (const row of rows) {
       const marketClass = classifyOddsMarket(row["market_type"]);
-      if (marketClass !== "ML" && marketClass !== "Totals" && marketClass !== "BTTS") continue;
+      if (marketClass !== "ML" && marketClass !== "Totals" && marketClass !== "BTTS" && marketClass !== "AH") continue;
       oddsRowsLoaded++;
       const arr = oddsByMatch.get(String(row["match_id"])) ?? [];
       arr.push(row);
@@ -268,6 +286,47 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     const marketOver25 = binaryMarket("Totals");
     const marketBttsYes = binaryMarket("BTTS");
 
+    /*
+     * Asian Handicap: line berbeda antar-bookmaker, jadi ambil line
+     * konsensus (paling banyak ditawarkan; seri → paling dekat ke 0)
+     * dan hanya bookmaker pada line itu yang masuk konsensus fair.
+     * odds_draw menyimpan line, odds_1/odds_2 harga kandang/tandang.
+     */
+    const marketAh = ((): { line: number; marketHomeFair: number } | null => {
+      const rows = prematchAll.filter((r) => classifyOddsMarket(r["market_type"]) === "AH");
+      const latestByBook = new Map<string, Record<string, unknown>>();
+      for (const r of rows) {
+        const book = String(r["bookmaker"] ?? "?");
+        const prev = latestByBook.get(book);
+        if (!prev || new Date(String(r["captured_at"])) > new Date(String(prev["captured_at"]))) {
+          latestByBook.set(book, r);
+        }
+      }
+      const byLine = new Map<number, Array<[number, number]>>();
+      for (const r of latestByBook.values()) {
+        const line = Number(r["odds_draw"]);
+        if (!Number.isFinite(line) || r["odds_1"] == null || r["odds_2"] == null) continue;
+        const arr = byLine.get(line) ?? [];
+        arr.push([Number(r["odds_1"]), Number(r["odds_2"])]);
+        byLine.set(line, arr);
+      }
+      let bestLine: number | null = null;
+      for (const [line, books] of byLine) {
+        if (
+          bestLine == null
+          || books.length > (byLine.get(bestLine)?.length ?? 0)
+          || (books.length === (byLine.get(bestLine)?.length ?? 0) && Math.abs(line) < Math.abs(bestLine))
+        ) {
+          bestLine = line;
+        }
+      }
+      if (bestLine == null) return null;
+      const fair = consensusFairProbability(byLine.get(bestLine)!, 0);
+      return fair != null && Number.isFinite(fair)
+        ? { line: bestLine, marketHomeFair: Math.min(0.999, Math.max(0.001, fair)) }
+        : null;
+    })();
+
     let market: BacktestSample["market"] = null;
     if (prematch.length > 0) {
       const latestTs = Math.max(...prematch.map((r) => new Date(String(r["captured_at"])).getTime()));
@@ -301,6 +360,7 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
       market,
       marketOver25,
       marketBttsYes,
+      marketAh,
       actual: { homeGoals: Number(fixture["home_goals"]), awayGoals: Number(fixture["away_goals"]) },
     });
   }
@@ -427,6 +487,19 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     },
   ];
 
+  const ahValidation = {
+    full: asianHandicapVsMarket(chronologicalSamples),
+    firstHalf: asianHandicapVsMarket(binaryFirst),
+    secondHalf: asianHandicapVsMarket(binarySecond),
+  };
+  const marketCoverage: ModelBacktestResult["marketCoverage"] = [
+    { market: "1X2 (ML)", status: "teruji", note: "Skill vs konsensus fair pasar, sampel penuh + per liga/periode." },
+    { market: "Over/Under 2.5", status: "teruji", note: "Vs harga Totals line tepat 2.5 + uji konfirmasi per paruh." },
+    { market: "BTTS", status: "teruji", note: "Vs harga BTTS pasar + uji konfirmasi per paruh." },
+    { market: "Asian Handicap", status: "teruji", note: "Cover kandang pada line konsensus antar-bookmaker; push dikeluarkan, hasil fraksional untuk line perempat." },
+    { market: "Half-Time (HT)", status: "belum bisa diuji", note: "Sistem belum punya model gol babak pertama (matriks Poisson full-time; jalur live mengembalikan null untuk HT). Menguji HT dengan matriks full-time akan menghasilkan angka bohong — pasaran ini menunggu model HT tersendiri." },
+  ];
+
   const value: ModelBacktestResult = {
     generatedAt: new Date().toISOString(),
     oddsRowsLoaded,
@@ -438,6 +511,8 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     infoVariants,
     blend,
     binaryValidation,
+    ahValidation,
+    marketCoverage,
   };
   cached = { at: Date.now(), value };
   logger.info(

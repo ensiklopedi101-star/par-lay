@@ -524,6 +524,12 @@ export interface ModelBacktestReportData {
     secondHalf: { n: number; skill: number; tStat: number | null } | null;
     blendedFull: { n: number; skill: number; tStat: number | null } | null;
   }>;
+  ahValidation: {
+    full: { n: number; skill: number; tStat: number | null } | null;
+    firstHalf: { n: number; skill: number; tStat: number | null } | null;
+    secondHalf: { n: number; skill: number; tStat: number | null } | null;
+  };
+  marketCoverage: Array<{ market: string; status: string; note: string }>;
 }
 
 export const getGetModelBacktestQueryKey = () => ["learning/model-backtest"];
