@@ -34,6 +34,9 @@ export interface WarehouseMatch {
   handi_size: number | null;
   handi_home: number | null;
   handi_away: number | null;
+  max_home?: number | null;
+  max_draw?: number | null;
+  max_away?: number | null;
 }
 
 /** Musim Eropa dimulai Agustus: Agu–Des = tahun berjalan, Jan–Jul = tahun−1. */
@@ -263,7 +266,7 @@ export { buildModelBacktest };
 /* ───────────── Simulasi strategi tiket (pembuktian pasar-dulu) ───────────── */
 
 export interface TicketStrategyResult {
-  strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik";
+  strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik" | "pasar-dulu-harga-terbaik";
   tickets: number;
   legsUsed: number;
   legHitRate: number | null;
@@ -307,7 +310,7 @@ export function simulateTicketStrategies(
   minProb = 0.6,
 ): TicketStrategyResult[] {
   const strategies: TicketStrategyResult["strategy"][] = [
-    "pasar-dulu", "model-dulu", "pasar+filter-statistik",
+    "pasar-dulu", "model-dulu", "pasar+filter-statistik", "pasar-dulu-harga-terbaik",
   ];
   const legsByStrategyWeek = new Map<string, StrategyLeg[]>();
 
@@ -326,6 +329,7 @@ export function simulateTicketStrategies(
     const picks: Array<{ strategy: TicketStrategyResult["strategy"]; side: Side; prob: number }> = [];
     if (row.market[marketSide] >= minProb) {
       picks.push({ strategy: "pasar-dulu", side: marketSide, prob: row.market[marketSide] });
+      picks.push({ strategy: "pasar-dulu-harga-terbaik", side: marketSide, prob: row.market[marketSide] });
       if (modelSide === marketSide) {
         picks.push({ strategy: "pasar+filter-statistik", side: marketSide, prob: row.market[marketSide] });
       }
@@ -334,7 +338,12 @@ export function simulateTicketStrategies(
       picks.push({ strategy: "model-dulu", side: modelSide, prob: model[modelSide] });
     }
     for (const pick of picks) {
-      const odds = oddsOf(pick.side);
+      let odds = oddsOf(pick.side);
+      if (pick.strategy === "pasar-dulu-harga-terbaik") {
+        /* Harga terbaik antar bandar dari dataset; fallback ke odds rata-rata. */
+        const best = pick.side === "home" ? match.max_home : pick.side === "draw" ? match.max_draw : match.max_away;
+        if (best != null && best > 1) odds = best;
+      }
       if (!odds || odds <= 1) continue;
       const key = `${pick.strategy}|${weekKey(match.match_date)}`;
       const list = legsByStrategyWeek.get(key) ?? [];

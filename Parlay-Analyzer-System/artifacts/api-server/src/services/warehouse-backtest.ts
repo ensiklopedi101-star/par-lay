@@ -61,7 +61,7 @@ export async function getWarehouseBacktest(force = false): Promise<WarehouseBack
   const rows = await collectPagedRows<WarehouseMatch>(async (from, to) => {
     const { data, error } = await supabase!
       .from("research_matches")
-      .select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away")
+      .select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away, max_home, max_draw, max_away")
       .lt("match_date", today)
       .not("ft_home", "is", null)
       .order("match_date", { ascending: true })

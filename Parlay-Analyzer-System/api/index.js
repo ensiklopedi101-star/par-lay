@@ -77727,6 +77727,140 @@ var init_market_first = __esm({
   }
 });
 
+// src/lib/quant/price-hunt.ts
+function huntBestPrice(usedOdds, offers, series = []) {
+  const valid = offers.filter((o) => Number.isFinite(o.odds) && o.odds > 1);
+  const best = valid.reduce(
+    (acc, o) => acc == null || o.odds > acc.odds ? o : acc,
+    null
+  );
+  const bestOdds = best ? best.odds : usedOdds;
+  const uplift = usedOdds > 0 ? bestOdds / usedOdds - 1 : 0;
+  let drift = "tidak-diketahui";
+  let driftPct = null;
+  const timed = series.filter((s) => Number.isFinite(s.odds) && s.odds > 1 && s.capturedAt).sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime());
+  if (timed.length >= 2) {
+    const first = timed[0].odds;
+    const last = timed[timed.length - 1].odds;
+    driftPct = last / first - 1;
+    drift = driftPct < -DRIFT_EPSILON ? "menajam" : driftPct > DRIFT_EPSILON ? "menjauh" : "stabil";
+  }
+  let note;
+  if (valid.length === 0) {
+    note = "Tidak ada penawaran bandar lain yang bisa dibandingkan \u2014 harga dipakai apa adanya.";
+  } else if (uplift > 1e-3) {
+    note = `Harga terbaik ${bestOdds.toFixed(2)} di ${best.bookmaker} \u2014 naik ${(uplift * 100).toFixed(1)}% dari harga yang dipakai (${usedOdds.toFixed(2)}).`;
+  } else {
+    note = `Harga yang dipakai sudah yang terbaik dari ${valid.length} bandar.`;
+  }
+  if (drift === "menajam") {
+    note += " Harga bergerak menajam ke arah pilihan ini (pasar ikut menguat).";
+  } else if (drift === "menjauh") {
+    note += " Peringatan: harga menjauhi pilihan ini sejak snapshot pertama.";
+  }
+  return {
+    usedOdds,
+    bestOdds,
+    bestBookmaker: best?.bookmaker ?? null,
+    offers: valid.length,
+    uplift,
+    drift,
+    driftPct,
+    note
+  };
+}
+function ticketPriceImpact(legs) {
+  const usedCombined = legs.reduce((acc, l) => acc * l.usedOdds, 1);
+  const bestCombined = legs.reduce((acc, l) => acc * l.bestOdds, 1);
+  return {
+    usedCombined,
+    bestCombined,
+    uplift: usedCombined > 0 ? bestCombined / usedCombined - 1 : 0
+  };
+}
+var DRIFT_EPSILON;
+var init_price_hunt = __esm({
+  "src/lib/quant/price-hunt.ts"() {
+    "use strict";
+    DRIFT_EPSILON = 5e-3;
+  }
+});
+
+// src/services/price-hunt-live.ts
+var price_hunt_live_exports = {};
+__export(price_hunt_live_exports, {
+  enrichTicketWithPriceHunt: () => enrichTicketWithPriceHunt
+});
+async function enrichTicketWithPriceHunt(ticket) {
+  if (!supabase || ticket.legs.length === 0) return ticket;
+  const fixtureIds = [...new Set(ticket.legs.map((l) => l.fixtureId))];
+  const rows = [];
+  for (let offset = 0; ; offset += 1e3) {
+    const { data, error } = await supabase.from("odds_history").select("match_id, bookmaker, market_type, odds_1, odds_2, odds_draw, captured_at").in("match_id", fixtureIds.map(String)).order("captured_at", { ascending: false }).range(offset, offset + 999);
+    if (error) {
+      logger.warn({ error }, "[PRICE-HUNT] gagal membaca odds_history");
+      return ticket;
+    }
+    rows.push(...data ?? []);
+    if ((data?.length ?? 0) < 1e3) break;
+  }
+  const rowsByFixture = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const key = String(row.match_id ?? "");
+    const list = rowsByFixture.get(key) ?? [];
+    list.push(row);
+    rowsByFixture.set(key, list);
+  }
+  for (const leg of ticket.legs) {
+    const fixtureRows = rowsByFixture.get(String(leg.fixtureId)) ?? [];
+    if (fixtureRows.length === 0) continue;
+    const marketLabel = leg.selection.key.replace(/_/g, " ");
+    const byBookmaker = /* @__PURE__ */ new Map();
+    for (const row of fixtureRows) {
+      const bookmaker = String(row.bookmaker ?? "unknown");
+      const list = byBookmaker.get(bookmaker) ?? [];
+      list.push(row);
+      byBookmaker.set(bookmaker, list);
+    }
+    const offers = [];
+    for (const [bookmaker, bookmakerRows] of byBookmaker) {
+      const resolution = resolveMarketOdds(marketLabel, bookmakerRows, { maxAgeMs: NO_FRESHNESS_LIMIT });
+      if (resolution.odds != null) {
+        offers.push({ bookmaker, odds: resolution.odds, capturedAt: resolution.capturedAt });
+      }
+    }
+    const timestamps = [...new Set(fixtureRows.map((r) => r.captured_at).filter(Boolean))];
+    timestamps.sort();
+    const series = [];
+    if (timestamps.length >= 2) {
+      for (const at of [timestamps[0], timestamps[timestamps.length - 1]]) {
+        const atRows = fixtureRows.filter((r) => r.captured_at === at);
+        const resolution = resolveMarketOdds(marketLabel, atRows, { maxAgeMs: NO_FRESHNESS_LIMIT });
+        if (resolution.odds != null) series.push({ odds: resolution.odds, capturedAt: at });
+      }
+    }
+    leg.priceHunt = huntBestPrice(leg.selection.odds, offers, series);
+  }
+  ticket.priceImpact = ticketPriceImpact(
+    ticket.legs.map((leg) => ({
+      usedOdds: leg.selection.odds,
+      bestOdds: leg.priceHunt?.bestOdds ?? leg.selection.odds
+    }))
+  );
+  return ticket;
+}
+var NO_FRESHNESS_LIMIT;
+var init_price_hunt_live = __esm({
+  "src/services/price-hunt-live.ts"() {
+    "use strict";
+    init_supabase_client();
+    init_market_odds_readiness();
+    init_price_hunt();
+    init_logger();
+    NO_FRESHNESS_LIMIT = Number.MAX_SAFE_INTEGER;
+  }
+});
+
 // src/serverless.ts
 var serverless_exports = {};
 __export(serverless_exports, {
@@ -88603,9 +88737,11 @@ router12.get("/parlays/compose-preview", async (req, res) => {
     const candidates2 = candidatesFromSelectionRows(selectionRows, meta);
     const { buildParlayComposition: buildParlayComposition2 } = await Promise.resolve().then(() => (init_composition(), composition_exports));
     const { buildMarketFirstTicket: buildMarketFirstTicket2 } = await Promise.resolve().then(() => (init_market_first(), market_first_exports));
+    const { enrichTicketWithPriceHunt: enrichTicketWithPriceHunt2 } = await Promise.resolve().then(() => (init_price_hunt_live(), price_hunt_live_exports));
     const limit = Number(req.query["maxCandidates"]) || void 0;
     const composition = buildParlayComposition2(candidates2, { maxCandidates: limit });
-    const marketFirst = buildMarketFirstTicket2(candidates2);
+    const marketFirstRaw = buildMarketFirstTicket2(candidates2);
+    const marketFirst = marketFirstRaw ? await enrichTicketWithPriceHunt2(marketFirstRaw) : null;
     res.json({ ...composition, marketFirst, ledgerRows: selectionRows.length });
   } catch (err) {
     logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
@@ -90485,7 +90621,8 @@ function simulateTicketStrategies(rows, minProb = 0.6) {
   const strategies = [
     "pasar-dulu",
     "model-dulu",
-    "pasar+filter-statistik"
+    "pasar+filter-statistik",
+    "pasar-dulu-harga-terbaik"
   ];
   const legsByStrategyWeek = /* @__PURE__ */ new Map();
   for (const row of rows) {
@@ -90501,6 +90638,7 @@ function simulateTicketStrategies(rows, minProb = 0.6) {
     const picks = [];
     if (row.market[marketSide] >= minProb) {
       picks.push({ strategy: "pasar-dulu", side: marketSide, prob: row.market[marketSide] });
+      picks.push({ strategy: "pasar-dulu-harga-terbaik", side: marketSide, prob: row.market[marketSide] });
       if (modelSide === marketSide) {
         picks.push({ strategy: "pasar+filter-statistik", side: marketSide, prob: row.market[marketSide] });
       }
@@ -90509,7 +90647,11 @@ function simulateTicketStrategies(rows, minProb = 0.6) {
       picks.push({ strategy: "model-dulu", side: modelSide, prob: model[modelSide] });
     }
     for (const pick2 of picks) {
-      const odds = oddsOf(pick2.side);
+      let odds = oddsOf(pick2.side);
+      if (pick2.strategy === "pasar-dulu-harga-terbaik") {
+        const best = pick2.side === "home" ? match.max_home : pick2.side === "draw" ? match.max_draw : match.max_away;
+        if (best != null && best > 1) odds = best;
+      }
       if (!odds || odds <= 1) continue;
       const key = `${pick2.strategy}|${weekKey(match.match_date)}`;
       const list = legsByStrategyWeek.get(key) ?? [];
@@ -90559,7 +90701,7 @@ async function getWarehouseBacktest(force = false) {
   if (!supabase) throw new Error("Supabase client not initialised");
   const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const rows = await collectPagedRows(async (from, to) => {
-    const { data, error } = await supabase.from("research_matches").select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away").lt("match_date", today).not("ft_home", "is", null).order("match_date", { ascending: true }).range(from, to);
+    const { data, error } = await supabase.from("research_matches").select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away, max_home, max_draw, max_away").lt("match_date", today).not("ft_home", "is", null).order("match_date", { ascending: true }).range(from, to);
     return { data: data ?? [], error };
   });
   const preparation = prepareWarehouseSamples(rows);

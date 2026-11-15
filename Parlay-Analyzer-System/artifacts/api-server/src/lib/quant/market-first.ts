@@ -21,6 +21,7 @@
  */
 import type { SelectionEval } from "./pipeline";
 import { analyzeParlay, type ParlayLeg } from "./parlay";
+import type { PriceHuntResult } from "./price-hunt";
 
 export type LegCharacter =
   | "didukung-statistik"
@@ -40,6 +41,8 @@ export interface MarketFirstLeg {
   /** Skor kestabilan 0–1: peluang pasar tinggi + statistik sejalan + sigma kecil. */
   stability: number;
   characterNote: string;
+  /** Hasil berburu harga lintas bandar (diisi jalur live bila data ada). */
+  priceHunt?: PriceHuntResult;
 }
 
 /** Selisih probabilitas model vs pasar yang masih dianggap "sejalan". */
@@ -118,6 +121,8 @@ export interface MarketFirstTicket {
   targetOdds: number;
   targetReached: boolean;
   notes: string[];
+  /** Dampak berburu harga pada odds gabungan (diisi jalur live). */
+  priceImpact?: { usedCombined: number; bestCombined: number; uplift: number };
 }
 
 export interface MarketFirstOptions {

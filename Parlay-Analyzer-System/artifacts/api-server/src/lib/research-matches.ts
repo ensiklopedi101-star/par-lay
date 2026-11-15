@@ -38,8 +38,13 @@ export interface ResearchMatchRow {
   odd_home: number | null;
   odd_draw: number | null;
   odd_away: number | null;
+  max_home: number | null;
+  max_draw: number | null;
+  max_away: number | null;
   over25: number | null;
   under25: number | null;
+  max_over25: number | null;
+  max_under25: number | null;
   handi_size: number | null;
   handi_home: number | null;
   handi_away: number | null;
@@ -122,8 +127,13 @@ export function toResearchMatchRow(
     odd_home: num(record["OddHome"]),
     odd_draw: num(record["OddDraw"]),
     odd_away: num(record["OddAway"]),
+    max_home: num(record["MaxHome"]),
+    max_draw: num(record["MaxDraw"]),
+    max_away: num(record["MaxAway"]),
     over25: num(record["Over25"]),
     under25: num(record["Under25"]),
+    max_over25: num(record["MaxOver25"]),
+    max_under25: num(record["MaxUnder25"]),
     handi_size: num(record["HandiSize"]),
     handi_home: num(record["HandiHome"]),
     handi_away: num(record["HandiAway"]),
