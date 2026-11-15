@@ -70,6 +70,8 @@ export interface CompositionCandidate {
   league: string;
   /** Tanggal pertandingan `YYYY-MM-DD`; makin tepat, makin baik korelasi. */
   date?: string | null;
+  homeTeam?: string | null;
+  awayTeam?: string | null;
   selection: SelectionEval;
 }
 

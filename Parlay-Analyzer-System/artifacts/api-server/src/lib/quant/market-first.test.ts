@@ -71,4 +71,21 @@ describe("market-first", () => {
     assert.equal(fixture1.length, 1);
     assert.equal(fixture1[0]!.character, "didukung-statistik");
   });
+
+  it("gerbang kualitas membuang leg nyaris-pasti berharga ~1,00 (Under 8.5)", () => {
+    const junk = candidate(99, {
+      odds: 1.01, pMarket: 0.985, pModelOnly: 0.985, pFinal: 0.98, key: "TOT:under:8.5",
+    });
+    junk.selection = selection({ odds: 1.01, pMarket: 0.985, pModelOnly: 0.985, family: "Totals", line: 8.5 });
+    const deepLine = candidate(98, {
+      odds: 1.13, pMarket: 0.84, pModelOnly: 0.84, pFinal: 0.82, key: "TOT:under:5.5",
+    });
+    deepLine.selection = selection({ odds: 1.13, pMarket: 0.84, pModelOnly: 0.84, family: "Totals", line: 5.5 });
+    const good = Array.from({ length: 6 }, (_, i) =>
+      candidate(i + 1, { odds: 1.5, pMarket: 0.64, pModelOnly: 0.64, pFinal: 0.62 }));
+    const ticket = buildMarketFirstTicket([junk, deepLine, ...good], { targetOdds: 2 });
+    assert.ok(ticket);
+    assert.ok(ticket!.legs.every((l) => l.fixtureId !== 99 && l.fixtureId !== 98));
+    assert.ok(ticket!.notes.some((n) => n.includes("gerbang kualitas")));
+  });
 });

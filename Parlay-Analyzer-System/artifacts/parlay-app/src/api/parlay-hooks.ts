@@ -721,6 +721,9 @@ export interface MarketFirstTicketData {
     league: string;
     date?: string | null;
     pUsed: number;
+    homeTeam?: string | null;
+    awayTeam?: string | null;
+    displayLabel: string;
     character: "didukung-statistik" | "pasar-stabil" | "rapuh" | "kontradiktif";
     stability: number;
     characterNote: string;

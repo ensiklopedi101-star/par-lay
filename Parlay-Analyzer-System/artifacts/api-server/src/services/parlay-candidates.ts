@@ -88,6 +88,8 @@ export interface FixtureMeta {
   fixtureId: number;
   league: string;
   date?: string | null;
+  homeTeam?: string | null;
+  awayTeam?: string | null;
 }
 
 /**
@@ -150,6 +152,8 @@ export function candidatesFromSelectionRows(
       fixtureId,
       league: meta.league,
       date: meta.date ?? null,
+      homeTeam: meta.homeTeam ?? null,
+      awayTeam: meta.awayTeam ?? null,
       selection,
     });
   }

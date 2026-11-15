@@ -23,6 +23,7 @@ import type { SelectionEval } from "./pipeline";
 import { analyzeParlay, type ParlayLeg } from "./parlay";
 import type { PriceHuntResult } from "./price-hunt";
 import type { ContextRisk } from "./context-risk";
+import { friendlyMarketLabel } from "./market-label";
 
 export type LegCharacter =
   | "didukung-statistik"
@@ -35,6 +36,10 @@ export interface MarketFirstLeg {
   fixtureId: number;
   league: string;
   date?: string | null;
+  homeTeam?: string | null;
+  awayTeam?: string | null;
+  /** Label market yang bisa dibaca manusia, mis. "Over 2.5 Gol". */
+  displayLabel: string;
   selection: SelectionEval;
   /** Probabilitas yang dipakai: fair pasar; fallback pFinal bila pasar tak ada. */
   pUsed: number;
@@ -107,6 +112,8 @@ export interface MarketFirstCandidate {
   fixtureId: number;
   league: string;
   date?: string | null;
+  homeTeam?: string | null;
+  awayTeam?: string | null;
   selection: SelectionEval;
 }
 
@@ -135,6 +142,10 @@ export interface MarketFirstOptions {
   targetOdds?: number;
   /** Peluang pasar minimum per leg agar dianggap kandidat (bawaan 0.55). */
   minMarketProb?: number;
+  /** Odds minimum leg (bawaan 1,25): di bawah ini leg tidak menyumbang hasil yang berarti. */
+  minOdds?: number;
+  /** Peluang pasar maksimum leg (bawaan 0,90): di atas ini leg nyaris-pasti tanpa nilai. */
+  maxMarketProb?: number;
   seed?: number;
   /** Risiko konteks per kandidat, kunci `${fixtureId}|${marketKey}`. */
   contextByCandidate?: Map<string, ContextRisk>;
@@ -162,6 +173,9 @@ export function buildMarketFirstTicket(
   const maxLegs = Math.max(minLegs, options.maxLegs ?? MAX_LEGS_DEFAULT);
   const targetOdds = Math.max(1.2, options.targetOdds ?? 2);
   const minMarketProb = options.minMarketProb ?? 0.55;
+  const minOdds = options.minOdds ?? 1.25;
+  const maxMarketProb = options.maxMarketProb ?? 0.9;
+  let excludedWorthless = 0;
   const notes: string[] = [];
 
   const rankedCharacter: Record<LegCharacter, number> = {
@@ -179,6 +193,24 @@ export function buildMarketFirstTicket(
       : selection.pFinal;
     if (!Number.isFinite(selection.odds) || selection.odds <= 1) continue;
     if (!(pUsed > 0 && pUsed < 1) || pUsed < minMarketProb) continue;
+    /* Gerbang kualitas: leg nyaris-pasti berharga ~1,00 (mis. Under 8.5)
+     * memakan slot tanpa menyumbang odds. Pasar nyata pun jarang
+     * menawarkannya sebagai leg parlay yang berguna. */
+    if (selection.odds < minOdds || pUsed > maxMarketProb) {
+      excludedWorthless++;
+      continue;
+    }
+    /* Rentang line utama: Totals ekstrem (Under 5.5, Over 0.5) dan AH
+     * dalam (+3) adalah line pajangan tangga provider, bukan leg yang
+     * lazim dipasang. Hanya line utama yang boleh mewakili tiket. */
+    if (selection.family === "Totals" && selection.line != null && (selection.line < 1.5 || selection.line > 3.5)) {
+      excludedWorthless++;
+      continue;
+    }
+    if (selection.family === "AH" && selection.line != null && Math.abs(selection.line) > 2) {
+      excludedWorthless++;
+      continue;
+    }
     const { character, stability, note } = classifyLeg(selection);
     const contextRisk = options.contextByCandidate?.get(`${candidate.fixtureId}|${candidate.marketKey}`);
     const leg: MarketFirstLeg = {
@@ -186,6 +218,9 @@ export function buildMarketFirstTicket(
       fixtureId: candidate.fixtureId,
       league: candidate.league,
       date: candidate.date ?? null,
+      homeTeam: candidate.homeTeam ?? null,
+      awayTeam: candidate.awayTeam ?? null,
+      displayLabel: friendlyMarketLabel(candidate.marketKey),
       selection,
       pUsed,
       character,
@@ -220,6 +255,11 @@ export function buildMarketFirstTicket(
       `Hanya ${pool.length} pertandingan dengan peluang pasar ≥ ${(minMarketProb * 100).toFixed(0)}% — di bawah minimum ${minLegs} leg.`,
     );
     return null;
+  }
+  if (excludedWorthless > 0) {
+    notes.push(
+      `${excludedWorthless} kandidat dibuang oleh gerbang kualitas (odds < ${minOdds.toFixed(2)} atau peluang > ${(maxMarketProb * 100).toFixed(0)}% — leg nyaris-pasti tanpa hasil).`,
+    );
   }
 
   const toParlayLegs = (legs: MarketFirstLeg[]): ParlayLeg[] =>

@@ -203,7 +203,9 @@ export function ParlayCompositionPanel({
                   className="flex flex-wrap items-center gap-2 rounded border bg-background px-2 py-1 text-xs"
                 >
                   <Badge variant="outline" className="text-[10px]">{leg.selection.family}</Badge>
-                  <span className="font-medium">{leg.selection.label}</span>
+                  <span className="font-medium">
+                    {leg.homeTeam && leg.awayTeam ? `${leg.homeTeam} vs ${leg.awayTeam} — ` : ""}{leg.displayLabel}
+                  </span>
                   <span className="text-muted-foreground">@{leg.selection.odds}</span>
                   <span className="ml-auto text-muted-foreground">
                     pasar {pct(leg.pUsed)} · {leg.character}
