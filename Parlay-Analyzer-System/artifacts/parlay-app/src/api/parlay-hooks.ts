@@ -569,6 +569,15 @@ export interface WarehouseBacktestData {
     adoptionJustified: boolean;
     note: string;
   };
+  ticketStrategies: Array<{
+    strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik";
+    tickets: number;
+    legsUsed: number;
+    legHitRate: number | null;
+    ticketHitRate: number | null;
+    avgCombinedOdds: number | null;
+    roi: number | null;
+  }>;
 }
 
 export const getGetWarehouseBacktestQueryKey = () => ["learning/warehouse-backtest"];
@@ -682,6 +691,28 @@ export interface ScoredCombination {
   marginPaid: number | null;
 }
 
+export interface MarketFirstTicketData {
+  legs: Array<{
+    marketKey: string;
+    fixtureId: number;
+    league: string;
+    date?: string | null;
+    pUsed: number;
+    character: "didukung-statistik" | "pasar-stabil" | "rapuh" | "kontradiktif";
+    stability: number;
+    characterNote: string;
+    selection: { label: string; odds: number; family: string; pMarket: number | null; pModelOnly: number };
+  }>;
+  combinedOdds: number;
+  pCombined: number;
+  fairOdds: number;
+  evVsBook: number;
+  marginPaid: number | null;
+  targetOdds: number;
+  targetReached: boolean;
+  notes: string[];
+}
+
 export interface ParlayComposition {
   best: ScoredCombination | null;
   alternatives: ScoredCombination[];
@@ -691,6 +722,7 @@ export interface ParlayComposition {
   minLegs: number;
   maxLegs: number;
   ledgerRows?: number;
+  marketFirst?: MarketFirstTicketData | null;
   generatedAt: string;
   notes: string[];
 }

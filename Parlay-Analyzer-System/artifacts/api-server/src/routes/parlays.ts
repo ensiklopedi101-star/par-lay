@@ -388,10 +388,15 @@ router.get("/parlays/compose-preview", async (req, res) => {
     /* `buildParlayComposition` diimpor malas agar rute ini tidak menambah
      * beban muat pada jalur yang tidak memakainya. */
     const { buildParlayComposition } = await import("../lib/quant/composition");
+    const { buildMarketFirstTicket } = await import("../lib/quant/market-first");
     const limit = Number(req.query["maxCandidates"]) || undefined;
     const composition = buildParlayComposition(candidates, { maxCandidates: limit });
+    /* Tiket pasar-dulu: probabilitas fair pasar + karakter statistik.
+     * Disajikan di samping komposisi EV agar perbedaannya terlihat —
+     * tiket ini hampir selalu bisa terbentuk, dengan peluang jujurnya. */
+    const marketFirst = buildMarketFirstTicket(candidates);
 
-    res.json({ ...composition, ledgerRows: selectionRows.length });
+    res.json({ ...composition, marketFirst, ledgerRows: selectionRows.length });
   } catch (err) {
     logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
     res.status(500).json({ error: "Gagal menyusun pratinjau komposisi parlay" });

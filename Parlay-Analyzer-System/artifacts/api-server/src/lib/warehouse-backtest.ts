@@ -131,6 +131,15 @@ export interface WarehousePreparation {
   considered: number;
   skippedNoPrior: number;
   skippedNoMarket: number;
+  /** Baris mentah terpersiapkan (dengan odds) untuk simulasi strategi tiket. */
+  preparedRows: PreparedWarehouseRow[];
+}
+
+export interface PreparedWarehouseRow {
+  match: WarehouseMatch;
+  lambdas: { lambdaHome: number; lambdaAway: number };
+  market: BacktestSample["market"];
+  marketOver25: number | null;
 }
 
 /**
@@ -164,13 +173,7 @@ export function prepareWarehouseSamples(matches: WarehouseMatch[]): WarehousePre
     seasonLeagueGoals.set(key, goals);
   }
 
-  interface PreparedRow {
-    match: WarehouseMatch;
-    lambdas: { lambdaHome: number; lambdaAway: number };
-    market: BacktestSample["market"];
-    marketOver25: number | null;
-  }
-  const prepared: PreparedRow[] = [];
+  const prepared: PreparedWarehouseRow[] = [];
   let skippedNoPrior = 0;
   let skippedNoMarket = 0;
 
@@ -195,7 +198,7 @@ export function prepareWarehouseSamples(matches: WarehouseMatch[]): WarehousePre
     prepared.push({ match, lambdas, market, marketOver25: impliedOver25(match) });
   }
 
-  const toSample = (row: PreparedRow, lambdas: { lambdaHome: number; lambdaAway: number }): BacktestSample => {
+  const toSample = (row: PreparedWarehouseRow, lambdas: { lambdaHome: number; lambdaAway: number }): BacktestSample => {
     const matrix = scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway);
     const probs = marketProbabilities(matrix);
     const ah = row.match.handi_size != null
@@ -235,6 +238,7 @@ export function prepareWarehouseSamples(matches: WarehouseMatch[]): WarehousePre
     considered: prepared.length + skippedNoPrior,
     skippedNoPrior,
     skippedNoMarket,
+    preparedRows: prepared,
   };
 }
 
@@ -255,3 +259,118 @@ export function summarizeWarehouse(report: ModelBacktestReport): WarehouseMetric
 }
 
 export { buildModelBacktest };
+
+/* ───────────── Simulasi strategi tiket (pembuktian pasar-dulu) ───────────── */
+
+export interface TicketStrategyResult {
+  strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik";
+  tickets: number;
+  legsUsed: number;
+  legHitRate: number | null;
+  ticketHitRate: number | null;
+  avgCombinedOdds: number | null;
+  /** ROI per unit taruhan datar pada tiket mingguan yang terbentuk. */
+  roi: number | null;
+}
+
+type Side = "home" | "draw" | "away";
+
+interface StrategyLeg {
+  prob: number;
+  odds: number;
+  won: boolean;
+}
+
+function weekKey(matchDate: string): string {
+  const d = new Date(`${matchDate}T00:00:00Z`);
+  const day = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - day);
+  return d.toISOString().slice(0, 10);
+}
+
+function argmaxSide(probs: { home: number; draw: number; away: number }): Side {
+  if (probs.home >= probs.draw && probs.home >= probs.away) return "home";
+  return probs.draw >= probs.away ? "draw" : "away";
+}
+
+/**
+ * Simulasi penyusunan tiket mingguan 5–8 leg dari data gudang.
+ * Tiga strategi dibandingkan pada kumpulan pertandingan yang sama:
+ *  - pasar-dulu: leg favorit pasar (peluang fair tertinggi ≥ ambang).
+ *  - model-dulu: leg favorit model Poisson (≥ ambang menurut model).
+ *  - pasar+filter-statistik: favorit pasar yang juga favorit model.
+ * Tiket dibentuk per pekan (Senin) lintas liga, maksimal 8 leg
+ * berpeluang tertinggi; pekan dengan <5 kandidat dilewati.
+ */
+export function simulateTicketStrategies(
+  rows: PreparedWarehouseRow[],
+  minProb = 0.6,
+): TicketStrategyResult[] {
+  const strategies: TicketStrategyResult["strategy"][] = [
+    "pasar-dulu", "model-dulu", "pasar+filter-statistik",
+  ];
+  const legsByStrategyWeek = new Map<string, StrategyLeg[]>();
+
+  for (const row of rows) {
+    const { match } = row;
+    if (!row.market || match.ft_home == null || match.ft_away == null) continue;
+    const matrix = scoreMatrix(row.lambdas.lambdaHome, row.lambdas.lambdaAway);
+    const modelRaw = marketProbabilities(matrix);
+    const model = { home: modelRaw.homeWin, draw: modelRaw.draw, away: modelRaw.awayWin };
+    const actualSide: Side = match.ft_home > match.ft_away ? "home" : match.ft_home < match.ft_away ? "away" : "draw";
+    const oddsOf = (side: Side): number | null =>
+      side === "home" ? match.odd_home : side === "draw" ? match.odd_draw : match.odd_away;
+
+    const marketSide = argmaxSide(row.market);
+    const modelSide = argmaxSide(model);
+    const picks: Array<{ strategy: TicketStrategyResult["strategy"]; side: Side; prob: number }> = [];
+    if (row.market[marketSide] >= minProb) {
+      picks.push({ strategy: "pasar-dulu", side: marketSide, prob: row.market[marketSide] });
+      if (modelSide === marketSide) {
+        picks.push({ strategy: "pasar+filter-statistik", side: marketSide, prob: row.market[marketSide] });
+      }
+    }
+    if (model[modelSide] >= minProb) {
+      picks.push({ strategy: "model-dulu", side: modelSide, prob: model[modelSide] });
+    }
+    for (const pick of picks) {
+      const odds = oddsOf(pick.side);
+      if (!odds || odds <= 1) continue;
+      const key = `${pick.strategy}|${weekKey(match.match_date)}`;
+      const list = legsByStrategyWeek.get(key) ?? [];
+      list.push({ prob: pick.prob, odds, won: pick.side === actualSide });
+      legsByStrategyWeek.set(key, list);
+    }
+  }
+
+  return strategies.map((strategy) => {
+    let tickets = 0;
+    let ticketsWon = 0;
+    let legsUsed = 0;
+    let legsWon = 0;
+    let oddsSum = 0;
+    let profit = 0;
+    for (const [key, legs] of legsByStrategyWeek) {
+      if (!key.startsWith(`${strategy}|`)) continue;
+      const chosen = [...legs].sort((a, b) => b.prob - a.prob).slice(0, 8);
+      if (chosen.length < 5) continue;
+      tickets++;
+      legsUsed += chosen.length;
+      legsWon += chosen.filter((l) => l.won).length;
+      const combinedOdds = chosen.reduce((acc, l) => acc * l.odds, 1);
+      oddsSum += combinedOdds;
+      const won = chosen.every((l) => l.won);
+      if (won) ticketsWon++;
+      profit += won ? combinedOdds - 1 : -1;
+    }
+    return {
+      strategy,
+      tickets,
+      legsUsed,
+      legHitRate: legsUsed > 0 ? legsWon / legsUsed : null,
+      ticketHitRate: tickets > 0 ? ticketsWon / tickets : null,
+      avgCombinedOdds: tickets > 0 ? oddsSum / tickets : null,
+      roi: tickets > 0 ? profit / tickets : null,
+    };
+  });
+}

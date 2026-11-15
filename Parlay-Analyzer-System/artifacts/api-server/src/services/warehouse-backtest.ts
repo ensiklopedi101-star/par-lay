@@ -15,7 +15,9 @@ import { collectPagedRows } from "./odds-history";
 import {
   buildModelBacktest,
   prepareWarehouseSamples,
+  simulateTicketStrategies,
   summarizeWarehouse,
+  type TicketStrategyResult,
   type WarehouseMatch,
   type WarehouseMetricSummary,
 } from "../lib/warehouse-backtest";
@@ -45,6 +47,8 @@ export interface WarehouseBacktestResult {
     adoptionJustified: boolean;
     note: string;
   };
+  /** Simulasi tiket mingguan 5–8 leg: pasar-dulu vs model-dulu vs filter. */
+  ticketStrategies: TicketStrategyResult[];
 }
 
 let cached: { at: number; value: WarehouseBacktestResult } | null = null;
@@ -135,6 +139,7 @@ export async function getWarehouseBacktest(force = false): Promise<WarehouseBack
       adoptionJustified,
       note: eloNote,
     },
+    ticketStrategies: simulateTicketStrategies(preparation.preparedRows),
   };
   cached = { at: Date.now(), value };
   logger.info(
