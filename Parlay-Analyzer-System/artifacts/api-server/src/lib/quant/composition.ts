@@ -1,5 +1,5 @@
 /**
- * Lapis komposisi parlay: memilih 3–5 leg dari puluhan kandidat.
+ * Lapis komposisi parlay: memilih 5–8 leg dari puluhan kandidat.
  *
  * Masalah yang diperbaiki
  * -----------------------
@@ -31,8 +31,12 @@
  *     dipakai untuk memperindah angka.
  *  3. Setiap leg wajib EV konservatif > 0. Satu leg negatif membuat parlay
  *     negatif, seberapa pun bagusnya leg lain.
- *  4. Jumlah leg dibatasi 3–5. Lebih dari itu, error probabilitas menumpuk
- *     secara perkalian dan peluang menang runtuh.
+ *  4. Jumlah leg dibatasi 5–8 (ukuran tiket yang diminta pemilik sistem).
+ *     Itu keputusan produk, bukan klaim matematis: error probabilitas tetap
+ *     menumpuk secara perkalian di setiap leg tambahan. Karena itu pagarnya
+ *     tidak ikut dilonggarkan — semua leg tetap wajib EV konservatif > 0,
+ *     dan bila yang layak kurang dari 5, tidak ada parlay yang disusun.
+ *     Mengisi kekurangan dengan leg di bawah standar dilarang.
  *
  * Yang TIDAK diklaim modul ini
  * ----------------------------
@@ -44,18 +48,20 @@
 import type { SelectionEval } from "./pipeline";
 import { analyzeParlay, type ParlayLeg } from "./parlay";
 
-/** Batas leg: 3–5 seperti instruksi persona, bukan 2 dan bukan 7. */
-export const MIN_LEGS = 3;
-export const MAX_LEGS = 5;
+/** Batas leg tiket: minimal 5, maksimal 8 — dengan pagar EV per leg utuh. */
+export const MIN_LEGS = 5;
+export const MAX_LEGS = 8;
 
 /** Batas bawaan jumlah kandidat yang dievaluasi — menjaga waktu tetap wajar. */
 export const DEFAULT_MAX_CANDIDATES = 30;
 
 /**
- * Saklar sementara untuk menaikkan kembali `MIN_LEGS` ke 2.
- * Lihat catatan `buildParlayComposition` soal kelayakan data sekarang.
+ * Saklar darurat untuk menurunkan `MIN_LEGS` ke 2 bila suatu hari
+ * kelayakan data menuntutnya. Saat ini MATI: tiket di bawah 5 leg bukan
+ * produk yang diminta, dan menurunkannya diam-diam akan mengkhianati
+ * aturan yang ditampilkan panel.
  */
-export const ALLOW_TWO_LEG_PARLAY = true;
+export const ALLOW_TWO_LEG_PARLAY = false;
 
 export interface CompositionCandidate {
   /** Kunci market, mis. `over_2.5` — dipakai untuk deduplikasi. */

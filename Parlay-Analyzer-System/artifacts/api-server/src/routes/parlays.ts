@@ -350,7 +350,7 @@ router.get("/parlays/compose-preview", async (req, res) => {
         /*
          * `minLegs`/`maxLegs` WAJIB ada walau kosong. Tanpa itu panel
          * merendernya sebagai "mesin memilih – leg": pembaca melihat tanda
-         * pisah dan tidak tahu batasnya 3–5. Respons kosong tetap harus
+         * pisah dan tidak tahu batasnya 5–8. Respons kosong tetap harus
          * menjawab pertanyaan yang sama dengan respons berisi.
          */
         minLegs: ALLOW_TWO_LEG_PARLAY ? 2 : MIN_LEGS,

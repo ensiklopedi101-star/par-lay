@@ -142,9 +142,9 @@ KOMPOSISI PARLAY (bila lebih dari satu selection tersedia):
     Menggabungkannya menggelembungkan odds tanpa menambah edge nyata — hindari.
   * ML Home dan Over pada pertandingan yang sama juga cenderung berkorelasi.
   * Dua leg dari pertandingan BERBEDA yang tidak berhubungan memberi diversifikasi nyata.
-- Pilih 3–5 leg terbaik untuk parlay, bukan sebanyak mungkin. Setiap leg tambahan mengalikan variansi.
+- Pilih 5–8 leg terbaik untuk parlay bila memang ada 5–8 leg yang layak. Setiap leg tambahan mengalikan variansi dan kesalahan probabilitas.
 - Leg dengan EV negatif tidak boleh dimasukkan hanya untuk menaikkan odds.
-- Bila hanya 1 leg yang layak, katakan demikian — parlay tunggal lebih jujur daripada memaksakan leg lemah.`;
+- Bila leg yang layak kurang dari 5, katakan demikian dan JANGAN susun parlay — tiket tidak boleh diisi leg lemah demi mengejar jumlah.`;
 
 /* ═══════════════════════════════════════════════════════════════
    LOAD AI CONFIG dari Supabase
