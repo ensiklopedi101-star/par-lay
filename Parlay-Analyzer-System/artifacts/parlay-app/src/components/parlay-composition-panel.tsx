@@ -17,6 +17,12 @@ import { AlertTriangle, Combine, Layers, TrendingUp } from "lucide-react";
 import type { ParlayComposition } from "@/api/parlay-hooks";
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
+const characterLabel: Record<string, string> = {
+  "didukung-statistik": "statistik mendukung",
+  "pasar-stabil": "stabil",
+  "rapuh": "kurang kokoh",
+  "kontradiktif": "statistik menolak",
+};
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -41,7 +47,7 @@ export function ParlayCompositionPanel({
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Combine className="h-4 w-4" />
-            Komposisi Parlay
+            Tiket Hari Ini
           </CardTitle>
         </CardHeader>
         <CardContent>{isLoading ? <Skeleton className="h-24 w-full" /> : null}</CardContent>
@@ -58,7 +64,7 @@ export function ParlayCompositionPanel({
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <Combine className="h-4 w-4" />
-          Komposisi Parlay
+          Tiket Hari Ini
           <Badge
             variant="outline"
             className={
@@ -71,17 +77,16 @@ export function ParlayCompositionPanel({
           </Badge>
         </CardTitle>
         <p className="text-sm text-muted-foreground">
-          Tiga varian pasar-dulu — Utama, Booster, Jackpot — disusun dari ledger yang sama.
-          Pasar adalah hakim peluang; statistik menilai karakter dan nilai setiap leg.
+          Tiga pilihan: 🎯 Utama paling aman · 🚀 Booster seimbang · 💎 Jackpot paling berani.
         </p>
       </CardHeader>
 
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Stat label="Baris ledger" value={String(composition.ledgerRows ?? 0)} hint="sumber harga" />
-          <Stat label="Varian terbentuk" value={`${formed}/3`} hint="Utama · Booster · Jackpot" />
+          <Stat label="Data dianalisis" value={String(composition.ledgerRows ?? 0)} hint="baris harga pasar" />
+          <Stat label="Tiket terbentuk" value={`${formed} dari 3`} hint="Utama · Booster · Jackpot" />
           <Stat label="Leg utama" value={utama ? String(utama.legs.length) : "—"} hint="minimum 5, maksimum 8" />
-          <Stat label="Target odds utama" value={utama ? `${utama.targetOdds.toFixed(1)}×` : "4.0×"} hint={utama?.targetReached ? "tercapai" : "belum tercapai"} />
+          <Stat label="Target Utama" value={utama ? `${utama.targetOdds.toFixed(1)}×` : "4.0×"} hint={utama?.targetReached ? "tercapai ✓" : "belum tercapai"} />
         </div>
 
         {!utama && (
@@ -103,7 +108,7 @@ export function ParlayCompositionPanel({
           <div className="space-y-2 rounded-md border border-sky-500/30 bg-sky-500/5 p-3">
             <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
               <Layers className="h-4 w-4 text-sky-600" />
-              Tiket Pasar-Dulu ({composition.marketFirst.legs.length} leg)
+              🎯 Parlay Utama ({composition.marketFirst.legs.length} leg)
               <span className="text-muted-foreground">·</span>
               <span className="font-mono">@{composition.marketFirst.combinedOdds.toFixed(2)}</span>
               <Badge variant="outline" className="text-[10px]">
@@ -127,7 +132,7 @@ export function ParlayCompositionPanel({
                   </span>
                   <span className="text-muted-foreground">@{leg.selection.odds}</span>
                   <span className="ml-auto text-muted-foreground">
-                    pasar {pct(leg.pUsed)} · {leg.character}
+                    peluang {pct(leg.pUsed)} · {characterLabel[leg.character] ?? leg.character}
                   </span>
                   {leg.priceHunt && leg.priceHunt.uplift > 0.001 && (
                     <span className="text-emerald-600">
@@ -169,11 +174,14 @@ export function ParlayCompositionPanel({
               <Stat label="Odds bandar" value={composition.marketFirst.combinedOdds.toFixed(2)} hint="yang ditawarkan" />
               <Stat label="EV vs bandar" value={pct(composition.marketFirst.evVsBook)} hint="margin menumpuk — wajar negatif" />
             </div>
-            <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
-              {composition.marketFirst.notes.map((note, i) => (
-                <li key={i}>• {note}</li>
-              ))}
-            </ul>
+            <details className="text-[11px] leading-relaxed text-muted-foreground">
+              <summary className="cursor-pointer font-medium text-foreground">Kenapa tiket ini dipilih?</summary>
+              <ul className="mt-1 space-y-1">
+                {composition.marketFirst.notes.map((note, i) => (
+                  <li key={i}>• {note}</li>
+                ))}
+              </ul>
+            </details>
           </div>
         )}
 
@@ -206,7 +214,7 @@ export function ParlayCompositionPanel({
                       {("boosterMarketKey" in ticket && ticket.boosterMarketKey === leg.marketKey) ? " ⭐ PENGUAT" : ""}
                     </span>
                     <span className="text-muted-foreground">@{leg.selection.odds}</span>
-                    <span className="ml-auto text-muted-foreground">pasar {pct(leg.pUsed)} · {leg.character}</span>
+                    <span className="ml-auto text-muted-foreground">peluang {pct(leg.pUsed)} · {characterLabel[leg.character] ?? leg.character}</span>
                   </div>
                 ))}
               </div>

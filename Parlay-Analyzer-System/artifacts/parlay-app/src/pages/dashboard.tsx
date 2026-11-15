@@ -7,6 +7,7 @@ import {
   useListSupabaseFixtures,
   useGetHealth,
   useGetStatsHealth,
+  useGetParlayComposition,
   getListSupabaseParlaysQueryKey,
 } from "@/api/parlay-hooks";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,6 +30,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatLeagueName } from "@/utils/format-league";
 import { useAdminPassword, clearStoredAdminPassword } from "@/hooks/use-admin-password";
 import { AdminPasswordDialog } from "@/components/AdminPasswordDialog";
+import { ParlayCompositionPanel } from "@/components/parlay-composition-panel";
 
 function HealthDot({ status }: { status: string }) {
   const color = status === "active" || status === "ready" ? "bg-emerald-500" : status === "idle" ? "bg-amber-500" : status === "error" || status === "missing_key" ? "bg-red-500" : "bg-slate-500";
@@ -74,6 +76,7 @@ export default function Dashboard() {
   const { data: fixtures, isLoading: isFixturesLoading } = useListSupabaseFixtures(fixturesParams);
   const { data: health, isLoading: isHealthLoading } = useGetHealth();
   const { data: statsHealth, isLoading: isStatsHealthLoading } = useGetStatsHealth();
+  const { data: composition, isLoading: isCompositionLoading } = useGetParlayComposition();
   const [scanState, setScanState] = useState<"idle" | "scanning">("idle");
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<{
@@ -238,8 +241,8 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div className="flex flex-col gap-2">
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard</h1>
-          <p className="text-muted-foreground">System overview and data synchronization status.</p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">Hari Ini</h1>
+          <p className="text-muted-foreground">Tiket parlay hari ini dan status sistem — sekilas saja.</p>
         </div>
         <Button
           size="lg"
@@ -248,7 +251,7 @@ export default function Dashboard() {
           className="bg-primary hover:bg-primary/90 text-primary-foreground"
         >
           <Zap className="w-4 h-4 mr-2" />
-          {scanState === "scanning" ? `Scanning ${scanDays} hari...` : `SCANNING ${scanDays} HARI & BUAT PARLAY`}
+          {scanState === "scanning" ? `Memindai ${scanDays} hari...` : `Scan ${scanDays} Hari & Analisis`}
         </Button>
       </div>
 
@@ -335,12 +338,15 @@ export default function Dashboard() {
 
       <AdminPasswordDialog open={open} onOpenChange={onCancel} onSubmit={onSubmit} />
 
+      {/* Tiket adalah hal pertama yang dilihat pemilik sistem. */}
+      <ParlayCompositionPanel composition={composition} isLoading={isCompositionLoading} />
+
       {/* System Health Monitor — Modul 2 */}
       <Card className="bg-card border-border">
         <CardHeader className="pb-3">
           <CardTitle className="text-lg font-semibold flex items-center gap-2">
             <Shield className="w-5 h-5 text-primary" />
-            Status Sistem
+            Sistem Berjalan?
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -401,7 +407,7 @@ export default function Dashboard() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card className="bg-card border-border">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Events</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total Pertandingan</CardTitle>
             <Database className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
@@ -415,7 +421,7 @@ export default function Dashboard() {
 
         <Card className="bg-card border-border">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Active Leagues</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Liga Aktif</CardTitle>
             <Activity className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
@@ -431,7 +437,7 @@ export default function Dashboard() {
 
         <Card className="bg-card border-border">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Last Sync</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Sinkron Terakhir</CardTitle>
             <Clock className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
@@ -439,7 +445,7 @@ export default function Dashboard() {
               <Skeleton className="h-8 w-32" />
             ) : (
               <div className="text-sm font-medium mt-1">
-                {syncStatus?.lastSyncAt ? new Date(syncStatus.lastSyncAt).toLocaleString() : "Never"}
+                {syncStatus?.lastSyncAt ? new Date(syncStatus.lastSyncAt).toLocaleString() : "Belum pernah"}
               </div>
             )}
           </CardContent>
@@ -447,7 +453,7 @@ export default function Dashboard() {
 
         <Card className="bg-card border-border">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Sync Status</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Status Sinkron</CardTitle>
             <Server className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
@@ -456,7 +462,7 @@ export default function Dashboard() {
             ) : (
               <div className="flex items-center gap-2 mt-1">
                 <div className={`w-2.5 h-2.5 rounded-full ${syncStatus?.isRunning ? 'bg-amber-500 animate-pulse' : 'bg-primary'}`} />
-                <span className="text-sm font-medium">{syncStatus?.isRunning ? 'Syncing...' : 'Idle'}</span>
+                <span className="text-sm font-medium">{syncStatus?.isRunning ? 'Menyinkron...' : 'Siap'}</span>
               </div>
             )}
           </CardContent>
@@ -464,7 +470,7 @@ export default function Dashboard() {
 
         <Card className="bg-card border-border">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium text-muted-foreground">AI Parlays</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Parlay Tersimpan</CardTitle>
             <BrainCircuit className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
@@ -478,7 +484,7 @@ export default function Dashboard() {
 
         <Card className="bg-card border-border">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Upcoming Fixtures</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Laga Mendatang</CardTitle>
             <CalendarDays className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
@@ -508,7 +514,7 @@ export default function Dashboard() {
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="col-span-1 bg-card border-border">
           <CardHeader>
-            <CardTitle className="text-lg font-semibold">League Breakdown</CardTitle>
+            <CardTitle className="text-lg font-semibold">Pertandingan per Liga</CardTitle>
           </CardHeader>
           <CardContent>
             {isSyncLoading ? (
@@ -527,7 +533,7 @@ export default function Dashboard() {
                     </div>
                   ))
                 ) : (
-                  <div className="text-sm text-muted-foreground text-center py-4">No events found.</div>
+                  <div className="text-sm text-muted-foreground text-center py-4">Belum ada pertandingan.</div>
                 )}
               </div>
             )}
@@ -540,7 +546,7 @@ export default function Dashboard() {
           <div>
             <CardTitle className="text-lg font-semibold flex items-center gap-2">
               <Database className="w-5 h-5 text-primary" />
-              Team Stats Health
+              Kesehatan Data Tim
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Coverage liga dan pengingat update statistik untuk parlay aktif.
