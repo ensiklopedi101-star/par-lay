@@ -57488,8 +57488,8 @@ ${JSON.stringify({
   if (split.validation.length < MIN_VALIDATION_SAMPLES) {
     throw new Error("Data holdout terlalu sedikit untuk backtest.");
   }
-  const proposalId = (0, import_node_crypto.randomUUID)();
-  const candidateVersionId = (0, import_node_crypto.randomUUID)();
+  const proposalId = (0, import_node_crypto2.randomUUID)();
+  const candidateVersionId = (0, import_node_crypto2.randomUUID)();
   const { data: candidateVersion, error: versionError } = await supabase.from("ai_learning_prompt_versions").insert({
     id: candidateVersionId,
     policy: boundedCandidate,
@@ -57680,11 +57680,11 @@ async function getLearningLoopState() {
     events: (events.data ?? []).slice(0, 10)
   };
 }
-var import_node_crypto, MIN_TRAINING_SAMPLES, MIN_VALIDATION_SAMPLES, MAX_EVALUATIONS_PER_CLASSIFY, MAX_BACKTEST_SAMPLES, AUTO_PROMOTION_CONFIDENCE_THRESHOLD, ACTIVE_PROMPT_CACHE_MS, OUTCOMES, EVALUATION_CATEGORIES, activePromptCache, activePromptFailureCache;
+var import_node_crypto2, MIN_TRAINING_SAMPLES, MIN_VALIDATION_SAMPLES, MAX_EVALUATIONS_PER_CLASSIFY, MAX_BACKTEST_SAMPLES, AUTO_PROMOTION_CONFIDENCE_THRESHOLD, ACTIVE_PROMPT_CACHE_MS, OUTCOMES, EVALUATION_CATEGORIES, activePromptCache, activePromptFailureCache;
 var init_prompt_learning = __esm({
   "src/services/prompt-learning.ts"() {
     "use strict";
-    import_node_crypto = require("node:crypto");
+    import_node_crypto2 = require("node:crypto");
     init_logger();
     init_supabase_client();
     init_odds_fetcher();
@@ -82538,6 +82538,52 @@ init_logger();
 
 // src/middlewares/admin.ts
 init_logger();
+
+// src/lib/security.ts
+var import_node_crypto = require("node:crypto");
+function safeEqual(provided, expected) {
+  if (typeof provided !== "string" || typeof expected !== "string" || expected.length === 0) {
+    return false;
+  }
+  const a = (0, import_node_crypto.createHash)("sha256").update(provided).digest();
+  const b = (0, import_node_crypto.createHash)("sha256").update(expected).digest();
+  return (0, import_node_crypto.timingSafeEqual)(a, b);
+}
+function clampLimit(raw, fallback = 200, max = 500) {
+  const n = typeof raw === "string" ? Number(raw) : typeof raw === "number" ? raw : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.trunc(n), 1), max);
+}
+function createRateLimiter(options = {}) {
+  const windowMs = options.windowMs ?? 5 * 60 * 1e3;
+  const max = options.max ?? 600;
+  const buckets = /* @__PURE__ */ new Map();
+  return (req, res, next) => {
+    const now = Date.now();
+    if (buckets.size > 5e3) {
+      for (const [key2, bucket2] of buckets) if (bucket2.resetAt <= now) buckets.delete(key2);
+    }
+    const key = req.ip ?? "unknown";
+    const bucket = buckets.get(key);
+    if (!bucket || bucket.resetAt <= now) {
+      buckets.set(key, { count: 1, resetAt: now + windowMs });
+      next();
+      return;
+    }
+    bucket.count += 1;
+    if (bucket.count > max) {
+      res.setHeader("Retry-After", Math.max(1, Math.ceil((bucket.resetAt - now) / 1e3)).toString());
+      res.status(429).json({ error: "Terlalu banyak permintaan \u2014 coba lagi nanti." });
+      return;
+    }
+    next();
+  };
+}
+function allowedOrigins() {
+  return (process.env["ALLOWED_ORIGINS"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// src/middlewares/admin.ts
 var ADMIN_PASSWORD = process.env["ADMIN_PASSWORD"] ?? "";
 function requireAdmin(req, res, next) {
   const header = req.headers["x-admin-password"] ?? req.headers["X-Admin-Password"];
@@ -82548,7 +82594,7 @@ function requireAdmin(req, res, next) {
     res.status(401).json({ error: "Admin password not configured" });
     return;
   }
-  if (provided !== ADMIN_PASSWORD) {
+  if (!safeEqual(provided, ADMIN_PASSWORD)) {
     logger.warn({ ip: req.ip, path: req.path }, "Unauthorized admin action attempt");
     res.status(401).json({ error: "Unauthorized \u2014 invalid admin password" });
     return;
@@ -85877,7 +85923,7 @@ router4.post("/csv/upload", upload.single("file"), async (req, res) => {
     res.status(503).json({ error: "CSV_UPLOAD_PASSWORD belum dikonfigurasi di server secrets" });
     return;
   }
-  if (!password || password !== CSV_UPLOAD_PASSWORD) {
+  if (!password || !safeEqual(password, CSV_UPLOAD_PASSWORD)) {
     res.status(401).json({ error: "Unauthorized \u2014 wrong password" });
     return;
   }
@@ -86517,7 +86563,7 @@ router5.post("/upload-csv", upload2.single("file"), async (req, res) => {
     res.status(503).json({ error: "CSV_UPLOAD_PASSWORD belum dikonfigurasi di server secrets" });
     return;
   }
-  if (!password || password !== CSV_UPLOAD_PASSWORD2) {
+  if (!password || !safeEqual(password, CSV_UPLOAD_PASSWORD2)) {
     res.status(401).json({ error: "Unauthorized \u2014 wrong password" });
     return;
   }
@@ -86584,10 +86630,10 @@ router6.get("/supabase/fixtures", async (req, res) => {
     if (status_short) q = q.eq("status_short", status_short);
     if (date_from) q = q.gte("fixture_date", date_from);
     if (date_to) q = q.lte("fixture_date", date_to);
-    const { data, error } = await q.order("fixture_date", { ascending: true }).limit(Number(limit ?? 200));
+    const { data, error } = await q.order("fixture_date", { ascending: true }).limit(clampLimit(limit, 200));
     if (error) {
       logger.error({ error }, "Supabase fixtures error");
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: "Gagal membaca data" });
       return;
     }
     res.json(data ?? []);
@@ -86602,10 +86648,10 @@ router6.get("/supabase/odds", async (req, res) => {
     let q = supabase.from("odds_history").select("*");
     if (match_id) q = q.eq("match_id", match_id);
     if (bookmaker) q = q.eq("bookmaker", bookmaker);
-    const { data, error } = await q.order("captured_at", { ascending: false }).limit(Number(limit ?? 200));
+    const { data, error } = await q.order("captured_at", { ascending: false }).limit(clampLimit(limit, 200));
     if (error) {
       logger.error({ error }, "Supabase odds error");
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: "Gagal membaca data" });
       return;
     }
     res.json(data ?? []);
@@ -86711,7 +86757,7 @@ router6.get("/supabase/standings", async (req, res) => {
     const { data, error } = await q.limit(500);
     if (error) {
       logger.error({ error }, "Supabase standings error");
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: "Gagal membaca data" });
       return;
     }
     const mergedByTeam = /* @__PURE__ */ new Map();
@@ -86788,7 +86834,7 @@ router6.get("/supabase/leagues", async (_req, res) => {
     const { data, error } = await supabase.from("leagues").select("*").eq("is_active", true);
     if (error) {
       logger.error({ error }, "Supabase leagues error");
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: "Gagal membaca data" });
       return;
     }
     res.json(data ?? []);
@@ -86802,10 +86848,10 @@ router6.get("/supabase/odds-movement", async (req, res) => {
     const { match_id, limit } = req.query;
     let q = supabase.from("v_odds_movement").select("*");
     if (match_id) q = q.eq("match_id", match_id);
-    const { data, error } = await q.limit(Number(limit ?? 100));
+    const { data, error } = await q.limit(clampLimit(limit, 100));
     if (error) {
       logger.error({ error }, "Supabase odds movement error");
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: "Gagal membaca data" });
       return;
     }
     res.json(data ?? []);
@@ -86820,10 +86866,10 @@ router6.get("/supabase/team-season-stats", async (req, res) => {
     let q = supabase.from("team_season_stats").select("*");
     if (league_slug) q = q.eq("league_slug", league_slug);
     if (season) q = q.eq("season", season);
-    const { data, error } = await q.order("team_name", { ascending: true }).limit(Number(limit ?? 500));
+    const { data, error } = await q.order("team_name", { ascending: true }).limit(clampLimit(limit, 500));
     if (error) {
       logger.error({ error }, "Supabase team season stats error");
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: "Gagal membaca data" });
       return;
     }
     res.json(data ?? []);
@@ -86899,7 +86945,7 @@ function recoverStaleScanJob(job, nowMs, staleMs) {
 
 // src/routes/analyze.ts
 init_market_odds_readiness();
-var import_node_crypto2 = require("node:crypto");
+var import_node_crypto3 = require("node:crypto");
 var router7 = (0, import_express7.Router)();
 var batchJobs = /* @__PURE__ */ new Map();
 var MAX_BATCH_JOBS = 20;
@@ -87302,7 +87348,7 @@ router7.post("/analyze/batch", requireAdmin, async (_req, res) => {
     }
     if (!fixtures || fixtures.length === 0) {
       const job2 = {
-        id: (0, import_node_crypto2.randomUUID)(),
+        id: (0, import_node_crypto3.randomUUID)(),
         status: "completed",
         scanDays,
         total: 0,
@@ -87326,7 +87372,7 @@ router7.post("/analyze/batch", requireAdmin, async (_req, res) => {
       return;
     }
     const job = {
-      id: (0, import_node_crypto2.randomUUID)(),
+      id: (0, import_node_crypto3.randomUUID)(),
       status: "running",
       scanDays,
       total: 0,
@@ -87729,7 +87775,7 @@ function requireApiKey(req, res, next) {
     });
     return;
   }
-  if (!key || String(key) !== configuredKey) {
+  if (!key || !safeEqual(String(key), configuredKey)) {
     logger.warn({ ip: req.ip }, "Unauthorized stats ingestion attempt");
     res.status(401).json({ error: "Unauthorized \u2014 invalid or missing x-api-key" });
     return;
@@ -88207,9 +88253,9 @@ function bearerToken(authorization) {
 }
 function isCronAuthorized(input) {
   if (!input.secret) return false;
-  if (firstString(input.headerSecret) === input.secret) return true;
-  if (firstString(input.queryToken) === input.secret) return true;
-  if (bearerToken(firstString(input.authorization)) === input.secret) return true;
+  if (safeEqual(firstString(input.headerSecret), input.secret)) return true;
+  if (safeEqual(firstString(input.queryToken), input.secret)) return true;
+  if (safeEqual(bearerToken(firstString(input.authorization)), input.secret)) return true;
   return false;
 }
 
@@ -88868,105 +88914,6 @@ init_reanalysis();
 init_odds_history();
 init_settlement();
 init_parlay_builder();
-
-// src/services/parlay-composer.ts
-init_supabase_client();
-init_logger();
-init_composition();
-init_parlay();
-var COMPOSER_GENERATED_BY = "QUANT_COMPOSER";
-async function composeAndSaveParlay(candidates2, options = {}) {
-  const client = options.client ?? supabase;
-  const composition = buildParlayComposition(candidates2, {
-    minLegs: options.minLegs,
-    maxLegs: options.maxLegs,
-    maxCandidates: options.maxCandidates,
-    seed: options.seed
-  });
-  if (!composition.best) {
-    return {
-      composition,
-      parlayId: null,
-      saved: false,
-      note: composition.notes[0] ?? "Tidak ada kombinasi yang memenuhi syarat."
-    };
-  }
-  if (!client) {
-    return {
-      composition,
-      parlayId: null,
-      saved: false,
-      note: "Supabase tidak tersedia \u2014 kombinasi disusun tetapi tidak disimpan."
-    };
-  }
-  const best = composition.best;
-  const leagues = new Set(best.legs.map((leg) => leg.league).filter(Boolean));
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const { data: parlay, error: parlayError } = await client.from("parlays").insert({
-    parlay_name: options.name ?? `Parlay Kuantitatif \u2014 ${(/* @__PURE__ */ new Date()).toLocaleDateString("id-ID")}`,
-    legs_count: best.legs.length,
-    combined_odds: best.combinedOdds,
-    win_probability: best.pDecision,
-    expected_value: best.evDecision,
-    stake_pct: ticketStakePlan(best, best.legs.map(() => 0.03)).stakePct,
-    ev_pessimistic: best.evPessimistic,
-    p_correlated: best.pCorrelated,
-    avg_confidence: null,
-    status: "active",
-    generated_by: COMPOSER_GENERATED_BY,
-    leagues_count: leagues.size,
-    countries_count: leagues.size,
-    reasoning: buildReasoning(composition),
-    created_at: now,
-    updated_at: now
-  }).select("id").single();
-  if (parlayError || !parlay?.id) {
-    logger.error({ error: parlayError }, "[COMPOSER] Gagal menyimpan parlay hasil komposisi");
-    return {
-      composition,
-      parlayId: null,
-      saved: false,
-      note: `Penyimpanan parlay gagal: ${parlayError?.message ?? "id tidak dikembalikan"}`
-    };
-  }
-  const parlayId = String(parlay.id);
-  const rows = toParlayLegRows(best, parlayId, { now });
-  const { error: legsError } = await client.from("parlay_legs").insert(rows);
-  if (legsError) {
-    await client.from("parlays").delete().eq("id", parlayId);
-    logger.error({ error: legsError, parlayId }, "[COMPOSER] Gagal menyimpan leg, parlay dibatalkan");
-    return {
-      composition,
-      parlayId: null,
-      saved: false,
-      note: `Penyimpanan leg gagal, parlay dibatalkan: ${legsError.message}`
-    };
-  }
-  logger.info(
-    {
-      parlayId,
-      legs: best.legs.length,
-      combinedOdds: best.combinedOdds,
-      evDecision: best.evDecision,
-      combinationsEvaluated: composition.combinationsEvaluated
-    },
-    "[COMPOSER] Parlay hasil komposisi tersimpan"
-  );
-  return { composition, parlayId, saved: true, note: null };
-}
-function buildReasoning(composition) {
-  const best = composition.best;
-  const legs = best.legs.map((leg) => `${leg.selection.label} (${leg.league}, EV ${(leg.selection.evConservative * 100).toFixed(1)}%)`).join("; ");
-  return [
-    `${best.legs.length} leg dipilih dari ${composition.eligible} kandidat layak (${composition.combinationsEvaluated} kombinasi diuji).`,
-    `Leg: ${legs}.`,
-    `Odds gabungan ${best.combinedOdds.toFixed(2)}, peluang menang ${(best.pDecision * 100).toFixed(1)}%, EV ${(best.evDecision * 100).toFixed(1)}%.`,
-    `Toleransi overestimasi ${(best.breakEvenBias * 100).toFixed(1)} poin per leg.`,
-    "Prior korelasi masih heuristik; angka ini konservatif, bukan jaminan."
-  ].join(" ");
-}
-
-// src/routes/parlays.ts
 init_composition();
 init_parlay_candidates();
 var router12 = (0, import_express12.Router)();
@@ -89163,7 +89110,16 @@ router12.get("/parlays/compose-preview", async (req, res) => {
     const { enrichTicketWithPriceHunt: enrichTicketWithPriceHunt2 } = await Promise.resolve().then(() => (init_price_hunt_live(), price_hunt_live_exports));
     const { computeContextForCandidates: computeContextForCandidates2 } = await Promise.resolve().then(() => (init_context_live(), context_live_exports));
     const limit = Number(req.query["maxCandidates"]) || void 0;
-    const composition = buildParlayComposition2(candidates2, { maxCandidates: limit });
+    const composition = req.query["legacy"] === "1" ? buildParlayComposition2(candidates2, { maxCandidates: limit }) : {
+      minLegs: candidates2.length ? MIN_LEGS : MIN_LEGS,
+      maxLegs: MAX_LEGS,
+      eligible: 0,
+      combinationsEvaluated: 0,
+      best: null,
+      alternatives: [],
+      rejected: [],
+      notes: []
+    };
     const contextByCandidate = await computeContextForCandidates2(
       marketFirstCandidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
     );
@@ -89181,43 +89137,10 @@ router12.get("/parlays/compose-preview", async (req, res) => {
     res.status(500).json({ error: "Gagal menyusun pratinjau komposisi parlay" });
   }
 });
-router12.post("/parlays/compose", requireAdmin, async (req, res) => {
-  try {
-    if (!supabase) {
-      res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
-      return;
-    }
-    const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").gt("ev_conservative", 0).order("ev_conservative", { ascending: false }).limit(200);
-    if (error) {
-      res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
-      return;
-    }
-    const selectionRows = rows ?? [];
-    const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-    const { data: fixtures } = fixtureIds.length ? await supabase.from("fixtures").select("fixture_id, league_name, fixture_date").in("fixture_id", fixtureIds) : { data: [] };
-    const meta = /* @__PURE__ */ new Map();
-    for (const f of fixtures ?? []) {
-      meta.set(Number(f.fixture_id), {
-        fixtureId: Number(f.fixture_id),
-        league: f.league_name ?? "unknown",
-        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null
-      });
-    }
-    const result2 = await composeAndSaveParlay(
-      candidatesFromSelectionRows(selectionRows, meta),
-      { maxCandidates: Number(req.body?.maxCandidates) || void 0 }
-    );
-    res.json({
-      message: result2.saved ? "Parlay hasil komposisi tersimpan" : "Komposisi selesai, tidak ada yang disimpan",
-      parlayId: result2.parlayId,
-      saved: result2.saved,
-      note: result2.note,
-      composition: result2.composition
-    });
-  } catch (err) {
-    logger.error({ err }, "Gagal menyusun dan menyimpan parlay komposisi");
-    res.status(500).json({ error: "Gagal menyusun dan menyimpan parlay komposisi" });
-  }
+router12.post("/parlays/compose", requireAdmin, async (_req, res) => {
+  res.status(410).json({
+    error: "Endpoint dipensiunkan \u2014 gunakan GET /parlays/compose-preview atau cron action=notify-parlay."
+  });
 });
 router12.get("/parlays/predictions", async (_req, res) => {
   try {
@@ -91787,9 +91710,22 @@ app.use(
     }
   })
 );
-app.use((0, import_cors.default)());
-app.use(import_express16.default.json());
-app.use(import_express16.default.urlencoded({ extended: true }));
+app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
+app.use((0, import_cors.default)({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins().includes(origin)) callback(null, true);
+    else callback(null, false);
+  }
+}));
+app.use(createRateLimiter());
+app.use(import_express16.default.json({ limit: "100kb" }));
+app.use(import_express16.default.urlencoded({ extended: true, limit: "100kb" }));
 app.use("/api", routes_default);
 var app_default = app;
 

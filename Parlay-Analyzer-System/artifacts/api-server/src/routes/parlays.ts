@@ -23,7 +23,6 @@ import {
   createMergedParlay,
   type ParlayCandidate,
 } from "../services/parlay-builder";
-import { composeAndSaveParlay } from "../services/parlay-composer";
 import { ALLOW_TWO_LEG_PARLAY, MAX_LEGS, MIN_LEGS } from "../lib/quant/composition";
 import {
   candidatesFromSelectionRows,
@@ -397,7 +396,17 @@ router.get("/parlays/compose-preview", async (req, res) => {
     const { enrichTicketWithPriceHunt } = await import("../services/price-hunt-live");
     const { computeContextForCandidates } = await import("../services/context-live");
     const limit = Number(req.query["maxCandidates"]) || undefined;
-    const composition = buildParlayComposition(candidates, { maxCandidates: limit });
+    /* Komposisi EV lama hanya dihitung bila diminta eksplisit
+     * (?legacy=1) untuk perbandingan historis. Jalur bawaan tidak
+     * lagi membayar biaya kombinasi EV yang sudah bukan hakim tiket
+     * (audit 15 Nov 2026) — hakimnya varian pasar-dulu di bawah. */
+    const composition = req.query["legacy"] === "1"
+      ? buildParlayComposition(candidates, { maxCandidates: limit })
+      : {
+          minLegs: candidates.length ? MIN_LEGS : MIN_LEGS, maxLegs: MAX_LEGS,
+          eligible: 0, combinationsEvaluated: 0, best: null,
+          alternatives: [], rejected: [], notes: [] as string[],
+        };
     /* Tiket pasar-dulu: probabilitas fair pasar + karakter statistik.
      * Disajikan di samping komposisi EV agar perbedaannya terlihat —
      * tiket ini hampir selalu bisa terbentuk, dengan peluang jujurnya.
@@ -429,60 +438,18 @@ router.get("/parlays/compose-preview", async (req, res) => {
  * rute ini MEMILIH leg-nya sendiri dari ledger dan menyimpan hasilnya dengan
  * `generated_by = QUANT_COMPOSER` agar bisa dibedakan saat evaluasi.
  */
-router.post("/parlays/compose", requireAdmin, async (req, res) => {
-  try {
-    if (!supabase) {
-      res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
-      return;
-    }
-
-    const { data: rows, error } = await supabase
-      .from("prediction_selections")
-      .select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative")
-      .gt("ev_conservative", 0)
-      .order("ev_conservative", { ascending: false })
-      .limit(200);
-
-    if (error) {
-      res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
-      return;
-    }
-
-    const selectionRows = (rows ?? []) as SelectionRow[];
-    const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-    const { data: fixtures } = fixtureIds.length
-      ? await supabase
-          .from("fixtures")
-          .select("fixture_id, league_name, fixture_date")
-          .in("fixture_id", fixtureIds)
-      : { data: [] };
-
-    const meta = new Map<number, FixtureMeta>();
-    for (const f of (fixtures ?? []) as Array<{ fixture_id: number; league_name: string | null; fixture_date: string | null }>) {
-      meta.set(Number(f.fixture_id), {
-        fixtureId: Number(f.fixture_id),
-        league: f.league_name ?? "unknown",
-        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
-      });
-    }
-
-    const result = await composeAndSaveParlay(
-      candidatesFromSelectionRows(selectionRows, meta),
-      { maxCandidates: Number(req.body?.maxCandidates) || undefined },
-    );
-    res.json({
-      message: result.saved
-        ? "Parlay hasil komposisi tersimpan"
-        : "Komposisi selesai, tidak ada yang disimpan",
-      parlayId: result.parlayId,
-      saved: result.saved,
-      note: result.note,
-      composition: result.composition,
-    });
-  } catch (err) {
-    logger.error({ err }, "Gagal menyusun dan menyimpan parlay komposisi");
-    res.status(500).json({ error: "Gagal menyusun dan menyimpan parlay komposisi" });
-  }
+router.post("/parlays/compose", requireAdmin, async (_req, res) => {
+  /* Dipensiunkan pada audit 15 Nov 2026: jalur simpan ini memakai
+   * komposer EV lama (saringan ev_conservative > 0) yang terbukti
+   * membuat tiket mustahil terbentuk (PR #49) dan tidak konsisten
+   * dengan tiket pasar-dulu yang dikirim ke pengguna. Penyusunan
+   * tiket kini hanya lewat GET /parlays/compose-preview (varian
+   * Utama/Booster/Jackpot) dan action=notify-parlay. Mengembalikan
+   * 410 agar pemanggil lama gagal dengan jelas, bukan diam-diam
+   * menghasilkan tiket dari mesin yang sudah tidak dipakai. */
+  res.status(410).json({
+    error: "Endpoint dipensiunkan — gunakan GET /parlays/compose-preview atau cron action=notify-parlay.",
+  });
 });
 
 router.get("/parlays/predictions", async (_req, res) => {
