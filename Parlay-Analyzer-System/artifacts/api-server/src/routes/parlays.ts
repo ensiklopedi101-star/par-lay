@@ -330,9 +330,8 @@ router.get("/parlays/compose-preview", async (req, res) => {
     const { data: rows, error } = await supabase
       .from("prediction_selections")
       .select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative")
-      .gt("ev_conservative", 0)
       .order("ev_conservative", { ascending: false })
-      .limit(200);
+      .limit(1000);
 
     if (error) {
       res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
@@ -383,7 +382,11 @@ router.get("/parlays/compose-preview", async (req, res) => {
       });
     }
 
+    /* Komposisi EV memakai kandidat lolos-EV (perilaku lama); tiket
+     * pasar-dulu memakai SEMUA kandidat — probabilitas pasar hakimnya,
+     * bukan EV model. */
     const candidates = candidatesFromSelectionRows(selectionRows, meta);
+    const marketFirstCandidates = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
 
     /* `buildParlayComposition` diimpor malas agar rute ini tidak menambah
      * beban muat pada jalur yang tidak memakainya. */
@@ -398,9 +401,9 @@ router.get("/parlays/compose-preview", async (req, res) => {
      * tiket ini hampir selalu bisa terbentuk, dengan peluang jujurnya.
      * Risiko konteks jadwal menurunkan leg rapuh saat pemilihan. */
     const contextByCandidate = await computeContextForCandidates(
-      candidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey })),
+      marketFirstCandidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey })),
     );
-    const marketFirstRaw = buildMarketFirstTicket(candidates, { contextByCandidate });
+    const marketFirstRaw = buildMarketFirstTicket(marketFirstCandidates, { contextByCandidate });
     const marketFirst = marketFirstRaw ? await enrichTicketWithPriceHunt(marketFirstRaw) : null;
 
     res.json({ ...composition, marketFirst, ledgerRows: selectionRows.length });

@@ -101,7 +101,14 @@ export interface FixtureMeta {
 export function candidatesFromSelectionRows(
   rows: SelectionRow[],
   fixtureMeta: Map<number, FixtureMeta>,
+  options: { requirePassing?: boolean } = {},
 ): CompositionCandidate[] {
+  /* requirePassing (bawaan true) mempertahankan perilaku komposisi EV
+   * lama. Jalur pasar-dulu memanggil dengan false: probabilitas pasar
+   * adalah hakimnya, dan menyaring kandidat dengan EV konservatif
+   * model terlebih dahulu justru membuang hampir semua bahan tiket
+   * (di produksi: 588 baris menyusut menjadi 2). */
+  const requirePassing = options.requirePassing ?? true;
   const candidates: CompositionCandidate[] = [];
 
   for (const row of rows) {
@@ -136,7 +143,7 @@ export function candidatesFromSelectionRows(
       rejectReasons: passing ? [] : ["EV konservatif ≤ 0"],
     };
 
-    if (!passing) continue;
+    if (requirePassing && !passing) continue;
 
     candidates.push({
       marketKey: row.market_key,
