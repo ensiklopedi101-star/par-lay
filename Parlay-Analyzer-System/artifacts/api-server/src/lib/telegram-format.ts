@@ -25,8 +25,10 @@ export function formatTicketMessage(ticket: MarketFirstTicket, generatedAt = new
     const best = hunt && hunt.uplift > 0.001
       ? ` → terbaik @${hunt.bestOdds.toFixed(2)} (${hunt.bestBookmaker})`
       : "";
+    const match = leg.homeTeam && leg.awayTeam ? `${leg.homeTeam} vs ${leg.awayTeam}` : leg.league;
     lines.push(
-      `${i + 1}. ${leg.selection.label} @${leg.selection.odds.toFixed(2)}${best}` +
+      `${i + 1}. ${match}` +
+      `\n   ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${best}` +
       `\n   ${leg.league} · pasar ${pct(leg.pUsed)} · ${leg.character}` +
       (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui"
         ? ` · konteks ${leg.contextRisk.level}`

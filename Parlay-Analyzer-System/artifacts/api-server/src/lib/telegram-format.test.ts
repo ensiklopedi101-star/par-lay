@@ -11,6 +11,9 @@ const ticket: MarketFirstTicket = {
       league: "england-premier-league",
       date: "2026-11-21",
       pUsed: 0.72,
+      homeTeam: "Arsenal",
+      awayTeam: "Chelsea",
+      displayLabel: "Menang — Tuan Rumah (1X2)",
       character: "didukung-statistik",
       stability: 0.8,
       characterNote: "",
@@ -37,7 +40,8 @@ describe("telegram-format", () => {
   it("memuat leg, peluang jujur, dan peringatan target", () => {
     const msg = formatTicketMessage(ticket, new Date("2026-11-15T00:00:00Z"));
     assert.ok(msg.includes("TIKET PASAR-DULU"));
-    assert.ok(msg.includes("1X2 — Home"));
+    assert.ok(msg.includes("Arsenal vs Chelsea"));
+    assert.ok(msg.includes("Menang — Tuan Rumah (1X2)"));
     assert.ok(msg.includes("72.0%"));
     assert.ok(msg.includes("tidak tercapai"));
     assert.ok(msg.includes("bukan janji"));

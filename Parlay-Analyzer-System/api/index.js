@@ -77369,8 +77369,10 @@ function formatTicketMessage(ticket, generatedAt = /* @__PURE__ */ new Date()) {
   ticket.legs.forEach((leg, i) => {
     const hunt = leg.priceHunt;
     const best = hunt && hunt.uplift > 1e-3 ? ` \u2192 terbaik @${hunt.bestOdds.toFixed(2)} (${hunt.bestBookmaker})` : "";
+    const match = leg.homeTeam && leg.awayTeam ? `${leg.homeTeam} vs ${leg.awayTeam}` : leg.league;
     lines.push(
-      `${i + 1}. ${leg.selection.label} @${leg.selection.odds.toFixed(2)}${best}
+      `${i + 1}. ${match}
+   ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${best}
    ${leg.league} \xB7 pasar ${pct2(leg.pUsed)} \xB7 ${leg.character}` + (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui" ? ` \xB7 konteks ${leg.contextRisk.level}` : "") + (hunt?.drift === "menjauh" ? " \xB7 \u26A0\uFE0F harga menjauh" : "")
     );
   });
@@ -77389,6 +77391,43 @@ var init_telegram_format = __esm({
   "src/lib/telegram-format.ts"() {
     "use strict";
     pct2 = (x) => `${(x * 100).toFixed(1)}%`;
+  }
+});
+
+// src/lib/quant/market-label.ts
+function friendlyMarketLabel(marketKey2) {
+  const key = marketKey2.trim();
+  const lower = key.toLowerCase();
+  if (lower.startsWith("ml:")) {
+    const side = lower.slice(3);
+    if (side === "home") return "Menang \u2014 Tuan Rumah (1X2)";
+    if (side === "draw") return "Seri (1X2)";
+    if (side === "away") return "Menang \u2014 Tim Tamu (1X2)";
+  }
+  if (lower.startsWith("tot:")) {
+    const [, side, line] = lower.split(":");
+    if (side === "over") return `Over ${line} Gol`;
+    if (side === "under") return `Under ${line} Gol`;
+  }
+  if (lower.startsWith("btts:")) {
+    const side = lower.slice(5);
+    if (side === "yes") return "Kedua Tim Cetak Gol \u2014 Ya";
+    if (side === "no") return "Kedua Tim Cetak Gol \u2014 Tidak";
+  }
+  if (lower.startsWith("ah:")) {
+    const [, side, line] = lower.split(":");
+    const formatted = line && Number(line) > 0 ? `+${line}` : line;
+    if (side === "home") return `Asian Handicap \u2014 Tuan Rumah ${formatted}`;
+    if (side === "away") return `Asian Handicap \u2014 Tim Tamu ${formatted}`;
+  }
+  if (lower.startsWith("ht:")) {
+    return `Babak Pertama \u2014 ${key.slice(3).replace(/_/g, " ")}`;
+  }
+  return key.replace(/[:_]/g, " ");
+}
+var init_market_label = __esm({
+  "src/lib/quant/market-label.ts"() {
+    "use strict";
   }
 });
 
@@ -77444,6 +77483,9 @@ function buildMarketFirstTicket(candidates2, options = {}) {
   const maxLegs = Math.max(minLegs, options.maxLegs ?? MAX_LEGS_DEFAULT);
   const targetOdds = Math.max(1.2, options.targetOdds ?? 2);
   const minMarketProb = options.minMarketProb ?? 0.55;
+  const minOdds = options.minOdds ?? 1.1;
+  const maxMarketProb = options.maxMarketProb ?? 0.9;
+  let excludedWorthless = 0;
   const notes = [];
   const rankedCharacter = {
     "didukung-statistik": 3,
@@ -77457,6 +77499,10 @@ function buildMarketFirstTicket(candidates2, options = {}) {
     const pUsed = selection.pMarket != null && selection.pMarket > 0 && selection.pMarket < 1 ? selection.pMarket : selection.pFinal;
     if (!Number.isFinite(selection.odds) || selection.odds <= 1) continue;
     if (!(pUsed > 0 && pUsed < 1) || pUsed < minMarketProb) continue;
+    if (selection.odds < minOdds || pUsed > maxMarketProb) {
+      excludedWorthless++;
+      continue;
+    }
     const { character, stability, note } = classifyLeg(selection);
     const contextRisk = options.contextByCandidate?.get(`${candidate.fixtureId}|${candidate.marketKey}`);
     const leg = {
@@ -77464,6 +77510,9 @@ function buildMarketFirstTicket(candidates2, options = {}) {
       fixtureId: candidate.fixtureId,
       league: candidate.league,
       date: candidate.date ?? null,
+      homeTeam: candidate.homeTeam ?? null,
+      awayTeam: candidate.awayTeam ?? null,
+      displayLabel: friendlyMarketLabel(candidate.marketKey),
       selection,
       pUsed,
       character,
@@ -77488,6 +77537,11 @@ function buildMarketFirstTicket(candidates2, options = {}) {
       `Hanya ${pool.length} pertandingan dengan peluang pasar \u2265 ${(minMarketProb * 100).toFixed(0)}% \u2014 di bawah minimum ${minLegs} leg.`
     );
     return null;
+  }
+  if (excludedWorthless > 0) {
+    notes.push(
+      `${excludedWorthless} kandidat dibuang oleh gerbang kualitas (odds < ${minOdds.toFixed(2)} atau peluang > ${(maxMarketProb * 100).toFixed(0)}% \u2014 leg nyaris-pasti tanpa hasil).`
+    );
   }
   const toParlayLegs = (legs) => legs.map((leg) => ({
     p: leg.pUsed,
@@ -77552,6 +77606,7 @@ var init_market_first = __esm({
   "src/lib/quant/market-first.ts"() {
     "use strict";
     init_parlay();
+    init_market_label();
     AGREE_TOLERANCE = 0.05;
     CONTRADICT_TOLERANCE = 0.12;
     MIN_LEGS_DEFAULT = 5;
@@ -77597,6 +77652,8 @@ function candidatesFromSelectionRows(rows, fixtureMeta, options = {}) {
       fixtureId,
       league: meta.league,
       date: meta.date ?? null,
+      homeTeam: meta.homeTeam ?? null,
+      awayTeam: meta.awayTeam ?? null,
       selection
     });
   }
@@ -77879,13 +77936,15 @@ async function buildLiveMarketFirstTicket() {
   const selectionRows = rows ?? [];
   if (selectionRows.length === 0) return null;
   const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-  const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date").in("fixture_id", fixtureIds);
+  const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name").in("fixture_id", fixtureIds);
   const meta = /* @__PURE__ */ new Map();
   for (const f of fixtures ?? []) {
     meta.set(Number(f.fixture_id), {
       fixtureId: Number(f.fixture_id),
       league: f.league_name ?? "unknown",
-      date: f.fixture_date ? f.fixture_date.slice(0, 10) : null
+      date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
+      homeTeam: f.home_team_name ?? null,
+      awayTeam: f.away_team_name ?? null
     });
   }
   const candidates2 = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
@@ -88983,13 +89042,15 @@ router12.get("/parlays/compose-preview", async (req, res) => {
       return;
     }
     const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-    const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date").in("fixture_id", fixtureIds);
+    const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name").in("fixture_id", fixtureIds);
     const meta = /* @__PURE__ */ new Map();
     for (const f of fixtures ?? []) {
       meta.set(Number(f.fixture_id), {
         fixtureId: Number(f.fixture_id),
         league: f.league_name ?? "unknown",
-        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null
+        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
+        homeTeam: f.home_team_name ?? null,
+        awayTeam: f.away_team_name ?? null
       });
     }
     const candidates2 = candidatesFromSelectionRows(selectionRows, meta);
