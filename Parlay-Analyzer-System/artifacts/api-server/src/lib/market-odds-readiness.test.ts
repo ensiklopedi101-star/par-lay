@@ -176,3 +176,19 @@ test("hoursUntilKickoff menghitung jam menuju kick-off", () => {
   assert.equal(hoursUntilKickoff(null, now), null);
   assert.equal(hoursUntilKickoff("bukan-tanggal", now), null);
 });
+
+test("fixture jauh: snapshot 10 jam diterima sesuai jenjang kick-off, ditolak tanpa fixtureDate", () => {
+  const rows = [row("Both Teams To Score", 1.66, 2.116, null, "2026-10-17T02:00:00.000Z")];
+  const far = resolveMarketOdds("BTTS Yes", rows, { now, fixtureDate: "2026-10-23T12:00:00.000Z" });
+  assert.equal(far.status, "verified");
+  assert.equal(far.odds, 1.66);
+  const strict = resolveMarketOdds("BTTS Yes", rows, { now });
+  assert.equal(strict.status, "stale");
+  assert.match(strict.reason, /berumur 10 jam/);
+});
+
+test("fixture dekat: jenjang tidak melonggarkan batas menjelang kick-off", () => {
+  const rows = [row("Both Teams To Score", 1.66, 2.116, null, "2026-10-17T02:00:00.000Z")];
+  const near = resolveMarketOdds("BTTS Yes", rows, { now, fixtureDate: "2026-10-17T15:00:00.000Z" });
+  assert.equal(near.status, "stale");
+});

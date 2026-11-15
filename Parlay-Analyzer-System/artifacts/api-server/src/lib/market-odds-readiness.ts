@@ -306,6 +306,14 @@ export function resolveMarketOdds(
     awayTeam?: string;
     now?: number;
     maxAgeMs?: number;
+    /**
+     * Tanggal kick-off fixture. Bila diberikan (dan maxAgeMs tidak),
+     * batas kesegaran mengikuti jenjang jarak kick-off yang sama seperti
+     * jalur analisis (PR #29): pertandingan berhari-hari lagi tidak boleh
+     * divonis basi oleh batas ketat 3 jam yang dirancang untuk audit
+     * closing. Tanpa fixtureDate, perilaku lama (ketat) dipertahankan.
+     */
+    fixtureDate?: string | Date | null;
   } = {},
 ): MarketOddsResolution {
   const selection = parseSelection(market, options.homeTeam, options.awayTeam);
@@ -363,10 +371,15 @@ export function resolveMarketOdds(
   const odds = selectionPrice(row, selection.side);
   const capturedAt = row.captured_at ?? null;
   const capturedTime = capturedAt ? new Date(capturedAt).getTime() : Number.NaN;
-  const age = (options.now ?? Date.now()) - capturedTime;
+  const nowMs = options.now ?? Date.now();
+  const age = nowMs - capturedTime;
+  const maxAgeMs = options.maxAgeMs
+    ?? (options.fixtureDate != null
+      ? oddsFreshnessBudgetMs(hoursUntilKickoff(options.fixtureDate, nowMs))
+      : MAX_VERIFIED_ODDS_AGE_MS);
   const isFresh = Number.isFinite(capturedTime)
     && age >= 0
-    && age <= (options.maxAgeMs ?? MAX_VERIFIED_ODDS_AGE_MS);
+    && age <= maxAgeMs;
   const common = {
     odds,
     capturedAt,
@@ -379,7 +392,14 @@ export function resolveMarketOdds(
     return result("missing_price", "Market dan line cocok, tetapi harga untuk sisi pilihan tidak tersedia.", common);
   }
   if (!isFresh) {
-    return result("stale", "Odds cocok, tetapi snapshot sudah kedaluwarsa atau waktu pengambilannya tidak valid.", common);
+    const ageHours = Number.isFinite(age) ? Math.max(0, Math.round((age / 3_600_000) * 10) / 10) : null;
+    return result(
+      "stale",
+      ageHours != null
+        ? `Odds cocok, tetapi snapshot terakhir berumur ${ageHours} jam — melewati batas ${Math.round(maxAgeMs / 3_600_000)} jam untuk jarak kick-off ini. Tunggu sync berikutnya atau segarkan odds fixture ini.`
+        : "Odds cocok, tetapi waktu pengambilan snapshot tidak valid.",
+      common,
+    );
   }
 
   return result("verified", "Odds provider cocok dengan market, sisi pilihan, line, dan batas freshness.", common);

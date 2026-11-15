@@ -575,7 +575,11 @@ router.get("/parlays/predictions", async (_req, res) => {
       const oddsResolution = resolveMarketOdds(
         market,
         oddsByFixture.get(String(prediction.fixture_id)) ?? [],
-        { homeTeam: fixtureHome, awayTeam: fixtureAway },
+        {
+          homeTeam: fixtureHome,
+          awayTeam: fixtureAway,
+          fixtureDate: fixture?.fixture_date ?? null,
+        },
       );
       const currentOdds = oddsResolution.status === "verified" ? oddsResolution.odds : null;
       const hasCurrentEv = currentOdds != null && probability > 0 && probability < 1;
