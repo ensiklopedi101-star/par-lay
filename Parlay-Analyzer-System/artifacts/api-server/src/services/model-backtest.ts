@@ -23,6 +23,7 @@ import { teamNamesEquivalent } from "../lib/team-name-cleaner";
 import { classifyOddsMarket } from "../lib/odds-market";
 import { consensusFairProbability } from "../lib/betting-math";
 import {
+  binaryVsMarket,
   buildBlendExperiment,
   buildCalibrationExperiment,
   buildModelBacktest,
@@ -62,6 +63,17 @@ export interface ModelBacktestResult {
   calibration: CalibrationExperiment;
   infoVariants: InfoVariantResult[];
   blend: BlendExperiment;
+  binaryValidation: BinaryValidationRow[];
+}
+
+export interface BinaryValidationRow {
+  key: "over25" | "btts";
+  label: string;
+  full: PairedMetric | null;
+  firstHalf: PairedMetric | null;
+  secondHalf: PairedMetric | null;
+  /** Skill pada varian prior+form — edge harus bertahan di informasi yang lebih kaya. */
+  blendedFull: PairedMetric | null;
 }
 
 export interface InfoVariantResult {
@@ -389,6 +401,32 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     chronologicalSamples.slice(blendSplit),
   );
 
+  /*
+   * Uji konfirmasi pasar gol: edge Over 2.5/BTTS yang terlihat di sampel
+   * penuh harus muncul di KEDUA paruh kronologis dan bertahan pada
+   * varian prior+form — bila hanya hidup di satu paruh, ia diperlakukan
+   * sebagai keberuntungan sampel penemuan, bukan keunggulan.
+   */
+  const binaryHalf = Math.floor(chronologicalSamples.length / 2);
+  const binaryFirst = chronologicalSamples.slice(0, binaryHalf);
+  const binarySecond = chronologicalSamples.slice(binaryHalf);
+  const binaryValidation: BinaryValidationRow[] = [
+    {
+      key: "over25", label: "Over 2.5",
+      full: binaryVsMarket(chronologicalSamples, "over25"),
+      firstHalf: binaryVsMarket(binaryFirst, "over25"),
+      secondHalf: binaryVsMarket(binarySecond, "over25"),
+      blendedFull: binaryVsMarket(blendedSamples, "over25"),
+    },
+    {
+      key: "btts", label: "BTTS",
+      full: binaryVsMarket(chronologicalSamples, "btts"),
+      firstHalf: binaryVsMarket(binaryFirst, "btts"),
+      secondHalf: binaryVsMarket(binarySecond, "btts"),
+      blendedFull: binaryVsMarket(blendedSamples, "btts"),
+    },
+  ];
+
   const value: ModelBacktestResult = {
     generatedAt: new Date().toISOString(),
     oddsRowsLoaded,
@@ -399,6 +437,7 @@ export async function getModelBacktest(force = false): Promise<ModelBacktestResu
     calibration,
     infoVariants,
     blend,
+    binaryValidation,
   };
   cached = { at: Date.now(), value };
   logger.info(
