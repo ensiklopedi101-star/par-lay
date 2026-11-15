@@ -1,0 +1,44 @@
+# Ingest terjadwal gudang riset historis (research_matches).
+#
+# Kenapa di GitHub Actions, bukan cron-job.org / Vercel:
+# - cron-job.org hanya bisa memanggil URL; ia tidak menjalankan program.
+# - Vercel memotong fungsi di 60 detik; mengunduh + mengurai CSV 45 MB
+#   dan meng-upsert belasan ribu baris tidak muat dengan aman.
+# - Dataset sumber bersifat arsip (diperbarui berkala oleh pemiliknya),
+#   jadi jadwal bulanan lebih dari cukup. Ini BUKAN sync odds live —
+#   jangan campur dengan odds-sync.yml (yang jadwalnya mati by design).
+#
+# Butuh repo secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
+# Tanpa keduanya job gagal dengan pesan yang jelas, bukan diam-diam.
+
+name: research-ingest
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 1 * *"
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: Parlay-Analyzer-System
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: Parlay-Analyzer-System/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Ingest research_matches
+        working-directory: Parlay-Analyzer-System/artifacts/api-server
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npx tsx scripts/ingest-research-matches.ts
