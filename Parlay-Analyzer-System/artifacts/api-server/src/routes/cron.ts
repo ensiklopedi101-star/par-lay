@@ -220,6 +220,23 @@ async function handleCron(req: any, res: any) {
     return;
   }
 
+  if (action === "notify-parlay") {
+    /* Kirim tiket pasar-dulu ke Telegram pemilik sistem. Dijadwalkan
+       dari cron-job.org (mis. 2x sehari); aksi ini tidak mengirim bila
+       tiket tidak terbentuk atau Telegram belum dikonfigurasi, dan
+       selalu menjawab alasannya di respons. */
+    const { notifyParlayViaTelegram } = await import("../services/telegram-notify");
+    notifyParlayViaTelegram()
+      .then((summary) => {
+        res.json({ message: "Notifikasi parlay diproses", ...summary, timestamp: new Date().toISOString() });
+      })
+      .catch((err) => {
+        logger.error({ err }, "Cron-triggered parlay notification gagal");
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      });
+    return;
+  }
+
   if (action === "outcomes") {
     runOutcomeSettlement()
       .then((result) => {
