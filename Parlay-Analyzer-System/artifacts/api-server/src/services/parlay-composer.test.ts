@@ -86,7 +86,7 @@ function recordingClient(state: {
 
 test("menyimpan parlay beserta leg saat kombinasi layak", async () => {
   const client = recordingClient();
-  const result = await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03)], {
+  const result = await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03), cand(4, 0.025), cand(5, 0.02)], {
     client,
     seed: 1,
   });
@@ -108,7 +108,7 @@ test("menyimpan parlay beserta leg saat kombinasi layak", async () => {
 
 test("alasan yang disimpan berasal dari angka, bukan narasi", async () => {
   const client = recordingClient();
-  await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03)], { client, seed: 1 });
+  await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03), cand(4, 0.025), cand(5, 0.02)], { client, seed: 1 });
 
   const parlayWrite = client.writes.find((w: any) => w.table === "parlays");
   const reasoning: string = parlayWrite.rows.reasoning;
@@ -130,7 +130,7 @@ test("tidak ada kombinasi layak: tidak menulis apa pun ke database", async () =>
 });
 
 test("supabase tidak tersedia: komposisi tetap dilaporkan", async () => {
-  const result = await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03)], {
+  const result = await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03), cand(4, 0.025), cand(5, 0.02)], {
     client: null as any,
     seed: 1,
   });
@@ -142,7 +142,7 @@ test("supabase tidak tersedia: komposisi tetap dilaporkan", async () => {
 
 test("gagal menyimpan leg: parlay dihapus lagi, tidak ditinggal tanpa leg", async () => {
   const client = recordingClient({ failLegInsert: true });
-  const result = await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03)], {
+  const result = await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03), cand(4, 0.025), cand(5, 0.02)], {
     client,
     seed: 1,
   });
@@ -155,7 +155,7 @@ test("gagal menyimpan leg: parlay dihapus lagi, tidak ditinggal tanpa leg", asyn
 
 test("gagal menyimpan parlay: tidak mencoba menulis leg", async () => {
   const client = recordingClient({ failParlayInsert: true });
-  const result = await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03)], {
+  const result = await composeAndSaveParlay([cand(1, 0.05), cand(2, 0.04), cand(3, 0.03), cand(4, 0.025), cand(5, 0.02)], {
     client,
     seed: 1,
   });
@@ -166,7 +166,7 @@ test("gagal menyimpan parlay: tidak mencoba menulis leg", async () => {
 });
 
 test("hasil komposisi bisa direproduksi dengan benih yang sama", async () => {
-  const candidates = [cand(1, 0.05), cand(2, 0.04), cand(3, 0.03), cand(4, 0.025)];
+  const candidates = [cand(1, 0.05), cand(2, 0.04), cand(3, 0.03), cand(4, 0.025), cand(5, 0.02)];
   const a = await composeAndSaveParlay(candidates, { client: recordingClient(), seed: 42 });
   const b = await composeAndSaveParlay(candidates, { client: recordingClient(), seed: 42 });
 

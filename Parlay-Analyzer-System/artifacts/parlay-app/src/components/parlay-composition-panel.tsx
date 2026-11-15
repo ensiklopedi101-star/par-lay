@@ -1,7 +1,7 @@
 /**
  * Panel komposisi parlay.
  *
- * Menampilkan hasil mesin yang MEMILIH 3–5 leg dari puluhan kandidat —
+ * Menampilkan hasil mesin yang MEMILIH 5–8 leg dari puluhan kandidat —
  * bukan daftar leg yang dikirim manusia.
  *
  * Yang membedakan panel ini dari halaman parlay biasa: ia menunjukkan
@@ -109,7 +109,7 @@ export function ParlayCompositionPanel({
           <Stat
             label="Kombinasi diuji"
             value={composition.combinationsEvaluated.toLocaleString("id-ID")}
-            hint="semua ukuran 3–5 leg"
+            hint="semua ukuran 5–8 leg"
           />
           <Stat
             label="Dibuang"

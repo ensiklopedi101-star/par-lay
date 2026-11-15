@@ -103,7 +103,7 @@ test("kandidat kurang dari minimum: menolak, bukan memaksakan", () => {
   );
 });
 
-test("menyusun parlay 3 leg dari kandidat yang layak", () => {
+test("menyusun parlay 5 leg dari kandidat yang layak", () => {
   const result = buildParlayComposition([
     cand(1, { selection: { evConservative: 0.05 } }),
     cand(2, { selection: { evConservative: 0.04 } }),
@@ -113,7 +113,7 @@ test("menyusun parlay 3 leg dari kandidat yang layak", () => {
   ]);
 
   assert.ok(result.best, "harus ada kombinasi terpilih");
-  assert.ok(result.best!.legs.length >= 2 && result.best!.legs.length <= MAX_LEGS);
+  assert.ok(result.best!.legs.length >= 5 && result.best!.legs.length <= MAX_LEGS);
   assert.ok(result.best!.evDecision > 0, "EV keputusan harus positif");
   assert.ok(result.combinationsEvaluated > 0);
 });
@@ -124,6 +124,8 @@ test("satu leg per pertandingan selalu terjaga di kombinasi akhir", () => {
     cand(1, { marketKey: "b", selection: { evConservative: 0.04 } }),
     cand(2, { selection: { evConservative: 0.04 } }),
     cand(3, { selection: { evConservative: 0.03 } }),
+    cand(4, { selection: { evConservative: 0.02 } }),
+    cand(5, { selection: { evConservative: 0.01 } }),
   ]);
 
   assert.ok(result.best);
@@ -139,6 +141,8 @@ test("korelasi menurunkan EV, bukan menaikkannya", () => {
     cand(1, { league: "serie-a", date: "2026-11-21" }),
     cand(2, { league: "serie-a", date: "2026-11-21" }),
     cand(3, { league: "serie-a", date: "2026-11-21" }),
+    cand(4, { league: "serie-a", date: "2026-11-21" }),
+    cand(5, { league: "serie-a", date: "2026-11-21" }),
   ]);
 
   assert.ok(sameLeague.best);
@@ -153,6 +157,8 @@ test("EV pesimis dan titik impas bias dilaporkan apa adanya", () => {
     cand(1, { selection: { evConservative: 0.06 } }),
     cand(2, { selection: { evConservative: 0.05 } }),
     cand(3, { selection: { evConservative: 0.04 } }),
+    cand(4, { selection: { evConservative: 0.03 } }),
+    cand(5, { selection: { evConservative: 0.02 } }),
   ]);
 
   assert.ok(result.best);
@@ -169,6 +175,8 @@ test("selalu menyatakan bahwa prior korelasi masih heuristik", () => {
     cand(1, { selection: { evConservative: 0.06 } }),
     cand(2, { selection: { evConservative: 0.05 } }),
     cand(3, { selection: { evConservative: 0.04 } }),
+    cand(4, { selection: { evConservative: 0.03 } }),
+    cand(5, { selection: { evConservative: 0.02 } }),
   ]);
 
   assert.ok(
@@ -177,7 +185,7 @@ test("selalu menyatakan bahwa prior korelasi masih heuristik", () => {
   );
 });
 
-test("maksimum leg tidak pernah melebihi 5", () => {
+test("maksimum leg tidak pernah melebihi 8", () => {
   const many = Array.from({ length: 12 }, (_, i) =>
     cand(i + 1, { selection: { evConservative: 0.05 - i * 0.001 } }),
   );
@@ -203,6 +211,8 @@ test("tidak ada kombinasi EV positif: menolak dengan penjelasan", () => {
     cand(1, { selection: { evConservative: 0.001, odds: 1.01, pFinal: 0.5 } }),
     cand(2, { selection: { evConservative: 0.001, odds: 1.01, pFinal: 0.5 } }),
     cand(3, { selection: { evConservative: 0.001, odds: 1.01, pFinal: 0.5 } }),
+    cand(4, { selection: { evConservative: 0.001, odds: 1.01, pFinal: 0.5 } }),
+    cand(5, { selection: { evConservative: 0.001, odds: 1.01, pFinal: 0.5 } }),
   ]);
 
   if (result.best === null) {
@@ -223,6 +233,8 @@ test("baris parlay_legs diberi urutan dan mengikuti bentuk kolom tabel", () => {
     cand(1, { selection: { evConservative: 0.06 } }),
     cand(2, { selection: { evConservative: 0.05 } }),
     cand(3, { selection: { evConservative: 0.04 } }),
+    cand(4, { selection: { evConservative: 0.03 } }),
+    cand(5, { selection: { evConservative: 0.02 } }),
   ]);
 
   assert.ok(result.best);
@@ -237,4 +249,17 @@ test("baris parlay_legs diberi urutan dan mengikuti bentuk kolom tabel", () => {
     assert.ok(row.odds > 1);
     assert.ok(row.probability > 0 && row.probability < 1);
   });
+});
+
+test("aturan tiket 5–8: empat leg layak tidak cukup — tidak ada parlay", () => {
+  const result = buildParlayComposition([
+    cand(1, { selection: { evConservative: 0.05 } }),
+    cand(2, { selection: { evConservative: 0.04 } }),
+    cand(3, { selection: { evConservative: 0.03 } }),
+    cand(4, { selection: { evConservative: 0.02 } }),
+  ]);
+  assert.equal(result.best, null);
+  assert.equal(result.minLegs, 5);
+  assert.equal(result.maxLegs, 8);
+  assert.ok(result.notes.some((n) => n.includes("minimal 5")));
 });

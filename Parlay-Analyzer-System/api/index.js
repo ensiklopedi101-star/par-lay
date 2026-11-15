@@ -59112,9 +59112,9 @@ KOMPOSISI PARLAY (bila lebih dari satu selection tersedia):
     Menggabungkannya menggelembungkan odds tanpa menambah edge nyata \u2014 hindari.
   * ML Home dan Over pada pertandingan yang sama juga cenderung berkorelasi.
   * Dua leg dari pertandingan BERBEDA yang tidak berhubungan memberi diversifikasi nyata.
-- Pilih 3\u20135 leg terbaik untuk parlay, bukan sebanyak mungkin. Setiap leg tambahan mengalikan variansi.
+- Pilih 5\u20138 leg terbaik untuk parlay bila memang ada 5\u20138 leg yang layak. Setiap leg tambahan mengalikan variansi dan kesalahan probabilitas.
 - Leg dengan EV negatif tidak boleh dimasukkan hanya untuk menaikkan odds.
-- Bila hanya 1 leg yang layak, katakan demikian \u2014 parlay tunggal lebih jujur daripada memaksakan leg lemah.`;
+- Bila leg yang layak kurang dari 5, katakan demikian dan JANGAN susun parlay \u2014 tiket tidak boleh diisi leg lemah demi mengejar jumlah.`;
     REQUIRED_STAT_KEYS = [
       "stats_xg",
       "stats_fts",
@@ -77550,10 +77550,10 @@ var init_composition = __esm({
   "src/lib/quant/composition.ts"() {
     "use strict";
     init_parlay();
-    MIN_LEGS = 3;
-    MAX_LEGS = 5;
+    MIN_LEGS = 5;
+    MAX_LEGS = 8;
     DEFAULT_MAX_CANDIDATES = 30;
-    ALLOW_TWO_LEG_PARLAY = true;
+    ALLOW_TWO_LEG_PARLAY = false;
     ident = (candidate) => ({
       marketKey: candidate.marketKey,
       fixtureId: candidate.fixtureId
@@ -88411,7 +88411,7 @@ router12.get("/parlays/compose-preview", async (req, res) => {
         /*
          * `minLegs`/`maxLegs` WAJIB ada walau kosong. Tanpa itu panel
          * merendernya sebagai "mesin memilih – leg": pembaca melihat tanda
-         * pisah dan tidak tahu batasnya 3–5. Respons kosong tetap harus
+         * pisah dan tidak tahu batasnya 5–8. Respons kosong tetap harus
          * menjawab pertanyaan yang sama dengan respons berisi.
          */
         minLegs: ALLOW_TWO_LEG_PARLAY ? 2 : MIN_LEGS,
