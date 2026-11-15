@@ -50995,9 +50995,9 @@ async function fetchActiveLeagueSlugs(apiKey) {
   }
 }
 async function fetchLeagueEvents(leagueSlug, apiKey) {
-  const cached2 = leagueEventsCache.get(leagueSlug);
-  if (cached2 && Date.now() - cached2.at < LEAGUE_EVENTS_CACHE_MS) {
-    return cached2.events;
+  const cached3 = leagueEventsCache.get(leagueSlug);
+  if (cached3 && Date.now() - cached3.at < LEAGUE_EVENTS_CACHE_MS) {
+    return cached3.events;
   }
   const collected = [];
   const seen = /* @__PURE__ */ new Set();
@@ -58006,8 +58006,8 @@ function teamStatsCacheKey(teamName, leagueSlug) {
 async function findTeamStatsCached(teamName, leagueSlug, cache) {
   if (!cache) return findTeamStats(teamName, leagueSlug);
   const key = teamStatsCacheKey(teamName, leagueSlug);
-  const cached2 = cache.get(key);
-  if (cached2) return cached2;
+  const cached3 = cache.get(key);
+  if (cached3) return cached3;
   const stats = await findTeamStats(teamName, leagueSlug);
   cache.set(key, stats);
   return stats;
@@ -58129,8 +58129,8 @@ function fairProbabilityForLabel(label, odds, line) {
 }
 async function resolveLeagueAverages(leagueSlug) {
   const key = leagueSlug.trim().toLowerCase();
-  const cached2 = leagueAverageCache.get(key);
-  if (cached2 && Date.now() - cached2.at < LEAGUE_AVERAGE_TTL_MS) return cached2.value;
+  const cached3 = leagueAverageCache.get(key);
+  if (cached3 && Date.now() - cached3.at < LEAGUE_AVERAGE_TTL_MS) return cached3.value;
   try {
     const { data, error } = await supabase.from("team_season_stats").select("team_name, season, stats_goals_scored, stats_goals_conceded").eq("league_slug", leagueSlug).order("season", { ascending: false }).limit(400);
     if (error || !data || data.length === 0) {
@@ -86212,8 +86212,8 @@ function hydrateJob(row) {
   };
 }
 async function loadJob(jobId) {
-  const cached2 = batchJobs.get(jobId);
-  if (cached2) return cached2;
+  const cached3 = batchJobs.get(jobId);
+  if (cached3) return cached3;
   const { data, error } = await supabase.from("scan_jobs").select("*").eq("id", jobId).gt("updated_at", new Date(Date.now() - SCAN_JOB_TTL_MS).toISOString()).maybeSingle();
   if (error) {
     logger.warn({ error, jobId }, "BATCH SCANNER: gagal membaca job tersimpan");
@@ -90139,6 +90139,258 @@ async function getModelBacktest(force = false) {
   return value;
 }
 
+// src/services/warehouse-backtest.ts
+init_supabase_client();
+init_logger();
+init_odds_history();
+
+// src/lib/warehouse-backtest.ts
+init_match_context();
+init_poisson();
+function seasonStartYear(matchDate) {
+  const year = Number(matchDate.slice(0, 4));
+  const month = Number(matchDate.slice(5, 7));
+  return month >= 7 ? year : year - 1;
+}
+var emptyAccum2 = () => ({
+  matches: 0,
+  gf: 0,
+  ga: 0,
+  homeMatches: 0,
+  homeGf: 0,
+  homeGa: 0,
+  awayMatches: 0,
+  awayGf: 0,
+  awayGa: 0
+});
+var per2 = (total, n) => n > 0 ? total / n : null;
+function toRates(acc) {
+  return {
+    matches: acc.matches,
+    goalsFor: per2(acc.gf, acc.matches),
+    goalsAgainst: per2(acc.ga, acc.matches),
+    goalsForHome: per2(acc.homeGf, acc.homeMatches),
+    goalsForAway: per2(acc.awayGf, acc.awayMatches),
+    goalsAgainstHome: per2(acc.homeGa, acc.homeMatches),
+    goalsAgainstAway: per2(acc.awayGa, acc.awayMatches),
+    xgFor: null,
+    xgAgainst: null,
+    xgResidual: null,
+    btts: null,
+    bttsHome: null,
+    bttsAway: null,
+    fts: null,
+    ftsHome: null,
+    shotsOver105: null,
+    formPoints: null,
+    formMatches: acc.matches,
+    formPpg: null,
+    last6: null,
+    htWin: null
+  };
+}
+function eloAdjustedLambdas(lambdas, homeElo, awayElo, k) {
+  if (k === 0 || homeElo == null || awayElo == null) return lambdas;
+  const factor = Math.exp(k * (homeElo - awayElo) / 400);
+  return {
+    lambdaHome: Math.min(4.5, Math.max(0.2, lambdas.lambdaHome * factor)),
+    lambdaAway: Math.min(4, Math.max(0.15, lambdas.lambdaAway / factor))
+  };
+}
+function impliedMarket(match) {
+  if (!match.odd_home || !match.odd_draw || !match.odd_away) return null;
+  if (match.odd_home <= 1 || match.odd_draw <= 1 || match.odd_away <= 1) return null;
+  const raw = [1 / match.odd_home, 1 / match.odd_draw, 1 / match.odd_away];
+  const total = raw[0] + raw[1] + raw[2];
+  return { home: raw[0] / total, draw: raw[1] / total, away: raw[2] / total };
+}
+function impliedOver25(match) {
+  if (!match.over25 || !match.under25 || match.over25 <= 1 || match.under25 <= 1) return null;
+  const rawOver = 1 / match.over25;
+  const rawUnder = 1 / match.under25;
+  return rawOver / (rawOver + rawUnder);
+}
+function prepareWarehouseSamples(matches) {
+  const sorted = [...matches].sort((a, b) => a.match_date.localeCompare(b.match_date));
+  const seasonAccum = /* @__PURE__ */ new Map();
+  const seasonLeagueGoals = /* @__PURE__ */ new Map();
+  const keyOf = (league, season) => `${league}|${season}`;
+  for (const match of sorted) {
+    if (match.ft_home == null || match.ft_away == null) continue;
+    const season = seasonStartYear(match.match_date);
+    const key = keyOf(match.league_slug, season);
+    const teams = seasonAccum.get(key) ?? /* @__PURE__ */ new Map();
+    const home = teams.get(match.home_team) ?? emptyAccum2();
+    home.matches++;
+    home.gf += match.ft_home;
+    home.ga += match.ft_away;
+    home.homeMatches++;
+    home.homeGf += match.ft_home;
+    home.homeGa += match.ft_away;
+    teams.set(match.home_team, home);
+    const away = teams.get(match.away_team) ?? emptyAccum2();
+    away.matches++;
+    away.gf += match.ft_away;
+    away.ga += match.ft_home;
+    away.awayMatches++;
+    away.awayGf += match.ft_away;
+    away.awayGa += match.ft_home;
+    teams.set(match.away_team, away);
+    seasonAccum.set(key, teams);
+    const goals = seasonLeagueGoals.get(key) ?? { home: 0, away: 0, matches: 0 };
+    goals.home += match.ft_home;
+    goals.away += match.ft_away;
+    goals.matches++;
+    seasonLeagueGoals.set(key, goals);
+  }
+  const prepared = [];
+  let skippedNoPrior = 0;
+  let skippedNoMarket = 0;
+  for (const match of sorted) {
+    if (match.ft_home == null || match.ft_away == null) continue;
+    const season = seasonStartYear(match.match_date);
+    const priorKey = keyOf(match.league_slug, season - 1);
+    const priorTeams = seasonAccum.get(priorKey);
+    const homeAcc = priorTeams?.get(match.home_team);
+    const awayAcc = priorTeams?.get(match.away_team);
+    if (!homeAcc || !awayAcc || homeAcc.matches < 10 || awayAcc.matches < 10) {
+      skippedNoPrior++;
+      continue;
+    }
+    const goals = seasonLeagueGoals.get(priorKey);
+    const league = goals && goals.matches >= 50 ? { homeGoals: goals.home / goals.matches, awayGoals: goals.away / goals.matches } : { homeGoals: 1.45, awayGoals: 1.15 };
+    const lambdas = estimateLambdas(toRates(homeAcc), toRates(awayAcc), league);
+    const market = impliedMarket(match);
+    if (market == null) skippedNoMarket++;
+    prepared.push({ match, lambdas, market, marketOver25: impliedOver25(match) });
+  }
+  const toSample = (row, lambdas) => {
+    const matrix = scoreMatrix(lambdas.lambdaHome, lambdas.lambdaAway);
+    const probs = marketProbabilities(matrix);
+    const ah = row.match.handi_size != null && row.match.handi_home != null && row.match.handi_home > 1 && row.match.handi_away != null && row.match.handi_away > 1 ? {
+      line: row.match.handi_size,
+      modelHomeCover: winShare(handicapOutcome(matrix, row.match.handi_size, "home")),
+      marketHomeFair: (() => {
+        const rawHome = 1 / row.match.handi_home;
+        const rawAway = 1 / row.match.handi_away;
+        return Math.min(0.999, Math.max(1e-3, rawHome / (rawHome + rawAway)));
+      })()
+    } : null;
+    return {
+      id: `${row.match.league_slug}|${row.match.match_date}|${row.match.home_team}|${row.match.away_team}`,
+      league: row.match.league_slug,
+      kickoff: row.match.match_date,
+      model: {
+        home: probs.homeWin,
+        draw: probs.draw,
+        away: probs.awayWin,
+        over25: probs.over25,
+        bttsYes: probs.bttsYes
+      },
+      market: row.market,
+      marketOver25: row.marketOver25,
+      marketBttsYes: null,
+      ah,
+      actual: { homeGoals: row.match.ft_home, awayGoals: row.match.ft_away }
+    };
+  };
+  return {
+    samples: prepared.map((row) => toSample(row, row.lambdas)),
+    eloSamples: (k) => prepared.map((row) => toSample(row, eloAdjustedLambdas(row.lambdas, row.match.home_elo, row.match.away_elo, k))),
+    considered: prepared.length + skippedNoPrior,
+    skippedNoPrior,
+    skippedNoMarket
+  };
+}
+function summarizeWarehouse(report) {
+  return {
+    n: report.samples,
+    modelLogLoss: report.oneX2.modelLogLoss,
+    vsMarket: report.oneX2.vsMarket,
+    over25VsMarket: report.over25VsMarket
+  };
+}
+
+// src/services/warehouse-backtest.ts
+var VALIDATION_FROM = "2024-08-01";
+var ELO_GRID = [0, 0.25, 0.5, 0.75, 1, 1.5];
+var CACHE_TTL_MS3 = 30 * 60 * 1e3;
+var cached2 = null;
+async function getWarehouseBacktest(force = false) {
+  if (!force && cached2 && Date.now() - cached2.at < CACHE_TTL_MS3) return cached2.value;
+  if (!supabase) throw new Error("Supabase client not initialised");
+  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  const rows = await collectPagedRows(async (from, to) => {
+    const { data, error } = await supabase.from("research_matches").select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away").lt("match_date", today).not("ft_home", "is", null).order("match_date", { ascending: true }).range(from, to);
+    return { data: data ?? [], error };
+  });
+  const preparation = prepareWarehouseSamples(rows);
+  const { samples } = preparation;
+  const trainSamples = samples.filter((s) => (s.kickoff ?? "") < VALIDATION_FROM);
+  const validationSamples = samples.filter((s) => (s.kickoff ?? "") >= VALIDATION_FROM);
+  const fullReport = buildModelBacktest(samples);
+  const validationReport = buildModelBacktest(validationSamples);
+  const eloTrain = ELO_GRID.map((k) => ({
+    k,
+    trainSkill: buildModelBacktest(
+      preparation.eloSamples(k).filter((s) => (s.kickoff ?? "") < VALIDATION_FROM)
+    ).oneX2.vsMarket?.skill ?? null
+  }));
+  let bestK = null;
+  let bestTrainSkill = Number.NEGATIVE_INFINITY;
+  for (const entry of eloTrain) {
+    if (entry.trainSkill != null && entry.trainSkill > bestTrainSkill) {
+      bestTrainSkill = entry.trainSkill;
+      bestK = entry.k;
+    }
+  }
+  const eloValidation = bestK != null ? summarizeWarehouse(buildModelBacktest(
+    preparation.eloSamples(bestK).filter((s) => (s.kickoff ?? "") >= VALIDATION_FROM)
+  )) : null;
+  const priorValidation = summarizeWarehouse(validationReport);
+  const adoptionJustified = Boolean(
+    bestK != null && bestK > 0 && eloValidation?.vsMarket && priorValidation.vsMarket && eloValidation.vsMarket.skill > priorValidation.vsMarket.skill && eloValidation.vsMarket.skill > 0
+  );
+  let eloNote;
+  if (bestK == null) {
+    eloNote = "Pasar historis tidak tersedia di data latih \u2014 fitur Elo tidak bisa dinilai.";
+  } else if (bestK === 0) {
+    eloNote = "Kekuatan Elo terbaik di data latih adalah 0: Elo tidak menambah akurasi di atas laju gol musim sebelumnya pada gudang ini.";
+  } else if (adoptionJustified) {
+    eloNote = `Elo k=${bestK} mengalahkan model dasar di validasi (skill ${(eloValidation.vsMarket.skill * 100).toFixed(2)}% vs ${(priorValidation.vsMarket.skill * 100).toFixed(2)}%) \u2014 layak diadopsi ke jalur live lewat PR tersendiri.`;
+  } else {
+    eloNote = `Elo terbaik di latih (k=${bestK}) tidak mengalahkan model dasar di validasi \u2014 adopsi ditolak agar tidak overfitting.`;
+  }
+  const vsMarket = fullReport.oneX2.vsMarket;
+  const value = {
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    matchesInWarehouse: rows.length,
+    considered: preparation.considered,
+    skippedNoPrior: preparation.skippedNoPrior,
+    skippedNoMarket: preparation.skippedNoMarket,
+    prior: {
+      full: summarizeWarehouse(fullReport),
+      validation: priorValidation,
+      ahFull: asianHandicapVsMarket(samples),
+      calibrationEce: fullReport.calibrationEce,
+      verdict: vsMarket ? `Model inti Poisson (prior musim sebelumnya, tanpa xG) pada ${fullReport.samples} pertandingan historis: skill ${(vsMarket.skill * 100).toFixed(2)}% (t=${vsMarket.tStat?.toFixed(2) ?? "\u2014"}, n=${vsMarket.n}).` : "Pasar historis tidak tersedia."
+    },
+    elo: {
+      grid: eloTrain,
+      bestK,
+      validation: eloValidation,
+      adoptionJustified,
+      note: eloNote
+    }
+  };
+  cached2 = { at: Date.now(), value };
+  logger.info(
+    { matches: rows.length, samples: samples.length, skippedNoPrior: preparation.skippedNoPrior },
+    "[WAREHOUSE-BACKTEST] laporan dibuat"
+  );
+  return value;
+}
+
 // src/routes/learning.ts
 init_prompt_learning();
 var router13 = (0, import_express13.Router)();
@@ -90167,6 +90419,14 @@ router13.get("/learning/model-backtest", async (_req, res) => {
   } catch (error) {
     logger.error({ error }, "[MODEL-BACKTEST] Failed to build report");
     res.status(500).json({ error: "Failed to load model backtest" });
+  }
+});
+router13.get("/learning/warehouse-backtest", async (_req, res) => {
+  try {
+    res.json(await getWarehouseBacktest());
+  } catch (error) {
+    logger.error({ error }, "[WAREHOUSE-BACKTEST] Failed to build report");
+    res.status(500).json({ error: "Failed to load warehouse backtest" });
   }
 });
 router13.get("/learning/optimizer", requireAdmin, async (_req, res) => {
