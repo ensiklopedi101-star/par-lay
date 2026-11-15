@@ -136,3 +136,17 @@ konfirmasi otomatis — skill per paruh kronologis (harus positif di
 keduanya) dan pada varian prior+form (harus bertahan saat informasi
 diperkaya). Hanya edge yang lolos keduanya yang boleh dibahas untuk
 mengubah jalur live, dan perubahan itu pun tetap lewat PR tersendiri.
+
+## Cakupan lima pasaran (15 Nov 2026)
+
+Backtest kini menyatakan status setiap pasaran secara eksplisit
+(`marketCoverage` di panel): 1X2, Over/Under 2.5, dan BTTS teruji;
+**Asian Handicap teruji** — cover kandang pada line konsensus
+antar-bookmaker (line paling banyak ditawarkan), probabilitas model
+dari `winShare(handicapOutcome(...))` yang sama seperti jalur live,
+push dikeluarkan, hasil fraksional (1 / 0,75 / 0,25 / 0) untuk line
+perempat; **Half-Time belum bisa diuji** — sistem tidak punya model
+gol babak pertama dan jalur live mengembalikan null untuk HT.
+Menguji HT dari matriks full-time akan menghasilkan angka bohong;
+pasaran itu menunggu model HT tersendiri, dan panel mengatakannya
+terus terang.

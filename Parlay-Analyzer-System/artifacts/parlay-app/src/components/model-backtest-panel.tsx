@@ -315,6 +315,33 @@ export function ModelBacktestPanel({
               </p>
             </div>
 
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Asian Handicap & cakupan lima pasaran
+              </div>
+              <p className="mb-2 text-sm">
+                AH (cover kandang, line konsensus):{" "}
+                {data.ahValidation.full
+                  ? `penuh ${pctSigned(data.ahValidation.full.skill)} (t=${data.ahValidation.full.tStat != null ? data.ahValidation.full.tStat.toFixed(2) : "—"}, n=${data.ahValidation.full.n}) · paruh 1 ${data.ahValidation.firstHalf ? pctSigned(data.ahValidation.firstHalf.skill) : "—"} · paruh 2 ${data.ahValidation.secondHalf ? pctSigned(data.ahValidation.secondHalf.skill) : "—"}`
+                  : "snapshot AH tidak tersedia pada sampel ini"}
+              </p>
+              <table className="w-full text-sm">
+                <tbody>
+                  {data.marketCoverage.map((row) => (
+                    <tr key={row.market} className="border-b border-border/50 align-top">
+                      <td className="py-1.5 pr-3 whitespace-nowrap">{row.market}</td>
+                      <td className="py-1.5 pr-3 whitespace-nowrap">
+                        <Badge variant="secondary" className={row.status === "teruji" ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600"}>
+                          {row.status}
+                        </Badge>
+                      </td>
+                      <td className="py-1.5 text-[12px] text-muted-foreground">{row.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               Cakupan: {data.fixturesTotal} pertandingan selesai · {data.skippedNoStats} dilewati karena
               statistik prior salah satu tim tidak ada (mis. tim promosi) · {data.skippedNoMarket} tanpa
