@@ -3,6 +3,7 @@ import { logger } from "../lib/logger";
 import { getLearningSummary } from "../services/learning-summary";
 import { getLedgerReport } from "../services/ledger-report";
 import { getModelBacktest } from "../services/model-backtest";
+import { getWarehouseBacktest } from "../services/warehouse-backtest";
 import { requireAdmin } from "../middlewares/admin";
 import {
   backfillSettledPredictionEvaluations,
@@ -56,6 +57,19 @@ router.get("/learning/model-backtest", async (_req, res) => {
   } catch (error) {
     logger.error({ error }, "[MODEL-BACKTEST] Failed to build report");
     res.status(500).json({ error: "Failed to load model backtest" });
+  }
+});
+
+/**
+ * Backtest gudang riset: model vs pasar di ±16 ribu pertandingan
+ * historis + uji fitur Elo (latih/validasi). Read-only, cache 30 menit.
+ */
+router.get("/learning/warehouse-backtest", async (_req, res) => {
+  try {
+    res.json(await getWarehouseBacktest());
+  } catch (error) {
+    logger.error({ error }, "[WAREHOUSE-BACKTEST] Failed to build report");
+    res.status(500).json({ error: "Failed to load warehouse backtest" });
   }
 });
 

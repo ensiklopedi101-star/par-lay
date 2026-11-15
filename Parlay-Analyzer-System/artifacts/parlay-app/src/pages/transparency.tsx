@@ -5,9 +5,11 @@ import {
   useGetParlayComposition,
   useGetSettlementSummary,
   useGetSyncStatus,
+  useGetWarehouseBacktest,
 } from "@/api/parlay-hooks";
 import { AnalysisStatusPanel } from "@/components/analysis-status-panel";
 import { ModelBacktestPanel } from "@/components/model-backtest-panel";
+import { WarehouseBacktestPanel } from "@/components/warehouse-backtest-panel";
 import { AutomationStatusPanel } from "@/components/automation-status-panel";
 import { ParlayCompositionPanel } from "@/components/parlay-composition-panel";
 import { SettlementTransparencyPanel } from "@/components/settlement-transparency-panel";
@@ -22,6 +24,7 @@ export default function Transparency() {
   const analysis = useGetAnalysisStatus();
   const automation = useGetAutomationStatus();
   const modelBacktest = useGetModelBacktest();
+  const warehouseBacktest = useGetWarehouseBacktest();
 
   return (
     <div className="space-y-6">
@@ -53,6 +56,7 @@ export default function Transparency() {
       <ParlayCompositionPanel composition={composition.data} isLoading={composition.isLoading} />
       <SettlementTransparencyPanel summary={settlement.data} isLoading={settlement.isLoading} />
       <ModelBacktestPanel data={modelBacktest.data} isLoading={modelBacktest.isLoading} />
+      <WarehouseBacktestPanel data={warehouseBacktest.data} isLoading={warehouseBacktest.isLoading} />
       <AutomationStatusPanel status={automation.data} isLoading={automation.isLoading} />
     </div>
   );

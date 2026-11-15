@@ -541,6 +541,45 @@ export function useGetModelBacktest() {
   });
 }
 
+/* ─── Backtest Gudang Riset (16 ribu pertandingan historis) ─── */
+export interface WarehouseMetricData {
+  n: number;
+  modelLogLoss: number;
+  vsMarket: { n: number; skill: number; tStat: number | null } | null;
+  over25VsMarket: { n: number; skill: number; tStat: number | null } | null;
+}
+
+export interface WarehouseBacktestData {
+  generatedAt: string;
+  matchesInWarehouse: number;
+  considered: number;
+  skippedNoPrior: number;
+  skippedNoMarket: number;
+  prior: {
+    full: WarehouseMetricData;
+    validation: WarehouseMetricData;
+    ahFull: { n: number; skill: number; tStat: number | null } | null;
+    calibrationEce: number | null;
+    verdict: string;
+  };
+  elo: {
+    grid: Array<{ k: number; trainSkill: number | null }>;
+    bestK: number | null;
+    validation: WarehouseMetricData | null;
+    adoptionJustified: boolean;
+    note: string;
+  };
+}
+
+export const getGetWarehouseBacktestQueryKey = () => ["learning/warehouse-backtest"];
+export function useGetWarehouseBacktest() {
+  return useQuery<WarehouseBacktestData>({
+    queryKey: getGetWarehouseBacktestQueryKey(),
+    queryFn: () => apiGet<WarehouseBacktestData>(`${API_BASE}/learning/warehouse-backtest`),
+    staleTime: 30 * 60 * 1000,
+  });
+}
+
 /* ─── Ringkasan Settlement ─── */
 export const getGetSettlementSummaryQueryKey = () => ["sync/settlement-summary"];
 export function useGetSettlementSummary() {
