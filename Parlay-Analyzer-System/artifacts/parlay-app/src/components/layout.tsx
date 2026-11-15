@@ -31,46 +31,41 @@ interface LayoutProps {
 
 const navGroups = [
   {
-    label: "Ringkasan",
+    label: "Utama",
     items: [
-      { title: "Dashboard", url: "/", icon: Activity, hint: "Status dan tindakan utama" },
-      { title: "Transparansi Sistem", url: "/transparency", icon: Eye, hint: "Audit sync, analisis, settlement" },
+      { title: "Hari Ini", url: "/", icon: Activity, hint: "Tiket & status" },
+      { title: "Tiket & Prediksi", url: "/ai-center", icon: Layers3, hint: "Pilih dan pasang" },
     ],
   },
   {
-    label: "Data Pertandingan",
+    label: "Pertandingan",
     items: [
-      { title: "Fixtures", url: "/fixtures", icon: CalendarDays, hint: "Jadwal dan odds" },
-      { title: "Team Stats", url: "/teams", icon: BarChart2, hint: "Statistik per musim" },
-      { title: "Standings", url: "/standings", icon: Trophy, hint: "Klasemen liga" },
+      { title: "Jadwal", url: "/fixtures", icon: CalendarDays, hint: "Laga & odds" },
+      { title: "Statistik Tim", url: "/teams", icon: BarChart2, hint: "Performa tim" },
+      { title: "Klasemen", url: "/standings", icon: Trophy, hint: "Posisi liga" },
     ],
   },
   {
-    label: "Keputusan AI",
+    label: "Sistem",
     items: [
-      { title: "Prediksi & Parlay AI", url: "/ai-center", icon: Layers3, hint: "Prediksi tunggal → tiket parlay" },
-      { title: "AI Learning", url: "/ai-learning", icon: BookOpen, hint: "Evaluasi dan evolusi terkontrol" },
-    ],
-  },
-  {
-    label: "Administrasi",
-    items: [
-      { title: "Settings", url: "/settings", icon: Settings, hint: "Persona, liga, dan scheduler" },
+      { title: "Bukti Sistem", url: "/transparency", icon: Eye, hint: "Cara tiket dipilih" },
+      { title: "Pembelajaran", url: "/ai-learning", icon: BookOpen, hint: "Hasil & perbaikan" },
+      { title: "Pengaturan", url: "/settings", icon: Settings, hint: "Liga & jadwal" },
     ],
   },
 ];
 
 const pageTitles: Record<string, { title: string; subtitle: string }> = {
-  "/": { title: "Dashboard", subtitle: "Ringkasan operasional Parlay Intelligence" },
-  "/transparency": { title: "Transparansi Sistem", subtitle: "Bukti proses di balik setiap keputusan" },
-  "/fixtures": { title: "Fixtures", subtitle: "Jadwal pertandingan dan ketersediaan odds" },
-  "/teams": { title: "Team Stats", subtitle: "Kelengkapan statistik tim berdasarkan musim" },
-  "/standings": { title: "Standings", subtitle: "Klasemen dan performa terkini" },
-  "/ai-center": { title: "Prediksi & Parlay AI", subtitle: "Dari analisis satu laga menjadi tiket parlay" },
-  "/risk-center": { title: "Prediksi & Parlay AI", subtitle: "Dari analisis satu laga menjadi tiket parlay" },
-  "/parlays": { title: "Prediksi & Parlay AI", subtitle: "Dari analisis satu laga menjadi tiket parlay" },
-  "/ai-learning": { title: "AI Learning", subtitle: "Belajar dari hasil tanpa mengubah sistem secara liar" },
-  "/settings": { title: "Settings", subtitle: "Konfigurasi persona, data, dan otomasi" },
+  "/": { title: "Hari Ini", subtitle: "Tiket parlay dan status sistem sekilas" },
+  "/transparency": { title: "Bukti Sistem", subtitle: "Alasan di balik setiap tiket" },
+  "/fixtures": { title: "Jadwal", subtitle: "Pertandingan dan odds" },
+  "/teams": { title: "Statistik Tim", subtitle: "Performa setiap tim" },
+  "/standings": { title: "Klasemen", subtitle: "Posisi dan tren liga" },
+  "/ai-center": { title: "Tiket & Prediksi", subtitle: "Prediksi laga dan tiket parlay" },
+  "/risk-center": { title: "Tiket & Prediksi", subtitle: "Prediksi laga dan tiket parlay" },
+  "/parlays": { title: "Tiket & Prediksi", subtitle: "Prediksi laga dan tiket parlay" },
+  "/ai-learning": { title: "Pembelajaran", subtitle: "Belajar dari hasil pertandingan" },
+  "/settings": { title: "Pengaturan", subtitle: "Liga, data, dan jadwal otomatis" },
 };
 
 export function Layout({ children }: LayoutProps) {
@@ -124,7 +119,7 @@ export function Layout({ children }: LayoutProps) {
             ))}
           </SidebarContent>
           <div className="mt-auto border-t border-sidebar-border p-4 text-xs leading-relaxed text-muted-foreground">
-            <span className="font-semibold text-foreground">Prinsip sistem:</span> probabilitas, EV, dan stake dihitung kode — AI hanya memberi konteks dan bukti.
+            <span className="font-semibold text-foreground">Prinsip:</span> pasar menentukan peluang, statistik memeriksa risikonya.
           </div>
         </Sidebar>
         <main className="flex min-w-0 flex-1 flex-col">
@@ -133,10 +128,6 @@ export function Layout({ children }: LayoutProps) {
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold sm:text-base">{current.title}</div>
               <div className="hidden truncate text-xs text-muted-foreground sm:block">{current.subtitle}</div>
-            </div>
-            <div className="ml-auto hidden items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 md:flex">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              Tema terang profesional
             </div>
           </header>
           <div className="flex-1 overflow-auto px-4 py-6 sm:px-6 lg:px-8">
