@@ -170,3 +170,15 @@ test("label market dibentuk ulang dari kunci agar bisa dibaca", () => {
 
   assert.equal(candidate!.selection.label, "over 2.5");
 });
+
+test("candidatesFromSelectionRows: requirePassing=false membuka gerbang EV untuk jalur pasar-dulu", () => {
+  const meta = new Map<number, FixtureMeta>([[7, { fixtureId: 7, league: "x", date: "2026-11-21" }]]);
+  const rows = [{
+    fixture_id: 7, market_key: "TOT:over:0.5", family: "Totals", line: 0.5,
+    odds: 1.1, p_final: 0.9, p_market_fair: 0.88, p_model_only: 0.9, ev: -0.02, ev_conservative: -0.03,
+  }];
+  assert.equal(candidatesFromSelectionRows(rows, meta).length, 0);
+  const opened = candidatesFromSelectionRows(rows, meta, { requirePassing: false });
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0]!.selection.pMarket, 0.88);
+});

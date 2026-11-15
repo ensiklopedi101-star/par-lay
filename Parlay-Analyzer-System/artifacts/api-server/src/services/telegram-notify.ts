@@ -28,9 +28,8 @@ export async function buildLiveMarketFirstTicket(): Promise<MarketFirstTicket | 
   const { data: rows, error } = await supabase
     .from("prediction_selections")
     .select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative")
-    .gt("ev_conservative", 0)
     .order("ev_conservative", { ascending: false })
-    .limit(200);
+    .limit(1000);
   if (error) {
     logger.warn({ error }, "[TELEGRAM] gagal membaca ledger");
     return null;
@@ -52,7 +51,7 @@ export async function buildLiveMarketFirstTicket(): Promise<MarketFirstTicket | 
     });
   }
 
-  const candidates = candidatesFromSelectionRows(selectionRows, meta);
+  const candidates = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
   const contextByCandidate = await computeContextForCandidates(
     candidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey })),
   );

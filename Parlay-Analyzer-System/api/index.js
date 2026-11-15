@@ -77560,7 +77560,8 @@ var init_market_first = __esm({
 });
 
 // src/services/parlay-candidates.ts
-function candidatesFromSelectionRows(rows, fixtureMeta) {
+function candidatesFromSelectionRows(rows, fixtureMeta, options = {}) {
+  const requirePassing = options.requirePassing ?? true;
   const candidates2 = [];
   for (const row of rows) {
     const fixtureId = Number(row.fixture_id);
@@ -77590,7 +77591,7 @@ function candidatesFromSelectionRows(rows, fixtureMeta) {
       passes: passing,
       rejectReasons: passing ? [] : ["EV konservatif \u2264 0"]
     };
-    if (!passing) continue;
+    if (requirePassing && !passing) continue;
     candidates2.push({
       marketKey: row.market_key,
       fixtureId,
@@ -77870,7 +77871,7 @@ __export(telegram_notify_exports, {
 });
 async function buildLiveMarketFirstTicket() {
   if (!supabase) return null;
-  const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").gt("ev_conservative", 0).order("ev_conservative", { ascending: false }).limit(200);
+  const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").order("ev_conservative", { ascending: false }).limit(1e3);
   if (error) {
     logger.warn({ error }, "[TELEGRAM] gagal membaca ledger");
     return null;
@@ -77887,7 +77888,7 @@ async function buildLiveMarketFirstTicket() {
       date: f.fixture_date ? f.fixture_date.slice(0, 10) : null
     });
   }
-  const candidates2 = candidatesFromSelectionRows(selectionRows, meta);
+  const candidates2 = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
   const contextByCandidate = await computeContextForCandidates(
     candidates2.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
   );
@@ -88952,7 +88953,7 @@ router12.get("/parlays/compose-preview", async (req, res) => {
       res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
       return;
     }
-    const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").gt("ev_conservative", 0).order("ev_conservative", { ascending: false }).limit(200);
+    const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").order("ev_conservative", { ascending: false }).limit(1e3);
     if (error) {
       res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
       return;
@@ -88992,6 +88993,7 @@ router12.get("/parlays/compose-preview", async (req, res) => {
       });
     }
     const candidates2 = candidatesFromSelectionRows(selectionRows, meta);
+    const marketFirstCandidates = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
     const { buildParlayComposition: buildParlayComposition2 } = await Promise.resolve().then(() => (init_composition(), composition_exports));
     const { buildMarketFirstTicket: buildMarketFirstTicket2 } = await Promise.resolve().then(() => (init_market_first(), market_first_exports));
     const { enrichTicketWithPriceHunt: enrichTicketWithPriceHunt2 } = await Promise.resolve().then(() => (init_price_hunt_live(), price_hunt_live_exports));
@@ -88999,9 +89001,9 @@ router12.get("/parlays/compose-preview", async (req, res) => {
     const limit = Number(req.query["maxCandidates"]) || void 0;
     const composition = buildParlayComposition2(candidates2, { maxCandidates: limit });
     const contextByCandidate = await computeContextForCandidates2(
-      candidates2.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
+      marketFirstCandidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
     );
-    const marketFirstRaw = buildMarketFirstTicket2(candidates2, { contextByCandidate });
+    const marketFirstRaw = buildMarketFirstTicket2(marketFirstCandidates, { contextByCandidate });
     const marketFirst = marketFirstRaw ? await enrichTicketWithPriceHunt2(marketFirstRaw) : null;
     res.json({ ...composition, marketFirst, ledgerRows: selectionRows.length });
   } catch (err) {
