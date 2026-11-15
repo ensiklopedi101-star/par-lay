@@ -570,7 +570,7 @@ export interface WarehouseBacktestData {
     note: string;
   };
   ticketStrategies: Array<{
-    strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik" | "pasar-dulu-harga-terbaik";
+    strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik" | "pasar-dulu-harga-terbaik" | "pasar+konteks-form";
     tickets: number;
     legsUsed: number;
     legHitRate: number | null;
@@ -713,6 +713,7 @@ export interface MarketFirstTicketData {
     stability: number;
     characterNote: string;
     priceHunt?: PriceHuntData;
+    contextRisk?: { level: "rendah" | "sedang" | "tinggi" | "tidak-diketahui"; flags: string[]; scoreMultiplier: number };
     selection: { label: string; odds: number; family: string; pMarket: number | null; pModelOnly: number };
   }>;
   combinedOdds: number;

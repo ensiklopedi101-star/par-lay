@@ -22,6 +22,7 @@
 import type { SelectionEval } from "./pipeline";
 import { analyzeParlay, type ParlayLeg } from "./parlay";
 import type { PriceHuntResult } from "./price-hunt";
+import type { ContextRisk } from "./context-risk";
 
 export type LegCharacter =
   | "didukung-statistik"
@@ -43,6 +44,8 @@ export interface MarketFirstLeg {
   characterNote: string;
   /** Hasil berburu harga lintas bandar (diisi jalur live bila data ada). */
   priceHunt?: PriceHuntResult;
+  /** Risiko konteks jadwal (istirahat/padat) bila dinilai. */
+  contextRisk?: ContextRisk;
 }
 
 /** Selisih probabilitas model vs pasar yang masih dianggap "sejalan". */
@@ -133,6 +136,8 @@ export interface MarketFirstOptions {
   /** Peluang pasar minimum per leg agar dianggap kandidat (bawaan 0.55). */
   minMarketProb?: number;
   seed?: number;
+  /** Risiko konteks per kandidat, kunci `${fixtureId}|${marketKey}`. */
+  contextByCandidate?: Map<string, ContextRisk>;
 }
 
 const MIN_LEGS_DEFAULT = 5;
@@ -175,6 +180,7 @@ export function buildMarketFirstTicket(
     if (!Number.isFinite(selection.odds) || selection.odds <= 1) continue;
     if (!(pUsed > 0 && pUsed < 1) || pUsed < minMarketProb) continue;
     const { character, stability, note } = classifyLeg(selection);
+    const contextRisk = options.contextByCandidate?.get(`${candidate.fixtureId}|${candidate.marketKey}`);
     const leg: MarketFirstLeg = {
       marketKey: candidate.marketKey,
       fixtureId: candidate.fixtureId,
@@ -183,8 +189,11 @@ export function buildMarketFirstTicket(
       selection,
       pUsed,
       character,
-      stability,
-      characterNote: note,
+      stability: contextRisk ? stability * contextRisk.scoreMultiplier : stability,
+      characterNote: contextRisk && contextRisk.flags.length > 0
+        ? `${note} Konteks: ${contextRisk.flags.join(" ")}`
+        : note,
+      contextRisk,
     };
     const existing = byFixture.get(candidate.fixtureId);
     if (!existing) {
@@ -198,8 +207,13 @@ export function buildMarketFirstTicket(
     if (better) byFixture.set(candidate.fixtureId, leg);
   }
 
+  /* Urutan pemilihan: peluang pasar yang disesuaikan risiko konteks —
+   * leg rapuh secara jadwal turun peringkat tanpa dihapus, sehingga
+   * tiket tetap bisa terbentuk dari kandidat yang lebih segar. */
+  const selectionScore = (leg: MarketFirstLeg) =>
+    leg.pUsed * (leg.contextRisk?.scoreMultiplier ?? 1);
   const pool = Array.from(byFixture.values()).sort(
-    (a, b) => b.pUsed - a.pUsed || b.stability - a.stability,
+    (a, b) => selectionScore(b) - selectionScore(a) || b.stability - a.stability,
   );
   if (pool.length < minLegs) {
     notes.push(
@@ -258,6 +272,12 @@ export function buildMarketFirstTicket(
   if (fragile.length > 0) {
     notes.push(
       `${fragile.length} leg berkarakter rapuh/kontradiktif ikut karena keterbatasan kandidat — periksa sebelum memasang.`,
+    );
+  }
+  const contextRisky = chosen.legs.filter((l) => l.contextRisk?.level === "tinggi");
+  if (contextRisky.length > 0) {
+    notes.push(
+      `${contextRisky.length} leg berisiko konteks TINGGI (jadwal) tetap terpilih karena kandidat segar tidak cukup — leg ini kandidat pertama untuk diganti manual.`,
     );
   }
   notes.push(

@@ -77635,6 +77635,7 @@ function buildMarketFirstTicket(candidates2, options = {}) {
     if (!Number.isFinite(selection.odds) || selection.odds <= 1) continue;
     if (!(pUsed > 0 && pUsed < 1) || pUsed < minMarketProb) continue;
     const { character, stability, note } = classifyLeg(selection);
+    const contextRisk = options.contextByCandidate?.get(`${candidate.fixtureId}|${candidate.marketKey}`);
     const leg = {
       marketKey: candidate.marketKey,
       fixtureId: candidate.fixtureId,
@@ -77643,8 +77644,9 @@ function buildMarketFirstTicket(candidates2, options = {}) {
       selection,
       pUsed,
       character,
-      stability,
-      characterNote: note
+      stability: contextRisk ? stability * contextRisk.scoreMultiplier : stability,
+      characterNote: contextRisk && contextRisk.flags.length > 0 ? `${note} Konteks: ${contextRisk.flags.join(" ")}` : note,
+      contextRisk
     };
     const existing = byFixture.get(candidate.fixtureId);
     if (!existing) {
@@ -77654,8 +77656,9 @@ function buildMarketFirstTicket(candidates2, options = {}) {
     const better = rankedCharacter[leg.character] !== rankedCharacter[existing.character] ? rankedCharacter[leg.character] > rankedCharacter[existing.character] : leg.stability * leg.pUsed > existing.stability * existing.pUsed;
     if (better) byFixture.set(candidate.fixtureId, leg);
   }
+  const selectionScore = (leg) => leg.pUsed * (leg.contextRisk?.scoreMultiplier ?? 1);
   const pool = Array.from(byFixture.values()).sort(
-    (a, b) => b.pUsed - a.pUsed || b.stability - a.stability
+    (a, b) => selectionScore(b) - selectionScore(a) || b.stability - a.stability
   );
   if (pool.length < minLegs) {
     notes.push(
@@ -77698,6 +77701,12 @@ function buildMarketFirstTicket(candidates2, options = {}) {
   if (fragile.length > 0) {
     notes.push(
       `${fragile.length} leg berkarakter rapuh/kontradiktif ikut karena keterbatasan kandidat \u2014 periksa sebelum memasang.`
+    );
+  }
+  const contextRisky = chosen.legs.filter((l) => l.contextRisk?.level === "tinggi");
+  if (contextRisky.length > 0) {
+    notes.push(
+      `${contextRisky.length} leg berisiko konteks TINGGI (jadwal) tetap terpilih karena kandidat segar tidak cukup \u2014 leg ini kandidat pertama untuk diganti manual.`
     );
   }
   notes.push(
@@ -77858,6 +77867,126 @@ var init_price_hunt_live = __esm({
     init_price_hunt();
     init_logger();
     NO_FRESHNESS_LIMIT = Number.MAX_SAFE_INTEGER;
+  }
+});
+
+// src/lib/quant/context-risk.ts
+function scoreMultiplierFor(level) {
+  if (level === "tinggi") return 0.85;
+  if (level === "sedang") return 0.95;
+  return 1;
+}
+function assessContext(input) {
+  const { backed, homeRestDays, awayRestDays } = input;
+  if (homeRestDays == null && awayRestDays == null) {
+    return { level: "tidak-diketahui", flags: ["Jadwal sebelumnya tidak tersedia."], scoreMultiplier: 1 };
+  }
+  const flags = [];
+  let level = "rendah";
+  const raise = (to) => {
+    if (to === "tinggi" || level === "rendah") level = to;
+  };
+  if (homeRestDays != null && awayRestDays != null && homeRestDays < SHORT_REST_DAYS && awayRestDays < SHORT_REST_DAYS) {
+    flags.push(`Kedua tim beristirahat pendek (${homeRestDays} vs ${awayRestDays} hari) \u2014 laga cenderung kacau.`);
+    raise("sedang");
+  }
+  if (backed) {
+    const backedRest = backed === "home" ? homeRestDays : awayRestDays;
+    const opponentRest = backed === "home" ? awayRestDays : homeRestDays;
+    const backedMatches = backed === "home" ? input.homeMatches14 : input.awayMatches14;
+    if (backedRest != null && backedRest < SHORT_REST_DAYS) {
+      flags.push(`Tim yang didukung hanya beristirahat ${backedRest} hari \u2014 risiko rotasi & kelelahan.`);
+      raise("tinggi");
+    }
+    if (backedRest != null && opponentRest != null && opponentRest - backedRest >= REST_GAP_DAYS) {
+      flags.push(`Ketimpangan istirahat: tim yang didukung ${backedRest} hari vs lawan ${opponentRest} hari.`);
+      raise("sedang");
+    }
+    if (backedMatches != null && backedMatches >= 3) {
+      flags.push(`Tim yang didukung memainkan ${backedMatches} laga dalam 14 hari terakhir.`);
+      raise("sedang");
+    }
+  }
+  return { level, flags, scoreMultiplier: scoreMultiplierFor(level) };
+}
+function backedSideFromKey(marketKey2) {
+  const key = marketKey2.toLowerCase();
+  if (key.startsWith("ml:home") || key.startsWith("ah:home")) return "home";
+  if (key.startsWith("ml:away") || key.startsWith("ah:away")) return "away";
+  return null;
+}
+var SHORT_REST_DAYS, REST_GAP_DAYS;
+var init_context_risk = __esm({
+  "src/lib/quant/context-risk.ts"() {
+    "use strict";
+    SHORT_REST_DAYS = 4;
+    REST_GAP_DAYS = 3;
+  }
+});
+
+// src/services/context-live.ts
+var context_live_exports = {};
+__export(context_live_exports, {
+  computeContextForCandidates: () => computeContextForCandidates,
+  contextKeyOf: () => contextKeyOf
+});
+async function computeContextForCandidates(requests) {
+  const result2 = /* @__PURE__ */ new Map();
+  if (!supabase || requests.length === 0) return result2;
+  const fixtureIds = [...new Set(requests.map((r) => r.fixtureId))];
+  const { data: legFixtures, error } = await supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name").in("fixture_id", fixtureIds);
+  if (error) {
+    logger.warn({ error }, "[CONTEXT] gagal membaca fixtures leg");
+    return result2;
+  }
+  const legs = (legFixtures ?? []).filter((f) => f.fixture_date);
+  if (legs.length === 0) return result2;
+  const dates = legs.map((f) => new Date(f.fixture_date).getTime());
+  const windowStart = new Date(Math.min(...dates) - 28 * 864e5).toISOString();
+  const windowEnd = new Date(Math.min(...dates)).toISOString();
+  const { data: windowFixtures, error: windowError } = await supabase.from("fixtures").select("fixture_id, fixture_date, home_team_name, away_team_name").gte("fixture_date", windowStart).lt("fixture_date", windowEnd).limit(5e3);
+  if (windowError) {
+    logger.warn({ error: windowError }, "[CONTEXT] gagal membaca jendela jadwal");
+    return result2;
+  }
+  const history = (windowFixtures ?? []).filter((f) => f.fixture_date);
+  const legById = new Map(legs.map((f) => [Number(f.fixture_id), f]));
+  for (const request of requests) {
+    const leg = legById.get(request.fixtureId);
+    if (!leg) continue;
+    const kickoff = new Date(leg.fixture_date).getTime();
+    const teamHistory = (team) => {
+      if (!team) return { restDays: null, matches14: null };
+      const previous = history.filter((f) => f.home_team_name === team || f.away_team_name === team).map((f) => new Date(f.fixture_date).getTime()).filter((t) => t < kickoff).sort((a, b) => b - a);
+      if (previous.length === 0) return { restDays: null, matches14: null };
+      return {
+        restDays: Math.floor((kickoff - previous[0]) / 864e5),
+        matches14: previous.filter((t) => kickoff - t <= 14 * 864e5).length
+      };
+    };
+    const home = teamHistory(leg.home_team_name);
+    const away = teamHistory(leg.away_team_name);
+    result2.set(
+      contextKeyOf(request.fixtureId, request.marketKey),
+      assessContext({
+        backed: backedSideFromKey(request.marketKey),
+        homeRestDays: home.restDays,
+        awayRestDays: away.restDays,
+        homeMatches14: home.matches14,
+        awayMatches14: away.matches14
+      })
+    );
+  }
+  return result2;
+}
+var contextKeyOf;
+var init_context_live = __esm({
+  "src/services/context-live.ts"() {
+    "use strict";
+    init_supabase_client();
+    init_context_risk();
+    init_logger();
+    contextKeyOf = (fixtureId, marketKey2) => `${fixtureId}|${marketKey2}`;
   }
 });
 
@@ -88738,9 +88867,13 @@ router12.get("/parlays/compose-preview", async (req, res) => {
     const { buildParlayComposition: buildParlayComposition2 } = await Promise.resolve().then(() => (init_composition(), composition_exports));
     const { buildMarketFirstTicket: buildMarketFirstTicket2 } = await Promise.resolve().then(() => (init_market_first(), market_first_exports));
     const { enrichTicketWithPriceHunt: enrichTicketWithPriceHunt2 } = await Promise.resolve().then(() => (init_price_hunt_live(), price_hunt_live_exports));
+    const { computeContextForCandidates: computeContextForCandidates2 } = await Promise.resolve().then(() => (init_context_live(), context_live_exports));
     const limit = Number(req.query["maxCandidates"]) || void 0;
     const composition = buildParlayComposition2(candidates2, { maxCandidates: limit });
-    const marketFirstRaw = buildMarketFirstTicket2(candidates2);
+    const contextByCandidate = await computeContextForCandidates2(
+      candidates2.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
+    );
+    const marketFirstRaw = buildMarketFirstTicket2(candidates2, { contextByCandidate });
     const marketFirst = marketFirstRaw ? await enrichTicketWithPriceHunt2(marketFirstRaw) : null;
     res.json({ ...composition, marketFirst, ledgerRows: selectionRows.length });
   } catch (err) {
@@ -90622,7 +90755,8 @@ function simulateTicketStrategies(rows, minProb = 0.6) {
     "pasar-dulu",
     "model-dulu",
     "pasar+filter-statistik",
-    "pasar-dulu-harga-terbaik"
+    "pasar-dulu-harga-terbaik",
+    "pasar+konteks-form"
   ];
   const legsByStrategyWeek = /* @__PURE__ */ new Map();
   for (const row of rows) {
@@ -90641,6 +90775,13 @@ function simulateTicketStrategies(rows, minProb = 0.6) {
       picks.push({ strategy: "pasar-dulu-harga-terbaik", side: marketSide, prob: row.market[marketSide] });
       if (modelSide === marketSide) {
         picks.push({ strategy: "pasar+filter-statistik", side: marketSide, prob: row.market[marketSide] });
+      }
+      if (marketSide !== "draw" && match.form5_home != null && match.form5_away != null) {
+        const backedForm = marketSide === "home" ? match.form5_home : match.form5_away;
+        const opponentForm = marketSide === "home" ? match.form5_away : match.form5_home;
+        if (backedForm >= opponentForm) {
+          picks.push({ strategy: "pasar+konteks-form", side: marketSide, prob: row.market[marketSide] });
+        }
       }
     }
     if (model[modelSide] >= minProb) {
@@ -90701,7 +90842,7 @@ async function getWarehouseBacktest(force = false) {
   if (!supabase) throw new Error("Supabase client not initialised");
   const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const rows = await collectPagedRows(async (from, to) => {
-    const { data, error } = await supabase.from("research_matches").select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away, max_home, max_draw, max_away").lt("match_date", today).not("ft_home", "is", null).order("match_date", { ascending: true }).range(from, to);
+    const { data, error } = await supabase.from("research_matches").select("league_slug, match_date, home_team, away_team, home_elo, away_elo, ft_home, ft_away, odd_home, odd_draw, odd_away, over25, under25, handi_size, handi_home, handi_away, max_home, max_draw, max_away, form5_home, form5_away").lt("match_date", today).not("ft_home", "is", null).order("match_date", { ascending: true }).range(from, to);
     return { data: data ?? [], error };
   });
   const preparation = prepareWarehouseSamples(rows);
