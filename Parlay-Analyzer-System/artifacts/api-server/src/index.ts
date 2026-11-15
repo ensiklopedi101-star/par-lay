@@ -47,11 +47,16 @@ function listenIfPortProvided(): void {
 
     logger.info({ port }, "Server listening");
 
-    if (process.env["ODDS_API_KEY"]) {
+    /* Scheduler internal node-cron MATI secara bawaan (audit 15 Nov
+     * 2026): pemicu produksi adalah cron-job.org (CRON_JOBS.md).
+     * Menghidupkannya bersamaan akan mengadu dua pemicu pada kuota
+     * dan tabel yang sama. Hanya aktif bila SCHEDULER_ENABLED=true
+     * diset eksplisit (mis. deployment proses-panjang non-Vercel). */
+    if (process.env["SCHEDULER_ENABLED"] === "true" && process.env["ODDS_API_KEY"]) {
       startScheduler();
     } else {
       logger.warn(
-        "ODDS_API_KEY not set — scheduler disabled. Set the env var to enable automatic odds fetching.",
+        "Scheduler internal nonaktif — pemicu terjadwal lewat cron-job.org /api/cron (set SCHEDULER_ENABLED=true untuk menghidupkan node-cron).",
       );
     }
   });

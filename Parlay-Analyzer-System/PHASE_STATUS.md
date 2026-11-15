@@ -4,6 +4,14 @@ Diukur pada 2026-11-10 dari Supabase `hqbuwfyiqfxpnpdlgcru` dan kode di repo.
 Definisi fase diambil dari `football-betting-system-review (1)/src/lib/audit-data.ts`
 (baris 491–535), bukan dari ingatan.
 
+> **Pembaruan 15 Nov 2026 (audit):** angka pada dokumen ini sebagian sudah basi —
+> `prediction_selections` kini terisi (588 baris saat PR #49) dan 407+ tes lolos.
+> Yang tetap berlaku: gerbang Fase 3 (`PHASE3_TARGET_SETTLED=300`) menunggu outcome
+> dari kick-off pertama 20–21 Nov 2026. Penjadwalan produksi = cron-job.org
+> (`CRON_JOBS.md`); jalur simpan komposer EV lama (`POST /parlays/compose`) sudah
+> dipensiunkan (410) dan scheduler internal node-cron kini opt-in
+> (`SCHEDULER_ENABLED=true`).
+
 ---
 
 ## Pembaruan 2026-11-12 — penghalang Fase 1 ternyata bukan mesin quant

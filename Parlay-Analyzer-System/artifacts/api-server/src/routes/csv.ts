@@ -3,6 +3,7 @@ import multer from "multer";
 import { parse } from "csv-parse";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { safeEqual } from "../lib/security";
 import { canonicalTeamName } from "../lib/team-name-cleaner";
 import {
   findEquivalentTeamStatsRows,
@@ -69,7 +70,7 @@ router.post("/csv/upload", upload.single("file"), async (req, res) => {
     res.status(503).json({ error: "CSV_UPLOAD_PASSWORD belum dikonfigurasi di server secrets" });
     return;
   }
-  if (!password || password !== CSV_UPLOAD_PASSWORD) {
+  if (!password || !safeEqual(password, CSV_UPLOAD_PASSWORD)) {
     res.status(401).json({ error: "Unauthorized — wrong password" });
     return;
   }

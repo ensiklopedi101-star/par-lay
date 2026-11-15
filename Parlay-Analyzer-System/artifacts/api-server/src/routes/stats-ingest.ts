@@ -7,6 +7,7 @@
 import { Router, type IRouter } from "express";
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { safeEqual } from "../lib/security";
 import { loadKnownLeagueSlugs, resolveLeagueSlug } from "../lib/league-slug";
 import { canonicalTeamName, teamIdentityKey } from "../lib/team-name-cleaner";
 import { STATS_DICTIONARY, VALID_STAT_TYPES, validateStatPayload } from "../utils/stats-dictionary";
@@ -41,7 +42,7 @@ function requireApiKey(req: any, res: any, next: any) {
     return;
   }
 
-  if (!key || String(key) !== configuredKey) {
+  if (!key || !safeEqual(String(key), configuredKey)) {
     logger.warn({ ip: req.ip }, "Unauthorized stats ingestion attempt");
     res.status(401).json({ error: "Unauthorized — invalid or missing x-api-key" });
     return;

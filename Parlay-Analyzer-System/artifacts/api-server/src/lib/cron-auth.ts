@@ -18,6 +18,8 @@
  * Fungsi ini murni supaya bisa diuji tanpa HTTP.
  */
 
+import { safeEqual } from "./security";
+
 export interface CronAuthInput {
   /** Nilai `CRON_SECRET` yang dikonfigurasi; kosong berarti cron dimatikan. */
   secret: string | undefined;
@@ -51,9 +53,9 @@ export function bearerToken(authorization: string | null): string | null {
 export function isCronAuthorized(input: CronAuthInput): boolean {
   if (!input.secret) return false;
 
-  if (firstString(input.headerSecret) === input.secret) return true;
-  if (firstString(input.queryToken) === input.secret) return true;
-  if (bearerToken(firstString(input.authorization)) === input.secret) return true;
+  if (safeEqual(firstString(input.headerSecret), input.secret)) return true;
+  if (safeEqual(firstString(input.queryToken), input.secret)) return true;
+  if (safeEqual(bearerToken(firstString(input.authorization)), input.secret)) return true;
 
   return false;
 }
