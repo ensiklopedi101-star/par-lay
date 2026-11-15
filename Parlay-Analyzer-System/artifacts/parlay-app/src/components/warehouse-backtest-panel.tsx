@@ -122,6 +122,33 @@ export function WarehouseBacktestPanel({
               </Badge>
             </div>
 
+            {data.ticketStrategies && data.ticketStrategies.length > 0 && (
+              <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm leading-relaxed">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Simulasi tiket mingguan 5–8 leg (1X2, peluang ≥ 60%)
+                </div>
+                <div className="space-y-1.5">
+                  {data.ticketStrategies.map((s) => (
+                    <div key={s.strategy} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                      <span className="w-44 font-medium">{s.strategy}</span>
+                      <span>{s.tickets} tiket</span>
+                      <span>leg kena {s.legHitRate != null ? `${(s.legHitRate * 100).toFixed(1)}%` : "—"}</span>
+                      <span>tiket kena {s.ticketHitRate != null ? `${(s.ticketHitRate * 100).toFixed(1)}%` : "—"}</span>
+                      <span>rata-rata odds {s.avgCombinedOdds != null ? s.avgCombinedOdds.toFixed(2) : "—"}</span>
+                      <span className={s.roi != null && s.roi >= 0 ? "text-emerald-600" : "text-red-500"}>
+                        ROI {s.roi != null ? `${(s.roi * 100).toFixed(1)}%` : "—"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Pasar-dulu memilih favorit pasar; model-dulu memilih favorit Poisson;
+                  filter menuntut keduanya sepakat. ROI negatif pada semuanya berarti margin
+                  bandar — bukan ramalan — lawan terakhir yang harus dikalahkan lewat harga.
+                </p>
+              </div>
+            )}
+
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               Cakupan: {data.considered.toLocaleString("id-ID")} pertandingan dinilai ·{" "}
               {data.skippedNoPrior.toLocaleString("id-ID")} dilewati tanpa prior musim sebelumnya

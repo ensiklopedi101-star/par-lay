@@ -179,6 +179,52 @@ export function ParlayCompositionPanel({
           </div>
         )}
 
+        {/* ── Tiket pasar-dulu ── */}
+        {composition.marketFirst && (
+          <div className="space-y-2 rounded-md border border-sky-500/30 bg-sky-500/5 p-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+              <Layers className="h-4 w-4 text-sky-600" />
+              Tiket Pasar-Dulu ({composition.marketFirst.legs.length} leg)
+              <span className="text-muted-foreground">·</span>
+              <span className="font-mono">@{composition.marketFirst.combinedOdds.toFixed(2)}</span>
+              <Badge variant="outline" className="text-[10px]">
+                peluang pasar {pct(composition.marketFirst.pCombined)}
+              </Badge>
+              {!composition.marketFirst.targetReached && (
+                <Badge variant="outline" className="border-amber-500/40 text-[10px] text-amber-600">
+                  target {composition.marketFirst.targetOdds.toFixed(1)}× belum tercapai
+                </Badge>
+              )}
+            </div>
+            <div className="space-y-1">
+              {composition.marketFirst.legs.map((leg) => (
+                <div
+                  key={`${leg.fixtureId}-${leg.marketKey}`}
+                  className="flex flex-wrap items-center gap-2 rounded border bg-background px-2 py-1 text-xs"
+                >
+                  <Badge variant="outline" className="text-[10px]">{leg.selection.family}</Badge>
+                  <span className="font-medium">{leg.selection.label}</span>
+                  <span className="text-muted-foreground">@{leg.selection.odds}</span>
+                  <span className="ml-auto text-muted-foreground">
+                    pasar {pct(leg.pUsed)} · {leg.character}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-1 sm:grid-cols-4">
+              <Stat label="Peluang tiket" value={pct(composition.marketFirst.pCombined)} hint="dari probabilitas fair pasar" />
+              <Stat label="Odds wajar" value={composition.marketFirst.fairOdds.toFixed(2)} hint="1 / peluang" />
+              <Stat label="Odds bandar" value={composition.marketFirst.combinedOdds.toFixed(2)} hint="yang ditawarkan" />
+              <Stat label="EV vs bandar" value={pct(composition.marketFirst.evVsBook)} hint="margin menumpuk — wajar negatif" />
+            </div>
+            <ul className="space-y-1 text-[11px] leading-relaxed text-muted-foreground">
+              {composition.marketFirst.notes.map((note, i) => (
+                <li key={i}>• {note}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* ── Alternatif ── */}
         {composition.alternatives.length > 0 && (
           <div className="space-y-1.5">
