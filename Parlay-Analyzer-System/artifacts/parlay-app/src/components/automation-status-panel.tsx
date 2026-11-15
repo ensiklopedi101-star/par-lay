@@ -23,6 +23,7 @@ import type { AutomationStatus } from "@/api/parlay-hooks";
 /** Nama aksi dalam bahasa manusia, supaya tidak perlu membaca kode. */
 const ACTION_LABEL: Record<string, string> = {
   sync: "Tarik jadwal & odds",
+  analyze: "Analisis AI",
   results: "Tarik skor akhir",
   closing: "Simpan odds penutup",
   outcomes: "Isi hasil ledger",
@@ -51,10 +52,14 @@ export function AutomationStatusPanel({ status }: { status?: AutomationStatus; i
 
   const gaps = status.gaps ?? [];
   const evidence = status.evidence;
-  /* Hijau hanya bila jadwal lengkap DAN sudah terbukti berjalan. Deklarasi
-     tanpa bukti bukan alasan untuk menampilkan tanda centang. */
+  /* Hijau hanya bila jadwal lengkap DAN setiap tugas terbukti dari
+     artefaknya (atau sah menunggu bukti pertama). Deklarasi tanpa bukti
+     bukan alasan untuk menampilkan tanda centang. */
   const scheduled = gaps.length === 0;
-  const proven = !evidence?.stale;
+  const jobEvidence = status.jobEvidence ?? [];
+  const proven = jobEvidence.length > 0
+    ? jobEvidence.every((job) => job.state === "proven" || job.state === "waiting")
+    : !evidence?.stale;
   const healthy = scheduled && proven;
 
   return (
@@ -87,6 +92,51 @@ export function AutomationStatusPanel({ status }: { status?: AutomationStatus; i
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {/* ── Bukti per tugas dari artefak aslinya ── */}
+        {status.schedulerNote && (
+          <p className="rounded-md border bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+            {status.schedulerNote}
+          </p>
+        )}
+        {(status.jobEvidence ?? []).length > 0 && (
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium text-muted-foreground">Bukti per tugas (dari artefak aslinya)</div>
+            {(status.jobEvidence ?? []).map((job) => (
+              <div
+                key={job.action}
+                className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1.5 text-xs"
+              >
+                <span className="font-medium">{actionLabel(job.action)}</span>
+                <Badge
+                  variant="secondary"
+                  className={
+                    job.state === "proven"
+                      ? "bg-emerald-500/15 text-emerald-600"
+                      : job.state === "waiting"
+                        ? "bg-sky-500/15 text-sky-600"
+                        : job.state === "stale"
+                          ? "bg-amber-500/15 text-amber-600"
+                          : "bg-rose-500/15 text-rose-600"
+                  }
+                >
+                  {job.state === "proven"
+                    ? "terbukti"
+                    : job.state === "waiting"
+                      ? "menunggu bukti pertama"
+                      : job.state === "stale"
+                        ? "bukti basi"
+                        : "belum ada bukti"}
+                </Badge>
+                <span className="text-muted-foreground">
+                  {job.artifact}
+                  {job.hoursSince != null ? ` · ${job.hoursSince} jam lalu` : ""}
+                </span>
+                <span className="w-full text-[11px] leading-relaxed text-muted-foreground">{job.note}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* ── Celah: tugas yang tidak akan pernah berjalan sendiri ── */}
         {gaps.length > 0 && (
           <div className="space-y-2">

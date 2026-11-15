@@ -70,3 +70,19 @@ itulah uji kelulusan Fase 1/P3 yang sebenarnya.
   (kuota dobel, race pada `sync_runs`).
 - Menilai dari win rate sebelum ledger mencapai ±300 seleksi ber-hasil;
   pakai `GET /api/learning/ledger`.
+
+## Diagnosis 15 Nov 2026 — panel salah membaca bukti
+
+Panel "Jadwal Otomatis" berteriak "terjadwal, belum terbukti" dengan
+"run sync terakhir selesai 111,4 jam lalu". Pemeriksaan database
+membuktikan sync cron-job.org **hidup**: 2.812 baris `odds_history`
+dalam 24 jam terakhir, snapshot terbaru hari yang sama 04:04 UTC.
+Yang basi adalah tabel perantara `sync_runs` (completed terakhir
+10 Nov) — panel menilai sync dari tabel yang tidak ditulis jalur
+sync per liga. Sejak PR ini, panel menilai setiap tugas dari artefak
+aslinya (`jobEvidence`): sync dari `odds_history`, analyze dari
+`ai_predictions`, results dari fixture tanpa skor, closing dari
+`odds_close`, outcomes dari `outcome`. Dan karena 588 seleksi saat
+ini seluruhnya berada di 6 fixture berkick-off 20–21 Nov, closing &
+outcomes berstatus sah **"menunggu bukti pertama"** — jatuh temponya
+setelah kick-off pertama itu, bukan hari ini.

@@ -210,3 +210,18 @@ test("supabase tidak tersedia tidak menggagalkan laporan", async () => {
   assert.equal(status.fixturesAwaitingScore, 0);
   assert.ok(status.gaps.length > 0, "celah tetap terdeteksi tanpa database");
 });
+
+test("job cron-job.org terdaftar menutup celah jadwal (bukti tetap urusan jobEvidence)", async () => {
+  const status = await buildAutomationStatus({
+    vercelCrons: VERCEL_SYNC_ONLY,
+    externalCrons: [
+      { action: "results", schedule: "30 * * * *" },
+      { action: "closing", schedule: "*/5 * * * *" },
+      { action: "outcomes", schedule: "35 * * * *" },
+    ],
+    supabase: fakeClient({}),
+  });
+  assert.equal(status.gaps.length, 0);
+  assert.ok(status.triggers.some((t) => t.source === "cron-job.org"));
+  assert.match(status.schedulerNote, /cron-job\.org/);
+});

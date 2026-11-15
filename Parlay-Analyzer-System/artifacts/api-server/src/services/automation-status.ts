@@ -52,7 +52,7 @@ export interface CronTrigger {
   action: string;
   /** Ekspresi cron apa adanya, mis. `0 6 * * *`. */
   schedule: string;
-  source: "vercel" | "node-cron";
+  source: "vercel" | "node-cron" | "cron-job.org";
   /** Perkiraan frekuensi per hari, dari ekspresi cron. */
   runsPerDay: number;
   /**
@@ -124,6 +124,8 @@ export const COMPOSITE_ACTIONS: Record<string, string[]> = {
 export function buildCronTriggers(input: {
   vercelCrons: Array<{ path: string; schedule: string }>;
   nodeCronSchedules?: Array<{ action: string; schedule: string }>;
+  /** Job cron-job.org (pemicu produksi) — deklarasi; buktinya di jobEvidence. */
+  externalCrons?: Array<{ action: string; schedule: string }>;
 }): CronTrigger[] {
   const triggers: CronTrigger[] = [];
 
@@ -151,6 +153,16 @@ export function buildCronTriggers(input: {
     });
   }
 
+  for (const entry of input.externalCrons ?? []) {
+    triggers.push({
+      action: entry.action,
+      schedule: entry.schedule,
+      source: "cron-job.org",
+      runsPerDay: estimateRunsPerDay(entry.schedule),
+      covers: [entry.action, ...(COMPOSITE_ACTIONS[entry.action] ?? [])],
+    });
+  }
+
   return triggers;
 }
 
@@ -164,7 +176,30 @@ export interface AutomationGap {
   onlyOnDeadScheduler: boolean;
 }
 
+/**
+ * Bukti per tugas dari artefak aslinya — bukan dari tabel perantara.
+ *
+ * Panel lama membaca `sync_runs` untuk menilai sync, padahal jalur sync
+ * per liga cron-job.org menulis `odds_history` langsung; akibatnya panel
+ * berteriak "belum terbukti" sementara 2.800+ baris odds masuk dalam 24
+ * jam. Setiap tugas dinilai dari tabel yang memang ia hasilkan:
+ * sync → odds_history, analyze → ai_predictions, results → skor fixture,
+ * closing → odds_close, outcomes → outcome.
+ */
+export interface JobEvidence {
+  action: string;
+  artifact: string;
+  lastArtifactAt: string | null;
+  hoursSince: number | null;
+  state: "proven" | "stale" | "waiting" | "missing";
+  note: string;
+}
+
 export interface AutomationStatus {
+  /** Bukti per tugas dari artefak masing-masing (lihat JobEvidence). */
+  jobEvidence: JobEvidence[];
+  /** Siapa pemicu produksi sebenarnya — deklarasi jadwal bukan bukti. */
+  schedulerNote: string;
   /** Semua pemicu yang terbaca, dari kedua sumber. */
   triggers: CronTrigger[];
   /** Aksi yang tidak akan pernah berjalan otomatis. */
@@ -231,6 +266,7 @@ function maxGapHoursOf(triggers: CronTrigger[]): number {
 export async function buildAutomationStatus(input: {
   vercelCrons: Array<{ path: string; schedule: string }>;
   nodeCronSchedules?: Array<{ action: string; schedule: string }>;
+  externalCrons?: Array<{ action: string; schedule: string }>;
   supabase?: SupabaseClient;
   /** Waktu run harian terakhir yang terbukti, dari `sync_runs`. */
   lastDailyRunAt?: string | null;
@@ -240,6 +276,7 @@ export async function buildAutomationStatus(input: {
   const triggers = buildCronTriggers({
     vercelCrons: input.vercelCrons,
     nodeCronSchedules: input.nodeCronSchedules,
+    externalCrons: input.externalCrons,
   });
 
   const coveredByVercel = [
@@ -255,8 +292,11 @@ export async function buildAutomationStatus(input: {
   const gaps: AutomationGap[] = [];
   for (const action of REQUIRED_SCHEDULED_ACTIONS) {
     const onVercel = coveredByVercel.includes(action);
+    const onExternal = triggers.some(
+      (t) => t.source === "cron-job.org" && t.covers.includes(action),
+    );
     const onNodeCron = triggers.some((t) => t.source === "node-cron" && t.action === action);
-    if (onVercel) continue;
+    if (onVercel || onExternal) continue;
     gaps.push({
       action,
       consequence: CONSEQUENCE[action] ?? "Aksi ini tidak berjalan otomatis.",
@@ -328,6 +368,112 @@ export async function buildAutomationStatus(input: {
     }
   }
 
+  /* ─── Bukti per tugas dari artefak aslinya ─── */
+  const jobEvidence: JobEvidence[] = [];
+  const hoursSince = (iso: string | null): number | null => {
+    if (!iso) return null;
+    const t = new Date(iso).getTime();
+    return Number.isFinite(t) ? Math.round(((now.getTime() - t) / 3_600_000) * 10) / 10 : null;
+  };
+  if (client) {
+    try {
+      const lastOf = async (
+        table: string, column: string, extra?: (q: any) => any,
+      ): Promise<string | null> => {
+        let q = client.from(table).select(column).order(column, { ascending: false }).limit(1);
+        if (extra) q = extra(q);
+        const { data } = await q.maybeSingle();
+        return (data as Record<string, string> | null)?.[column] ?? null;
+      };
+      const countWhere = async (
+        table: string, apply: (q: any) => any,
+      ): Promise<number> => {
+        const { count } = await apply(
+          client.from(table).select("*", { count: "exact", head: true }),
+        );
+        return count ?? 0;
+      };
+
+      const lastOdds = await lastOf("odds_history", "captured_at");
+      const oddsHours = hoursSince(lastOdds);
+      jobEvidence.push({
+        action: "sync",
+        artifact: "baris odds_history terakhir",
+        lastArtifactAt: lastOdds,
+        hoursSince: oddsHours,
+        state: lastOdds == null ? "missing" : (oddsHours ?? 999) <= 26 ? "proven" : "stale",
+        note: lastOdds == null
+          ? "Tidak ada snapshot odds sama sekali."
+          : "Sync dinilai dari snapshot odds yang benar-benar masuk, bukan dari baris sync_runs.",
+      });
+
+      const lastPrediction = await lastOf("ai_predictions", "created_at");
+      const predHours = hoursSince(lastPrediction);
+      jobEvidence.push({
+        action: "analyze",
+        artifact: "prediksi AI terakhir dibuat",
+        lastArtifactAt: lastPrediction,
+        hoursSince: predHours,
+        state: lastPrediction == null ? "missing" : (predHours ?? 999) <= 48 ? "proven" : "stale",
+        note: "Termasuk analisis manual dari pemindaian — bukti tugasnya bekerja, bukan bukti jadwalnya.",
+      });
+
+      jobEvidence.push({
+        action: "results",
+        artifact: "fixture lewat tanpa skor akhir",
+        lastArtifactAt: null,
+        hoursSince: null,
+        state: fixturesAwaitingScore === 0 ? "proven" : "missing",
+        note: fixturesAwaitingScore === 0
+          ? "Tidak ada fixture lewat yang menunggu skor."
+          : `${fixturesAwaitingScore} fixture lewat belum punya skor — rantai settlement tidak punya bahan.`,
+      });
+
+      const closeCount = await countWhere("prediction_selections", (q) => q.not("odds_close", "is", null));
+      const settledCount = await countWhere("prediction_selections", (q) => q.not("outcome", "is", null));
+      /* Fixture terdekat yang punya seleksi dan belum kick-off: sebelum itu,
+         closing/outcomes memang belum punya apa pun untuk dikerjakan. */
+      let nextSelectionFixtureAt: string | null = null;
+      const { data: selFixtures } = await client
+        .from("prediction_selections").select("fixture_id").limit(1000);
+      const selIds = [...new Set(
+        (selFixtures ?? []).map((r: any) => Number(r["fixture_id"])).filter((n: number) => Number.isFinite(n)),
+      )];
+      if (selIds.length > 0) {
+        const { data: upcoming } = await client
+          .from("fixtures")
+          .select("fixture_date")
+          .in("fixture_id", selIds)
+          .gt("fixture_date", now.toISOString())
+          .order("fixture_date", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        nextSelectionFixtureAt = (upcoming as { fixture_date?: string } | null)?.fixture_date ?? null;
+      }
+      const waitingNote = nextSelectionFixtureAt
+        ? `Belum ada yang bisa dikerjakan: fixture berseleksi terdekat baru kick-off ${nextSelectionFixtureAt}. Bukti pertama jatuh tempo setelah itu.`
+        : "Tidak ada fixture berseleksi di masa depan — dan tidak ada artefak masa lalu.";
+      jobEvidence.push({
+        action: "closing",
+        artifact: "seleksi dengan odds_close terisi",
+        lastArtifactAt: null,
+        hoursSince: null,
+        state: closeCount > 0 ? "proven" : nextSelectionFixtureAt ? "waiting" : "missing",
+        note: closeCount > 0 ? `${closeCount} seleksi sudah punya odds penutup.` : waitingNote,
+      });
+      jobEvidence.push({
+        action: "outcomes",
+        artifact: "seleksi dengan outcome terisi",
+        lastArtifactAt: null,
+        hoursSince: null,
+        state: settledCount > 0 ? "proven" : nextSelectionFixtureAt ? "waiting" : "missing",
+        note: settledCount > 0 ? `${settledCount} seleksi sudah ter-settle.` : waitingNote,
+      });
+    } catch (err) {
+      logger.debug({ err }, "Gagal menyusun bukti per tugas");
+    }
+  }
+
   if (gaps.some((gap) => gap.action === "results" && gap.onlyOnDeadScheduler)) {
     notes.push(
       "Penarikan hasil sudah ada kodenya, tetapi hanya dijadwalkan oleh `node-cron` di " +
@@ -356,6 +502,12 @@ export async function buildAutomationStatus(input: {
   }
 
   return {
+    jobEvidence,
+    schedulerNote:
+      "Pemicu produksi adalah cron-job.org (daftar job di CRON_JOBS.md); Vercel Cron hanya " +
+      "jaring pengaman harian dan node-cron tidak hidup di serverless. Karena itu tugas di " +
+      "bawah dinilai dari artefak yang benar-benar ia hasilkan — jadwal yang terdeklarasi " +
+      "tanpa artefak tetap dianggap belum terbukti.",
     triggers,
     gaps,
     coveredByVercel,
