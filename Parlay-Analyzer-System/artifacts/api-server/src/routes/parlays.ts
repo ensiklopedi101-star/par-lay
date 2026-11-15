@@ -390,12 +390,17 @@ router.get("/parlays/compose-preview", async (req, res) => {
     const { buildParlayComposition } = await import("../lib/quant/composition");
     const { buildMarketFirstTicket } = await import("../lib/quant/market-first");
     const { enrichTicketWithPriceHunt } = await import("../services/price-hunt-live");
+    const { computeContextForCandidates } = await import("../services/context-live");
     const limit = Number(req.query["maxCandidates"]) || undefined;
     const composition = buildParlayComposition(candidates, { maxCandidates: limit });
     /* Tiket pasar-dulu: probabilitas fair pasar + karakter statistik.
      * Disajikan di samping komposisi EV agar perbedaannya terlihat —
-     * tiket ini hampir selalu bisa terbentuk, dengan peluang jujurnya. */
-    const marketFirstRaw = buildMarketFirstTicket(candidates);
+     * tiket ini hampir selalu bisa terbentuk, dengan peluang jujurnya.
+     * Risiko konteks jadwal menurunkan leg rapuh saat pemilihan. */
+    const contextByCandidate = await computeContextForCandidates(
+      candidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey })),
+    );
+    const marketFirstRaw = buildMarketFirstTicket(candidates, { contextByCandidate });
     const marketFirst = marketFirstRaw ? await enrichTicketWithPriceHunt(marketFirstRaw) : null;
 
     res.json({ ...composition, marketFirst, ledgerRows: selectionRows.length });

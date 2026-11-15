@@ -37,6 +37,8 @@ export interface WarehouseMatch {
   max_home?: number | null;
   max_draw?: number | null;
   max_away?: number | null;
+  form5_home?: number | null;
+  form5_away?: number | null;
 }
 
 /** Musim Eropa dimulai Agustus: Agu–Des = tahun berjalan, Jan–Jul = tahun−1. */
@@ -266,7 +268,7 @@ export { buildModelBacktest };
 /* ───────────── Simulasi strategi tiket (pembuktian pasar-dulu) ───────────── */
 
 export interface TicketStrategyResult {
-  strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik" | "pasar-dulu-harga-terbaik";
+  strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik" | "pasar-dulu-harga-terbaik" | "pasar+konteks-form";
   tickets: number;
   legsUsed: number;
   legHitRate: number | null;
@@ -310,7 +312,7 @@ export function simulateTicketStrategies(
   minProb = 0.6,
 ): TicketStrategyResult[] {
   const strategies: TicketStrategyResult["strategy"][] = [
-    "pasar-dulu", "model-dulu", "pasar+filter-statistik", "pasar-dulu-harga-terbaik",
+    "pasar-dulu", "model-dulu", "pasar+filter-statistik", "pasar-dulu-harga-terbaik", "pasar+konteks-form",
   ];
   const legsByStrategyWeek = new Map<string, StrategyLeg[]>();
 
@@ -332,6 +334,15 @@ export function simulateTicketStrategies(
       picks.push({ strategy: "pasar-dulu-harga-terbaik", side: marketSide, prob: row.market[marketSide] });
       if (modelSide === marketSide) {
         picks.push({ strategy: "pasar+filter-statistik", side: marketSide, prob: row.market[marketSide] });
+      }
+      /* Konteks form: favorit pasar yang form 5 laga terakhirnya tidak
+       * kalah dari lawan — leg "sedang panas" disaring dari yang loyo. */
+      if (marketSide !== "draw" && match.form5_home != null && match.form5_away != null) {
+        const backedForm = marketSide === "home" ? match.form5_home : match.form5_away;
+        const opponentForm = marketSide === "home" ? match.form5_away : match.form5_home;
+        if (backedForm >= opponentForm) {
+          picks.push({ strategy: "pasar+konteks-form", side: marketSide, prob: row.market[marketSide] });
+        }
       }
     }
     if (model[modelSide] >= minProb) {

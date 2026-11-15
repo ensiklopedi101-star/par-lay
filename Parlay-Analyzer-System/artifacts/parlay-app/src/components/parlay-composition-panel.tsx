@@ -213,6 +213,12 @@ export function ParlayCompositionPanel({
                       terbaik @{leg.priceHunt.bestOdds.toFixed(2)} ({leg.priceHunt.bestBookmaker})
                     </span>
                   )}
+                  {leg.contextRisk?.level === "tinggi" && (
+                    <span className="text-red-500">konteks tinggi ⚠</span>
+                  )}
+                  {leg.contextRisk?.level === "sedang" && (
+                    <span className="text-amber-600">konteks sedang</span>
+                  )}
                   {leg.priceHunt?.drift === "menjauh" && (
                     <span className="text-amber-600">harga menjauh ⚠</span>
                   )}
