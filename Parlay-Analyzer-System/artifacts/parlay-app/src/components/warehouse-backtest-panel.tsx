@@ -143,8 +143,11 @@ export function WarehouseBacktestPanel({
                 </div>
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   Pasar-dulu memilih favorit pasar; model-dulu memilih favorit Poisson;
-                  filter menuntut keduanya sepakat. ROI negatif pada semuanya berarti margin
-                  bandar — bukan ramalan — lawan terakhir yang harus dikalahkan lewat harga.
+                  filter menuntut keduanya sepakat. Varian harga-terbaik memakai odds
+                  maksimum antar bandar dari dataset untuk leg yang sama persis — itu
+                  batas atas nilai berburu harga, karena parlay nyata biasanya terikat
+                  satu bandar; yang bisa dikejar adalah bandar terbaik secara keseluruhan
+                  dan harga terbaik per leg untuk taruhan tunggal.
                 </p>
               </div>
             )}

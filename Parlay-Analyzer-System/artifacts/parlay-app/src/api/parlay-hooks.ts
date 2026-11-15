@@ -570,7 +570,7 @@ export interface WarehouseBacktestData {
     note: string;
   };
   ticketStrategies: Array<{
-    strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik";
+    strategy: "pasar-dulu" | "model-dulu" | "pasar+filter-statistik" | "pasar-dulu-harga-terbaik";
     tickets: number;
     legsUsed: number;
     legHitRate: number | null;
@@ -691,6 +691,17 @@ export interface ScoredCombination {
   marginPaid: number | null;
 }
 
+export interface PriceHuntData {
+  usedOdds: number;
+  bestOdds: number;
+  bestBookmaker: string | null;
+  offers: number;
+  uplift: number;
+  drift: "menajam" | "menjauh" | "stabil" | "tidak-diketahui";
+  driftPct: number | null;
+  note: string;
+}
+
 export interface MarketFirstTicketData {
   legs: Array<{
     marketKey: string;
@@ -701,6 +712,7 @@ export interface MarketFirstTicketData {
     character: "didukung-statistik" | "pasar-stabil" | "rapuh" | "kontradiktif";
     stability: number;
     characterNote: string;
+    priceHunt?: PriceHuntData;
     selection: { label: string; odds: number; family: string; pMarket: number | null; pModelOnly: number };
   }>;
   combinedOdds: number;
@@ -711,6 +723,7 @@ export interface MarketFirstTicketData {
   targetOdds: number;
   targetReached: boolean;
   notes: string[];
+  priceImpact?: { usedCombined: number; bestCombined: number; uplift: number };
 }
 
 export interface ParlayComposition {

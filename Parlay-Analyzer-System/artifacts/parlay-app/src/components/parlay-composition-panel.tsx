@@ -208,9 +208,29 @@ export function ParlayCompositionPanel({
                   <span className="ml-auto text-muted-foreground">
                     pasar {pct(leg.pUsed)} · {leg.character}
                   </span>
+                  {leg.priceHunt && leg.priceHunt.uplift > 0.001 && (
+                    <span className="text-emerald-600">
+                      terbaik @{leg.priceHunt.bestOdds.toFixed(2)} ({leg.priceHunt.bestBookmaker})
+                    </span>
+                  )}
+                  {leg.priceHunt?.drift === "menjauh" && (
+                    <span className="text-amber-600">harga menjauh ⚠</span>
+                  )}
+                  {leg.priceHunt?.drift === "menajam" && (
+                    <span className="text-sky-600">harga menajam</span>
+                  )}
                 </div>
               ))}
             </div>
+            {composition.marketFirst.priceImpact && composition.marketFirst.priceImpact.uplift > 0.001 && (
+              <div className="rounded border border-emerald-500/30 bg-emerald-500/5 px-2 py-1.5 text-xs text-muted-foreground">
+                Berburu harga menaikkan odds gabungan dari{" "}
+                <strong>{composition.marketFirst.priceImpact.usedCombined.toFixed(2)}</strong> menjadi{" "}
+                <strong className="text-emerald-600">{composition.marketFirst.priceImpact.bestCombined.toFixed(2)}</strong>{" "}
+                (+{(composition.marketFirst.priceImpact.uplift * 100).toFixed(1)}%) — pertandingan dan
+                pilihan yang sama, hanya harga belinya yang lebih baik.
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2 pt-1 sm:grid-cols-4">
               <Stat label="Peluang tiket" value={pct(composition.marketFirst.pCombined)} hint="dari probabilitas fair pasar" />
               <Stat label="Odds wajar" value={composition.marketFirst.fairOdds.toFixed(2)} hint="1 / peluang" />
