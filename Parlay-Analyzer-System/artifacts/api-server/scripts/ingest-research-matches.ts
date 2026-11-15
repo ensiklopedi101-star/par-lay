@@ -8,11 +8,15 @@
  * --from (bawaan 2020-08-01) yang disimpan — file sumber 238.860
  * baris menyusut ke belasan ribu baris ringkas.
  *
+ * Penulisan memakai HTTP langsung ke PostgREST (fetch bawaan Node),
+ * BUKAN supabase-js: client itu menginisialisasi RealtimeClient yang
+ * menuntut WebSocket dan dua kali menggagalkan job CI di Node 20.
+ * Skrip batch seperti ini tidak butuh realtime sama sekali.
+ *
  * Butuh SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.
  * Pakai: npx tsx scripts/ingest-research-matches.ts [--file Matches.csv] [--from 2020-08-01]
  */
 import { readFileSync } from "node:fs";
-import { createClient } from "@supabase/supabase-js";
 import { parseCsvLine, toResearchMatchRow, type ResearchMatchRow } from "../src/lib/research-matches";
 
 const SOURCE_URL =
@@ -30,6 +34,38 @@ async function loadCsvText(): Promise<string> {
   const response = await fetch(SOURCE_URL);
   if (!response.ok) throw new Error(`Unduh CSV gagal: HTTP ${response.status}`);
   return response.text();
+}
+
+/** Upsert satu batch via PostgREST; merge-duplicates pada kunci unik tabel. */
+async function upsertBatch(
+  baseUrl: string,
+  serviceKey: string,
+  batch: ResearchMatchRow[],
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(
+    `${baseUrl.replace(/\/$/, "")}/rest/v1/research_matches?on_conflict=division,match_date,home_team,away_team`,
+    {
+      method: "POST",
+      headers: {
+        "apikey": serviceKey,
+        "Authorization": `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+      },
+      body: JSON.stringify(batch),
+    },
+    );
+  } catch (error) {
+    throw new Error(
+      `Tidak bisa menghubungi PostgREST di ${baseUrl} — periksa SUPABASE_URL. (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`PostgREST upsert gagal: HTTP ${response.status} ${detail.slice(0, 300)}`);
+  }
 }
 
 async function main(): Promise<void> {
@@ -53,32 +89,10 @@ async function main(): Promise<void> {
   }
   console.log(`CSV: ${lines.length - 1} baris → ${rows.length} baris gudang (sejak ${fromDate})`);
 
-  /*
-   * supabase-js menginisialisasi RealtimeClient yang butuh WebSocket
-   * global (ada di Node >= 22). Skrip ini tidak memakai realtime sama
-   * sekali, jadi sediakan transport dari paket `ws` bila global tidak
-   * ada — membuat skrip tetap jalan di Node 20 tanpa mengganti client.
-   */
-  const clientOptions: Record<string, unknown> = { auth: { persistSession: false } };
-  if (typeof (globalThis as { WebSocket?: unknown }).WebSocket === "undefined") {
-    try {
-      const wsModule = await import("ws");
-      clientOptions["global"] = { WebSocket: wsModule.default ?? wsModule.WebSocket };
-    } catch {
-      throw new Error(
-        "WebSocket global tidak tersedia (Node < 22) dan paket 'ws' tidak ditemukan. Jalankan dengan Node >= 22.",
-      );
-    }
-  }
-  const supabase = createClient(url, key, clientOptions as never);
   let upserted = 0;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
-    const { error } = await supabase
-      .from("research_matches")
-      .upsert(batch, { onConflict: "division,match_date,home_team,away_team" });
-    if (error) throw new Error(`upsert batch ${i}: ${error.message}`);
-    upserted += batch.length;
+    await upsertBatch(url, key, rows.slice(i, i + BATCH_SIZE));
+    upserted += Math.min(BATCH_SIZE, rows.length - i);
     console.log(`  ${upserted}/${rows.length}`);
   }
   console.log(`Selesai: ${upserted} baris research_matches.`);
