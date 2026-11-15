@@ -89,3 +89,29 @@ describe("market-first", () => {
     assert.ok(ticket!.notes.some((n) => n.includes("gerbang kualitas")));
   });
 });
+
+describe("parlay variants", () => {
+  const stable = Array.from({ length: 6 }, (_, i) =>
+    candidate(i + 1, { odds: 1.5, pMarket: 0.64, pModelOnly: 0.64, pFinal: 0.62 }));
+  const boosterCand = candidate(7, { odds: 2.0, pMarket: 0.5, pModelOnly: 0.6, pFinal: 0.55 });
+  const jackpotCands = Array.from({ length: 5 }, (_, i) =>
+    candidate(10 + i, { odds: 1.95, pMarket: 0.48, pModelOnly: 0.56, pFinal: 0.52, evConservative: 0.01 }));
+
+  it("utama, booster, dan jackpot terbentuk dengan karakternya masing-masing", async () => {
+    const { buildParlayVariants } = await import("./market-first");
+    const v = buildParlayVariants([...stable, boosterCand, ...jackpotCands]);
+    assert.ok(v.utama && v.utama.legs.length >= 5);
+    assert.ok(v.booster, "booster harus terbentuk dari leg penguat yang didukung statistik");
+    assert.equal(v.booster!.legs.filter((l) => l.fixtureId === 7).length, 1);
+    assert.ok(v.jackpot, "jackpot harus terbentuk bila syarat nilai dan lantai peluang terpenuhi");
+    assert.ok(v.jackpot!.combinedOdds >= 20);
+    assert.ok(v.jackpot!.pCombined >= 0.025);
+  });
+
+  it("jackpot ditolak terbuka bila leg nilai tidak cukup", async () => {
+    const { buildParlayVariants } = await import("./market-first");
+    const v = buildParlayVariants(stable);
+    assert.equal(v.jackpot, null);
+    assert.ok(v.variantNotes.jackpot && v.variantNotes.jackpot.length > 0);
+  });
+});

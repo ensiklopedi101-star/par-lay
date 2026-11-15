@@ -39,7 +39,7 @@ const ticket: MarketFirstTicket = {
 describe("telegram-format", () => {
   it("memuat leg, peluang jujur, dan peringatan target", () => {
     const msg = formatTicketMessage(ticket, new Date("2026-11-15T00:00:00Z"));
-    assert.ok(msg.includes("TIKET PASAR-DULU"));
+    assert.ok(msg.includes("PARLAY UTAMA"));
     assert.ok(msg.includes("Arsenal vs Chelsea"));
     assert.ok(msg.includes("Menang — Tuan Rumah (1X2)"));
     assert.ok(msg.includes("72.0%"));

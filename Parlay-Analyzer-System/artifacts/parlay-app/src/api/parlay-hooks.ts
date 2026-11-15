@@ -752,6 +752,12 @@ export interface ParlayComposition {
   maxLegs: number;
   ledgerRows?: number;
   marketFirst?: MarketFirstTicketData | null;
+  variants?: {
+    utama: (MarketFirstTicketData & { variant?: string }) | null;
+    booster: (MarketFirstTicketData & { variant?: string; boosterMarketKey?: string }) | null;
+    jackpot: (MarketFirstTicketData & { variant?: string }) | null;
+    variantNotes: Record<string, string | null>;
+  } | null;
   generatedAt: string;
   notes: string[];
 }

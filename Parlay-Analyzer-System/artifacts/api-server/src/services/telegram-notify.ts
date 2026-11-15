@@ -9,8 +9,8 @@
  */
 import { supabase } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
-import { formatTicketMessage } from "../lib/telegram-format";
-import { buildMarketFirstTicket, type MarketFirstTicket } from "../lib/quant/market-first";
+import { formatVariantsMessage } from "../lib/telegram-format";
+import { buildParlayVariants, type ParlayVariants } from "../lib/quant/market-first";
 import { candidatesFromSelectionRows, type FixtureMeta, type SelectionRow } from "./parlay-candidates";
 import { computeContextForCandidates } from "./context-live";
 import { enrichTicketWithPriceHunt } from "./price-hunt-live";
@@ -23,7 +23,7 @@ export interface TelegramNotifyResult {
 }
 
 /** Susun tiket yang sama persis dengan yang tampil di panel Komposisi. */
-export async function buildLiveMarketFirstTicket(): Promise<MarketFirstTicket | null> {
+export async function buildLiveMarketFirstTicket(): Promise<ParlayVariants | null> {
   if (!supabase) return null;
   const { data: rows, error } = await supabase
     .from("prediction_selections")
@@ -57,9 +57,9 @@ export async function buildLiveMarketFirstTicket(): Promise<MarketFirstTicket | 
   const contextByCandidate = await computeContextForCandidates(
     candidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey })),
   );
-  const ticket = buildMarketFirstTicket(candidates, { contextByCandidate });
-  if (!ticket) return null;
-  return enrichTicketWithPriceHunt(ticket);
+  const variants = buildParlayVariants(candidates, { contextByCandidate });
+  if (!variants.utama && !variants.booster && !variants.jackpot) return null;
+  return variants;
 }
 
 export async function sendTelegramMessage(text: string): Promise<TelegramNotifyResult> {
@@ -88,10 +88,14 @@ export async function sendTelegramMessage(text: string): Promise<TelegramNotifyR
 }
 
 export async function notifyParlayViaTelegram(): Promise<TelegramNotifyResult> {
-  const ticket = await buildLiveMarketFirstTicket();
-  if (!ticket) {
+  const variants = await buildLiveMarketFirstTicket();
+  if (!variants) {
     return { sent: false, reason: "Tidak ada tiket pasar-dulu yang bisa disusun dari ledger saat ini." };
   }
-  const result = await sendTelegramMessage(formatTicketMessage(ticket));
-  return { ...result, legs: ticket.legs.length, combinedOdds: ticket.combinedOdds };
+  for (const ticket of [variants.utama, variants.booster, variants.jackpot]) {
+    if (ticket) await enrichTicketWithPriceHunt(ticket);
+  }
+  const result = await sendTelegramMessage(formatVariantsMessage(variants));
+  const main = variants.utama ?? variants.booster ?? variants.jackpot!;
+  return { ...result, legs: main.legs.length, combinedOdds: main.combinedOdds };
 }
