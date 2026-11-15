@@ -77483,7 +77483,7 @@ function buildMarketFirstTicket(candidates2, options = {}) {
   const maxLegs = Math.max(minLegs, options.maxLegs ?? MAX_LEGS_DEFAULT);
   const targetOdds = Math.max(1.2, options.targetOdds ?? 2);
   const minMarketProb = options.minMarketProb ?? 0.55;
-  const minOdds = options.minOdds ?? 1.1;
+  const minOdds = options.minOdds ?? 1.25;
   const maxMarketProb = options.maxMarketProb ?? 0.9;
   let excludedWorthless = 0;
   const notes = [];
@@ -77500,6 +77500,14 @@ function buildMarketFirstTicket(candidates2, options = {}) {
     if (!Number.isFinite(selection.odds) || selection.odds <= 1) continue;
     if (!(pUsed > 0 && pUsed < 1) || pUsed < minMarketProb) continue;
     if (selection.odds < minOdds || pUsed > maxMarketProb) {
+      excludedWorthless++;
+      continue;
+    }
+    if (selection.family === "Totals" && selection.line != null && (selection.line < 1.5 || selection.line > 3.5)) {
+      excludedWorthless++;
+      continue;
+    }
+    if (selection.family === "AH" && selection.line != null && Math.abs(selection.line) > 2) {
       excludedWorthless++;
       continue;
     }

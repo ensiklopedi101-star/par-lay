@@ -142,7 +142,7 @@ export interface MarketFirstOptions {
   targetOdds?: number;
   /** Peluang pasar minimum per leg agar dianggap kandidat (bawaan 0.55). */
   minMarketProb?: number;
-  /** Odds minimum leg (bawaan 1,10): di bawah ini leg tidak menyumbang hasil. */
+  /** Odds minimum leg (bawaan 1,25): di bawah ini leg tidak menyumbang hasil yang berarti. */
   minOdds?: number;
   /** Peluang pasar maksimum leg (bawaan 0,90): di atas ini leg nyaris-pasti tanpa nilai. */
   maxMarketProb?: number;
@@ -173,7 +173,7 @@ export function buildMarketFirstTicket(
   const maxLegs = Math.max(minLegs, options.maxLegs ?? MAX_LEGS_DEFAULT);
   const targetOdds = Math.max(1.2, options.targetOdds ?? 2);
   const minMarketProb = options.minMarketProb ?? 0.55;
-  const minOdds = options.minOdds ?? 1.1;
+  const minOdds = options.minOdds ?? 1.25;
   const maxMarketProb = options.maxMarketProb ?? 0.9;
   let excludedWorthless = 0;
   const notes: string[] = [];
