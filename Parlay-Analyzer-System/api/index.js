@@ -89377,6 +89377,19 @@ function pairedBinary(samples, modelProb, marketProb, outcome) {
     tStat
   };
 }
+function binaryVsMarket(samples, market) {
+  return market === "over25" ? pairedBinary(
+    samples,
+    (s) => s.model.over25,
+    (s) => s.marketOver25,
+    (s) => s.actual.homeGoals + s.actual.awayGoals > 2.5
+  ) : pairedBinary(
+    samples,
+    (s) => s.model.bttsYes,
+    (s) => s.marketBttsYes,
+    (s) => s.actual.homeGoals > 0 && s.actual.awayGoals > 0
+  );
+}
 function binaryMetric(samples, prob, outcome) {
   const probs = samples.map(prob);
   const ys = samples.map((s) => outcome(s) ? 1 : 0);
@@ -89881,6 +89894,27 @@ async function getModelBacktest(force = false) {
     chronologicalSamples.slice(0, blendSplit),
     chronologicalSamples.slice(blendSplit)
   );
+  const binaryHalf = Math.floor(chronologicalSamples.length / 2);
+  const binaryFirst = chronologicalSamples.slice(0, binaryHalf);
+  const binarySecond = chronologicalSamples.slice(binaryHalf);
+  const binaryValidation = [
+    {
+      key: "over25",
+      label: "Over 2.5",
+      full: binaryVsMarket(chronologicalSamples, "over25"),
+      firstHalf: binaryVsMarket(binaryFirst, "over25"),
+      secondHalf: binaryVsMarket(binarySecond, "over25"),
+      blendedFull: binaryVsMarket(blendedSamples, "over25")
+    },
+    {
+      key: "btts",
+      label: "BTTS",
+      full: binaryVsMarket(chronologicalSamples, "btts"),
+      firstHalf: binaryVsMarket(binaryFirst, "btts"),
+      secondHalf: binaryVsMarket(binarySecond, "btts"),
+      blendedFull: binaryVsMarket(blendedSamples, "btts")
+    }
+  ];
   const value = {
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
     oddsRowsLoaded,
@@ -89890,7 +89924,8 @@ async function getModelBacktest(force = false) {
     report: buildModelBacktest(samples),
     calibration,
     infoVariants,
-    blend
+    blend,
+    binaryValidation
   };
   cached = { at: Date.now(), value };
   logger.info(

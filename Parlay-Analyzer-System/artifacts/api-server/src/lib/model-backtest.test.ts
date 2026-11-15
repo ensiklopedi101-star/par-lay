@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildBlendExperiment, buildCalibrationExperiment, buildModelBacktest, type BacktestSample } from "./model-backtest";
+import { binaryVsMarket, buildBlendExperiment, buildCalibrationExperiment, buildModelBacktest, type BacktestSample } from "./model-backtest";
 
 function sample(partial: Partial<BacktestSample> & { actual: BacktestSample["actual"] }): BacktestSample {
   return {
@@ -119,5 +119,18 @@ describe("pasar biner & eksperimen bobot campuran", () => {
     const exp = buildBlendExperiment(perfect, perfect);
     assert.ok(exp.bestWeight != null && exp.bestWeight > 0);
     assert.equal(exp.modelAddsValue, true);
+  });
+});
+
+describe("binaryVsMarket (uji konfirmasi)", () => {
+  it("mengembalikan metrik berpasangan untuk pasar yang diminta saja", () => {
+    const rows = Array.from({ length: 10 }, (_, i) => sample({
+      actual: i % 2 === 0 ? { homeGoals: 1, awayGoals: 1 } : { homeGoals: 2, awayGoals: 0 },
+      model: { home: 0.4, draw: 0.3, away: 0.3, over25: 0.5, bttsYes: i % 2 === 0 ? 0.9 : 0.1 },
+      marketBttsYes: 0.5,
+    }));
+    const btts = binaryVsMarket(rows, "btts");
+    assert.ok(btts && btts.skill > 0 && btts.n === 10);
+    assert.equal(binaryVsMarket(rows, "over25"), null);
   });
 });

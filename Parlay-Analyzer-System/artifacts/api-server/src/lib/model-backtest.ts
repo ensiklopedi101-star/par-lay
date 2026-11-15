@@ -172,6 +172,18 @@ function pairedBinary(
   };
 }
 
+/** Skill model vs pasar untuk satu pasar biner — dipakai uji konfirmasi per paruh/per liga. */
+export function binaryVsMarket(
+  samples: BacktestSample[],
+  market: "over25" | "btts",
+): PairedMetric | null {
+  return market === "over25"
+    ? pairedBinary(samples, (s) => s.model.over25, (s) => s.marketOver25,
+      (s) => s.actual.homeGoals + s.actual.awayGoals > 2.5)
+    : pairedBinary(samples, (s) => s.model.bttsYes, (s) => s.marketBttsYes,
+      (s) => s.actual.homeGoals > 0 && s.actual.awayGoals > 0);
+}
+
 function binaryMetric(
   samples: BacktestSample[],
   prob: (s: BacktestSample) => number,

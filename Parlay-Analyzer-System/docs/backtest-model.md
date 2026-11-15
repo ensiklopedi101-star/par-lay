@@ -124,3 +124,15 @@ Perbaikannya: `collectPagedRows` (patrun PR #27) + penunjuk
 cakupan query wajib memeriksa bahwa n sampel tidak bergerak tanpa
 penjelasan — angka yang berubah diam-diam lebih berbahaya daripada
 angka buruk.
+
+## Temuan pasar gol & uji konfirmasi (14 Nov 2026)
+
+Setelah integritas pulih (n=127, skill 1X2 −4,08%): **Over 2.5
++5,69% (t=1,37) dan BTTS +7,66% (t=2,01, n=124)** — model kalah di
+1X2 tetapi unggul di pasar gol, BTTS melewati ambang t≥2. Ini sampel
+penemuan, bukan pembuktian: banyak uji pada sampel yang sama membuat
+satu t≈2 bisa lahir dari keberuntungan. Panel kini menjalankan uji
+konfirmasi otomatis — skill per paruh kronologis (harus positif di
+keduanya) dan pada varian prior+form (harus bertahan saat informasi
+diperkaya). Hanya edge yang lolos keduanya yang boleh dibahas untuk
+mengubah jalur live, dan perubahan itu pun tetap lewat PR tersendiri.

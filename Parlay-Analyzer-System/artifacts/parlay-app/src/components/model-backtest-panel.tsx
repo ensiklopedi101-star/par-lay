@@ -278,6 +278,43 @@ export function ModelBacktestPanel({
               </div>
             </div>
 
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Uji konfirmasi pasar gol (skill vs pasar)
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                    <th className="py-2 pr-3 font-medium">Pasar</th>
+                    <th className="py-2 pr-3 font-medium">Sampel penuh</th>
+                    <th className="py-2 pr-3 font-medium">Paruh pertama</th>
+                    <th className="py-2 pr-3 font-medium">Paruh kedua</th>
+                    <th className="py-2 font-medium">Varian prior+form</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.binaryValidation.map((row) => {
+                    const cell = (m: { skill: number; tStat: number | null } | null) =>
+                      m ? `${pctSigned(m.skill)} (t=${m.tStat != null ? m.tStat.toFixed(2) : "—"})` : "—";
+                    return (
+                      <tr key={row.key} className="border-b border-border/50">
+                        <td className="py-2 pr-3">{row.label}</td>
+                        <td className="py-2 pr-3 tabular-nums">{cell(row.full)}</td>
+                        <td className="py-2 pr-3 tabular-nums">{cell(row.firstHalf)}</td>
+                        <td className="py-2 pr-3 tabular-nums">{cell(row.secondHalf)}</td>
+                        <td className="py-2 tabular-nums">{cell(row.blendedFull)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Edge yang asli muncul di kedua paruh dan bertahan saat informasi diperkaya. Edge yang
+                hanya hidup di satu paruh adalah keberuntungan sampel penemuan — belum boleh mengubah
+                perilaku jalur live.
+              </p>
+            </div>
+
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               Cakupan: {data.fixturesTotal} pertandingan selesai · {data.skippedNoStats} dilewati karena
               statistik prior salah satu tim tidak ada (mis. tim promosi) · {data.skippedNoMarket} tanpa

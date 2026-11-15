@@ -516,6 +516,14 @@ export interface ModelBacktestReportData {
     modelAddsValue: boolean;
     note: string;
   };
+  binaryValidation: Array<{
+    key: string;
+    label: string;
+    full: { n: number; skill: number; tStat: number | null } | null;
+    firstHalf: { n: number; skill: number; tStat: number | null } | null;
+    secondHalf: { n: number; skill: number; tStat: number | null } | null;
+    blendedFull: { n: number; skill: number; tStat: number | null } | null;
+  }>;
 }
 
 export const getGetModelBacktestQueryKey = () => ["learning/model-backtest"];
