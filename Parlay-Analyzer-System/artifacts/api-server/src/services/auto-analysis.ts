@@ -147,33 +147,21 @@ export async function findFixturesAwaitingAnalysis(options: {
 
   const ids = rows.map((f) => f.fixture_id);
 
-  /* Prediksi yang sudah punya market terpilih tidak diulang. Baris NO BET
-   * tanpa market tetap layak — bisa jadi harga baru sudah tersedia. */
+  /* Fixture yang sudah punya prediksi TIDAK dipilih lagi — berapa pun
+   * isi prediksinya. Versi sebelumnya menganggap prediksi tanpa market
+   * sebagai "belum selesai" dan memilihnya kembali, padahal
+   * analyzeFixture menolak analisis ulang ("sudah memiliki prediksi")
+   * sehingga fixture itu gagal permanen di setiap putaran dan memakan
+   * slot kandidat (bukti produksi 17 Nov 2026: Troyes & Bilbao gagal
+   * berulang dengan sebab itu). Prediksi tanpa market adalah keputusan
+   * NO BET yang sudah selesai, bukan pekerjaan tertunda. */
   const { data: existing } = await client
     .from("ai_predictions")
-    .select("fixture_id, status, market_bet, best_market, best_odds")
+    .select("fixture_id")
     .in("fixture_id", ids);
 
   const done = new Set(
-    (existing ?? [])
-      .filter((row: {
-        status?: unknown;
-        market_bet?: unknown;
-        best_market?: unknown;
-        best_odds?: unknown;
-      }) => {
-        const market = String(row.market_bet ?? row.best_market ?? "").trim().toLowerCase();
-        const odds = Number(row.best_odds);
-        return Boolean(
-          market &&
-            market !== "no_bet" &&
-            market !== "no bet" &&
-            Number.isFinite(odds) &&
-            odds > 1 &&
-            String(row.status ?? "active").toLowerCase() !== "no_bet",
-        );
-      })
-      .map((row: { fixture_id: number }) => Number(row.fixture_id)),
+    (existing ?? []).map((row: { fixture_id: number }) => Number(row.fixture_id)),
   );
 
   /* Fixture tanpa harga di `odds_history` tidak bisa dinilai engine. Melewati

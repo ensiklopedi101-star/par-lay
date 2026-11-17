@@ -159,6 +159,9 @@ export function ParlayCompositionPanel({
                   {leg.priceHunt?.drift === "menajam" && (
                     <span className="text-sky-600">harga menajam</span>
                   )}
+                  {leg.substitutionHint && (
+                    <span className="w-full text-[11px] text-muted-foreground">↪ {leg.substitutionHint}</span>
+                  )}
                 </div>
               ))}
             </div>

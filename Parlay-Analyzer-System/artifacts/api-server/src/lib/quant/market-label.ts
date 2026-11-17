@@ -37,3 +37,28 @@ export function friendlyMarketLabel(marketKey: string): string {
   }
   return key.replace(/[:_]/g, " ");
 }
+
+/**
+ * Panduan pengganti bila line rekomendasi tidak ada di aplikasi
+ * pemilik sistem (Saba umumnya hanya memasang line utama ,5).
+ * Aturan yang diajarkan ke pemilik sistem: ganti ke line terdekat
+ * pada ARAH YANG SAMA, jangan pernah membalik arah; terima
+ * konsekuensinya (hilang perlindungan refund pada line bulat).
+ * Hanya line bulat Totals yang butuh panduan — line ,25/,75 khas
+ * Asia umumnya tersedia, dan line ,5 tidak punya refund.
+ */
+export function substitutionHint(marketKey: string): string | null {
+  const parts = marketKey.trim().toLowerCase().split(":");
+  if (parts[0] !== "tot" || parts.length < 3) return null;
+  const side = parts[1];
+  const line = Number(parts[2]);
+  if (!Number.isFinite(line) || Math.abs(line - Math.round(line)) > 1e-9) return null;
+  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0$/, ""));
+  if (side === "over") {
+    return `bila Over ${fmt(line)} tak ada di aplikasi: Over ${fmt(line + 0.5)} (arah sama, tanpa refund bila tepat ${fmt(line)} gol)`;
+  }
+  if (side === "under") {
+    return `bila Under ${fmt(line)} tak ada di aplikasi: Under ${fmt(line + 0.5)} (arah sama, lebih longgar — tepat ${fmt(line)} gol ikut menang, odds lebih kecil)`;
+  }
+  return null;
+}
