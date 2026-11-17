@@ -767,6 +767,26 @@ export interface ParlayComposition {
   } | null;
   generatedAt: string;
   notes: string[];
+  /* Pilihan AI terbaru dari scan + status gerbang pasarnya (jalur hibrida). */
+  scanPicks?: Array<{
+    fixtureId: number;
+    homeTeam: string | null;
+    awayTeam: string | null;
+    date: string | null;
+    marketKey: string;
+    marketLabel: string;
+    odds: number;
+    bookmaker: string | null;
+    aiConfidence: number | null;
+    pMarket: number;
+    pModelOnly: number;
+    pFinal: number;
+    evConservative: number;
+    character: string;
+    gate: string;
+    gateLabel: string;
+    updatedAt: string | null;
+  }>;
 }
 
 export const getGetParlayCompositionQueryKey = () => ["parlays/compose-preview"];

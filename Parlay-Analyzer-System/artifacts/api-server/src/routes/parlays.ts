@@ -415,6 +415,87 @@ router.get("/parlays/compose-preview", async (req, res) => {
       marketFirstCandidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey })),
     );
     const variantsRaw = buildParlayVariants(marketFirstCandidates, { contextByCandidate });
+
+    /*
+     * Jalur hibrida (keputusan pemilik sistem, 17 Nov 2026): pilihan AI
+     * terbaru dari scan ditampilkan apa adanya di dashboard BESERTA
+     * status gerbang pasarnya — bukan disembunyikan karena tidak masuk
+     * tiket, dan bukan pula dipaksakan masuk. Untuk tiap pilihan AI
+     * (ai_predictions.best_market) kami cari kandidat ledger yang sama,
+     * lalu klasifikasikan terhadap gerbang yang sama persis dengan
+     * yang dipakai buildParlayVariants (Utama ≥55%, Booster 0,48–0,55
+     * didukung statistik pada odds 1,85–2,30, Jackpot lolos nilai).
+     */
+    const { classifyLeg } = await import("../lib/quant/market-first");
+    const { marketKeyForLabel } = await import("../lib/llm-ledger");
+    const { friendlyMarketLabel } = await import("../lib/quant/market-label");
+    const inTicketVariant = (fixtureId: number, marketKey: string): string | null => {
+      for (const [name, ticket] of [["utama", variantsRaw.utama], ["booster", variantsRaw.booster], ["jackpot", variantsRaw.jackpot]] as const) {
+        if (ticket?.legs.some((leg) => leg.fixtureId === fixtureId && leg.marketKey === marketKey)) return name;
+      }
+      return null;
+    };
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const { data: pickRows } = await supabase
+      .from("ai_predictions")
+      .select("fixture_id, home_team, away_team, best_market, best_odds, confidence_score, updated_at")
+      .not("best_market", "is", null)
+      .order("updated_at", { ascending: false })
+      .limit(40);
+    const scanPicks: Array<Record<string, unknown>> = [];
+    for (const pick of (pickRows ?? []) as Array<{ fixture_id: number | string; home_team: string | null; away_team: string | null; best_market: string | null; best_odds: number | string | null; confidence_score: number | string | null; updated_at: string | null }>) {
+      const fixtureId = Number(pick.fixture_id);
+      const fixtureMeta = meta.get(fixtureId);
+      if (!fixtureMeta || (fixtureMeta.date && fixtureMeta.date < todayIso)) continue;
+      const marketKey = marketKeyForLabel(pick.best_market);
+      if (!marketKey) continue;
+      const candidate = marketFirstCandidates.find((c) => c.fixtureId === fixtureId && c.marketKey === marketKey);
+      if (!candidate) continue;
+      const sel = candidate.selection;
+      const pMarket = sel.pMarket != null && sel.pMarket > 0 && sel.pMarket < 1 ? sel.pMarket : sel.pFinal;
+      const character = classifyLeg(sel).character;
+      const variant = inTicketVariant(fixtureId, marketKey);
+      let gate: string;
+      let gateLabel: string;
+      if (variant) {
+        gate = "in_ticket";
+        gateLabel = `Sudah masuk tiket ${variant === "utama" ? "Utama" : variant === "booster" ? "Booster" : "Jackpot"}`;
+      } else if (pMarket >= 0.55 && sel.odds >= 1.25) {
+        gate = "utama_eligible";
+        gateLabel = "Lolos syarat Utama — belum terpilih (kolam/korelasi lebih kuat)";
+      } else if (sel.odds >= 1.85 && sel.odds <= 2.3 && pMarket >= 0.48 && pMarket < 0.55 && character === "didukung-statistik") {
+        gate = "booster_eligible";
+        gateLabel = "Kandidat Booster — menunggu inti Utama & giliran leg penguat";
+      } else if (sel.odds >= 1.8 && sel.odds <= 3 && ((sel.pModelOnly - pMarket) >= 0.05 || sel.evConservative > 0)) {
+        gate = "jackpot_eligible";
+        gateLabel = "Lolos gerbang nilai Jackpot — butuh 5 leg sekelas untuk membentuk tiket";
+      } else {
+        gate = "below_gate";
+        gateLabel = pMarket < 0.48
+          ? `Di luar gerbang — probabilitas pasar ${(pMarket * 100).toFixed(0)}% (Utama ≥55%, Booster ≥48%)`
+          : `Di luar gerbang — probabilitas pasar ${(pMarket * 100).toFixed(0)}% (Utama ≥55%) atau statistik tidak mendukung`;
+      }
+      scanPicks.push({
+        fixtureId,
+        homeTeam: pick.home_team ?? fixtureMeta.homeTeam,
+        awayTeam: pick.away_team ?? fixtureMeta.awayTeam,
+        date: fixtureMeta.date,
+        marketKey,
+        marketLabel: friendlyMarketLabel(marketKey),
+        odds: sel.odds,
+        bookmaker: candidate.bookmaker ?? null,
+        aiConfidence: pick.confidence_score != null ? Number(pick.confidence_score) : null,
+        pMarket,
+        pModelOnly: sel.pModelOnly,
+        pFinal: sel.pFinal,
+        evConservative: sel.evConservative,
+        character,
+        gate,
+        gateLabel,
+        updatedAt: pick.updated_at,
+      });
+      if (scanPicks.length >= 12) break;
+    }
     const variants = {
       ...variantsRaw,
       utama: variantsRaw.utama ? await enrichTicketWithPriceHunt(variantsRaw.utama) : null,
@@ -424,7 +505,7 @@ router.get("/parlays/compose-preview", async (req, res) => {
     /* marketFirst dipertahankan sebagai alias varian Utama (kompatibilitas panel lama). */
     const marketFirst = variants.utama;
 
-    res.json({ ...composition, marketFirst, variants, ledgerRows: selectionRows.length });
+    res.json({ ...composition, marketFirst, variants, scanPicks, ledgerRows: selectionRows.length });
   } catch (err) {
     logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
     res.status(500).json({ error: "Gagal menyusun pratinjau komposisi parlay" });

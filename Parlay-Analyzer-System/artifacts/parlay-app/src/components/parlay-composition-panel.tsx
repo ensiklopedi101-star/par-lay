@@ -13,7 +13,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle, Combine, Layers, TrendingUp } from "lucide-react";
+import { AlertTriangle, Combine, Layers, Sparkles, TrendingUp } from "lucide-react";
 import type { ParlayComposition } from "@/api/parlay-hooks";
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
@@ -233,6 +233,46 @@ export function ParlayCompositionPanel({
             </div>
           );
         })}
+
+        {/* ── Leg baru dari scan (pilihan AI + status gerbang) ── */}
+        {composition.scanPicks && composition.scanPicks.length > 0 && (
+          <div className="space-y-2 rounded-md border border-sky-500/30 bg-sky-500/5 p-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+              <Sparkles className="h-4 w-4" />
+              Leg Baru dari Scan — pilihan AI ({composition.scanPicks.length})
+            </div>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Inilah market yang dipilih AI pada scan terakhir, ditampilkan apa adanya beserta penilaian
+              pasarnya. Leg hanya masuk tiket resmi bila lolos gerbang (Utama ≥55% · Booster 48–55% didukung
+              statistik · Jackpot lolos nilai) — yang belum lolos tetap terlihat di sini, tidak disembunyikan
+              dan tidak dipaksakan masuk.
+            </p>
+            <div className="space-y-1">
+              {composition.scanPicks.map((pick) => (
+                <div key={`${pick.fixtureId}-${pick.marketKey}`} className="flex flex-wrap items-center gap-2 rounded border bg-background px-2 py-1 text-xs">
+                  <span className="font-medium">
+                    {pick.homeTeam && pick.awayTeam ? `${pick.homeTeam} vs ${pick.awayTeam} — ` : ""}{pick.marketLabel}
+                  </span>
+                  <span className="text-muted-foreground">@{pick.odds}</span>
+                  {pick.bookmaker && (
+                    <Badge variant={pick.bookmaker === "M88" ? "default" : "outline"} className="text-[10px]">{pick.bookmaker === "M88" ? pick.bookmaker : `acuan ${pick.bookmaker}`}</Badge>
+                  )}
+                  <span className="text-muted-foreground">
+                    pasar {pct(pick.pMarket)} · model {pct(pick.pModelOnly)} · AI {pick.aiConfidence != null ? `${pick.aiConfidence.toFixed(1)}/10` : "—"}
+                  </span>
+                  <Badge
+                    variant={pick.gate === "in_ticket" ? "default" : pick.gate === "below_gate" ? "destructive" : "outline"}
+                    className="ml-auto text-[10px]"
+                    title={pick.gateLabel}
+                  >
+                    {pick.gate === "in_ticket" ? "✓ di tiket" : pick.gate === "utama_eligible" ? "lolos Utama" : pick.gate === "booster_eligible" ? "kandidat Booster" : pick.gate === "jackpot_eligible" ? "lolos nilai Jackpot" : "di luar gerbang"}
+                  </Badge>
+                  <span className="w-full text-[11px] text-muted-foreground">{pick.gateLabel}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
       </CardContent>
     </Card>
