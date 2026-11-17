@@ -344,7 +344,19 @@ const validOdds = (x: unknown): x is number => typeof x === "number" && Number.i
  * anywhere, and de-vigging it yields a "fair" probability that is too generous
  * (that is how arbitrage-looking EV appears out of nothing).
  */
-export function buildOddsInput(structured: StructuredOddsInput): OddsInputResult {
+/** Urutan bookmaker eksekusi: M88 adalah proksi Saba (aplikasi yang
+ * benar-benar dipakai pemilik sistem) — pasar Asia-nya main-line dan
+ * mirip Saba. 1xbet (tangga line lengkap) hanya cadangan analisis,
+ * bukan sumber rekomendasi. Bisa diganti lewat EXECUTION_BOOKMAKER. */
+export function executionBookmakerPreference(): string[] {
+  const primary = (process.env["EXECUTION_BOOKMAKER"] ?? "M88").trim();
+  return [primary, "1xbet"].filter((b, i, a) => b.length > 0 && a.indexOf(b) === i);
+}
+
+export function buildOddsInput(
+  structured: StructuredOddsInput,
+  preferred: string[] = executionBookmakerPreference(),
+): OddsInputResult {
   const warnings: string[] = [];
   const counts = new Map<string, number>();
   for (const m of structured.matchWinner) {
@@ -352,10 +364,22 @@ export function buildOddsInput(structured: StructuredOddsInput): OddsInputResult
       counts.set(m.bookmaker, (counts.get(m.bookmaker) ?? 0) + 1);
     }
   }
+  /* Bookmaker eksekusi yang punya 1X2 lengkap selalu menang atas
+   * kelengkapan mentah: rekomendasi wajib bisa dipasang di aplikasi
+   * pemilik sistem (temuan Norwich-Cardiff, 15 Nov 2026: leg
+   * AH +1.75 @1.289 berasal dari tangga 1xbet yang tidak ada di Saba,
+   * sementara M88 hanya menawarkan line utama Spread -0.75). */
+  const preferredBook = preferred.find((b) => counts.has(b));
   const bookmaker =
+    preferredBook ??
     [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ??
     structured.matchWinner[0]?.bookmaker ??
     null;
+  if (preferredBook && preferredBook !== preferred[0]) {
+    warnings.push(`bookmaker eksekusi ${preferred[0]} tidak menyediakan 1X2 lengkap — memakai ${preferredBook} (periksa ketersediaan di aplikasi Anda)`);
+  } else if (!preferredBook && bookmaker) {
+    warnings.push(`bookmaker eksekusi ${preferred[0]} tidak tersedia — memakai ${bookmaker} (periksa ketersediaan di aplikasi Anda)`);
+  }
 
   if (!bookmaker) {
     return { odds1x2: null, totals: [], ah: [], btts: null, bookmaker: null, warnings: ["tidak ada odds 1X2 dari bookmaker mana pun"] };

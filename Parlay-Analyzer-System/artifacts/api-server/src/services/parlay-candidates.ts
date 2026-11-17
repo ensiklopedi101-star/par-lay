@@ -82,6 +82,7 @@ export interface SelectionRow {
   p_model_only: number | null;
   ev: number;
   ev_conservative: number;
+  bookmaker?: string | null;
 }
 
 export interface FixtureMeta {
@@ -154,9 +155,21 @@ export function candidatesFromSelectionRows(
       date: meta.date ?? null,
       homeTeam: meta.homeTeam ?? null,
       awayTeam: meta.awayTeam ?? null,
+      bookmaker: row.bookmaker ?? null,
       selection,
     });
   }
 
-  return candidates;
+  /* Ledger bisa memuat market yang sama dari dua jalur/bandar (v1 LLM
+   * dan v2 quant, atau 1xbet vs M88). Untuk kunci yang sama, baris dari
+   * bookmaker eksekusi (M88 — proksi Saba) yang dipertahankan, agar
+   * rekomendasi memakai line & odds yang bisa dipasang pemilik sistem. */
+  const rank = (b?: string | null) => (b === "M88" ? 0 : b === "1xbet" ? 1 : 2);
+  const byKey = new Map<string, CompositionCandidate>();
+  for (const c of candidates) {
+    const key = `${c.fixtureId}|${c.marketKey}`;
+    const existing = byKey.get(key);
+    if (!existing || rank(c.bookmaker) < rank(existing.bookmaker)) byKey.set(key, c);
+  }
+  return [...byKey.values()];
 }

@@ -147,7 +147,12 @@ interface Candidate {
 function candidates(odds: LlmLedgerOdds): Candidate[] {
   const out: Candidate[] = [];
 
-  const mw = odds.matchWinner.find((r) => validOdds(r.home) && validOdds(r.draw) && validOdds(r.away));
+  /* Bookmaker eksekusi (M88, proksi Saba) didahulukan — sama seperti
+   * adapter quant; baris pertama tidak lagi menentukan bandar acuan. */
+  const mw = ["M88", "1xbet"]
+    .map((b) => odds.matchWinner.find((r) => r.bookmaker === b && validOdds(r.home) && validOdds(r.draw) && validOdds(r.away)))
+    .find(Boolean)
+    ?? odds.matchWinner.find((r) => validOdds(r.home) && validOdds(r.draw) && validOdds(r.away));
   /*
    * Satu bookmaker untuk seluruh fixture: bandar baris 1X2 menjadi acuan,
    * dan pasar lain hanya diambil dari bandar yang sama bila tersedia.
