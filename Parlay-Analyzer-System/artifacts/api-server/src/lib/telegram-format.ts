@@ -37,7 +37,7 @@ export function formatTicketMessage(
     const isBoosterLeg = ticket.boosterMarketKey != null && leg.marketKey === ticket.boosterMarketKey && leg.fixtureId === ticket.legs.find((l) => l.marketKey === ticket.boosterMarketKey)?.fixtureId;
     lines.push(
       `${i + 1}. ${match}${isBoosterLeg ? " ⭐ PENGUAT" : ""}` +
-      `\n   ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${leg.bookmaker ? ` (${leg.bookmaker})` : ""}${best}` +
+      `\n   ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${leg.bookmaker ? (leg.bookmaker === "M88" ? ` (${leg.bookmaker})` : ` (acuan ${leg.bookmaker} · odds di aplikasi bisa berbeda)`) : ""}${best}` +
       `\n   ${leg.league} · pasar ${pct(leg.pUsed)} · ${leg.character}` +
       (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui"
         ? ` · konteks ${leg.contextRisk.level}`

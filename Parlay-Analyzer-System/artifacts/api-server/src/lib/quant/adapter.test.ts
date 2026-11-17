@@ -347,5 +347,23 @@ test("buildOddsInput mendahulukan bookmaker eksekusi M88 atas tangga lengkap 1xb
   assert.equal(result.bookmaker, "M88");
   assert.deepEqual(result.totals.map((x) => x.line), [3.5]);
   assert.deepEqual(result.ah.map((x) => x.line), [-0.75]);
-  assert.equal(result.btts, null); // M88 tidak memasok BTTS di feed ini
+  assert.deepEqual(result.btts, { yes: 1.35, no: 2.94 }); // dipinjam per-pasar dari 1xbet
+  assert.equal(result.sources.BTTS, "1xbet");
+});
+
+test("buildOddsInput meminjam pasar yang hilang per-pasar dari cadangan (BTTS M88 <- 1xbet)", () => {
+  const result = buildOddsInput({
+    matchWinner: [
+      { bookmaker: "1xbet", home: 1.73, draw: 3.5, away: 3.87 },
+      { bookmaker: "M88", home: 1.76, draw: 3.4, away: 3.7 },
+    ],
+    overUnder: [{ bookmaker: "M88", line: 3.5, over: 1.85, under: 1.97 }],
+    asianHandicap: [{ bookmaker: "M88", line: -0.75, home: 1.92, away: 1.92 }],
+    btts: [{ bookmaker: "1xbet", yes: 1.35, no: 2.94 }],
+  });
+  assert.equal(result.bookmaker, "M88");
+  assert.deepEqual(result.btts, { yes: 1.35, no: 2.94 });
+  assert.equal(result.sources.BTTS, "1xbet");
+  assert.equal(result.sources.Totals, "M88");
+  assert.ok(result.warnings.some((w) => w.includes("BTTS") && w.includes("acuan 1xbet")));
 });

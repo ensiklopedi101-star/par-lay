@@ -110,7 +110,7 @@ export async function shadowLogQuantAnalysis(input: ShadowLogInput): Promise<Sha
       ev: s.ev,
       ev_conservative: s.evConservative,
       was_bet: input.betMarketKey != null && input.betMarketKey === s.key,
-      bookmaker: result.bookmaker,
+      bookmaker: s.bookmaker ?? result.bookmaker,
     }));
 
     const { error } = await supabase

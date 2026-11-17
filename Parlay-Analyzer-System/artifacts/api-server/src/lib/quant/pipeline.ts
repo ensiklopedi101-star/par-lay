@@ -45,6 +45,8 @@ export interface MatchInput {
   adjustment?: LlmAdjustment | null;
   /** EV minimum (nominal) agar bet layak */
   minEv?: number;
+  /** Bandar sumber per keluarga pasar (fallback per-pasar). */
+  bookmakerByFamily?: Partial<Record<"ML" | "Totals" | "AH" | "BTTS", string | null>>;
   kellyFraction?: number;
   maxStakePct?: number;
 }
@@ -69,6 +71,8 @@ export interface SelectionEval {
   minOdds: number;
   passes: boolean;
   rejectReasons: string[];
+  /** Bandar asal odds selection ini (diisi jalur adapter). */
+  bookmaker?: string | null;
 }
 
 export interface MatchAnalysis {
@@ -189,6 +193,7 @@ export function analyzeMatch(input: MatchInput): MatchAnalysis {
       minOdds: pFinal > 0 ? (1 + minEv) / pFinal : Infinity,
       passes: rejectReasons.length === 0,
       rejectReasons,
+      bookmaker: input.bookmakerByFamily?.[family] ?? null,
     });
   };
 
