@@ -88517,8 +88517,11 @@ async function handleCron(req, res) {
     return;
   }
   if (action === "analyze") {
-    const limit = Number(req.query["limit"]) || 3;
-    runAutoAnalysis({ limit }).then((summary) => {
+    const rawLimit = Number(req.query["limit"]);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), 20) : 10;
+    const rawBudget = Number(req.query["budgetMs"]);
+    const budgetMs = Number.isFinite(rawBudget) && rawBudget >= 1e4 ? Math.min(Math.trunc(rawBudget), 5e4) : void 0;
+    runAutoAnalysis({ limit, budgetMs }).then((summary) => {
       res.json({ message: "Analisis otomatis selesai", ...summary });
     }).catch((err) => {
       logger.error({ err }, "Cron-triggered auto analysis gagal");

@@ -261,8 +261,18 @@ async function handleCron(req: any, res: any) {
      * Bukti dari DB: maksimum 6 prediksi per hari, semuanya dalam rentang
      * 4 menit, lalu berhenti. Itu pola eksekusi terpotong.
      */
-    const limit = Number(req.query["limit"]) || 3;
-    runAutoAnalysis({ limit })
+    /* Bawaan 10 (bukan 3): dengan job analyze tiap 6 jam, 3 per putaran
+     * hanya menguras ±12 fixture/hari dan antrean tidak habis sebelum
+     * kick-off terdekat. Anggaran waktu tetap penjaga sebenarnya —
+     * runAutoAnalysis berhenti sendiri sebelum batas Vercel, jadi
+     * menaikkan limit aman; fixture diproses dari kick-off terdekat. */
+    const rawLimit = Number(req.query["limit"]);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), 20) : 10;
+    const rawBudget = Number(req.query["budgetMs"]);
+    const budgetMs = Number.isFinite(rawBudget) && rawBudget >= 10_000
+      ? Math.min(Math.trunc(rawBudget), 50_000)
+      : undefined;
+    runAutoAnalysis({ limit, budgetMs })
       .then((summary) => {
         res.json({ message: "Analisis otomatis selesai", ...summary });
       })

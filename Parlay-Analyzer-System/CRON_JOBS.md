@@ -25,7 +25,7 @@ eksekusi di cron-job.org adalah tempat pertama memeriksa kegagalan.
 |---|---|---|---|---|
 | 1 | keep-alive | tiap 30 mnt | `action=keep-alive` | 200 + `staleRunsClosed` |
 | 2 | sync per liga (7 job) | tiap jam, menit bergeser (0, 8, 16, …) | `action=sync&league=<slug>&max=10` | baris baru di `odds_history` |
-| 3 | **analyze** | tiap jam, setelah sync | `action=analyze` | respons `analysed > 0` saat ada fixture berharga; baris baru di `ai_predictions` + `prediction_selections` |
+| 3 | **analyze** | tiap 6 jam (keputusan pemilik 17 Nov 2026) | `action=analyze` (bawaan kini 10 fixture/putaran, berhenti sendiri sebelum batas Vercel; antrean diproses dari kick-off terdekat) | respons `analysed > 0` saat ada fixture berharga; baris baru di `ai_predictions` + `prediction_selections` |
 | 4 | closing | tiap 5 mnt | `action=closing` | `odds_close` terisi pada ledger (T-10 mnt) |
 | 5 | results | tiap jam | `action=results` | skor akhir terisi di `fixtures` |
 | 6 | outcomes | tiap jam, ±5 mnt setelah results | `action=outcomes` | `outcome` terisi pada `prediction_selections` |
@@ -112,3 +112,8 @@ fixtures terjadwal jauh ke depan, **tetapi analisis hanya muncul pada
 Artinya job `analyze` di cron-job.org **belum terbukti berjalan
 terjadwal** — periksa keberadaan/riwayat job #3 di cron-job.org
 (token salah → 401 tanpa jejak di database; lihat diagnosis 13 Nov).
+
+Catatan ritme 6 jam (17 Nov 2026): pada ±12 putaran sebelum kick-off
+20 Nov, kapasitas ±10/putaran cukup untuk menguras antrean dari yang
+paling mendesak. Bila `remaining` masih besar mendekati hari-H,
+naikkan sementara ke tiap jam atau tambahkan `&limit=20` pada URL job.
