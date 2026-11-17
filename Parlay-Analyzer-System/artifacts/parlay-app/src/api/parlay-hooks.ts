@@ -729,6 +729,7 @@ export interface MarketFirstTicketData {
     homeTeam?: string | null;
     awayTeam?: string | null;
     bookmaker?: string | null;
+    substitutionHint?: string | null;
     displayLabel: string;
     character: "didukung-statistik" | "pasar-stabil" | "rapuh" | "kontradiktif";
     stability: number;

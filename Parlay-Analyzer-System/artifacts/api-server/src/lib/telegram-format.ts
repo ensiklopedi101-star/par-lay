@@ -42,7 +42,8 @@ export function formatTicketMessage(
       (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui"
         ? ` · konteks ${leg.contextRisk.level}`
         : "") +
-      (hunt?.drift === "menjauh" ? " · ⚠️ harga menjauh" : ""),
+      (hunt?.drift === "menjauh" ? " · ⚠️ harga menjauh" : "") +
+      (leg.substitutionHint ? `\n   ↪ ${leg.substitutionHint}` : ""),
     );
   });
   const warnings = ticket.notes.filter((n) => n.includes("rapuh") || n.includes("TINGGI") || n.includes("tidak tercapai"));

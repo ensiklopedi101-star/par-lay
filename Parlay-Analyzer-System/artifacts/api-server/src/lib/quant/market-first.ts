@@ -23,7 +23,7 @@ import type { SelectionEval } from "./pipeline";
 import { analyzeParlay, type ParlayLeg } from "./parlay";
 import type { PriceHuntResult } from "./price-hunt";
 import type { ContextRisk } from "./context-risk";
-import { friendlyMarketLabel } from "./market-label";
+import { friendlyMarketLabel, substitutionHint } from "./market-label";
 
 export type LegCharacter =
   | "didukung-statistik"
@@ -39,6 +39,8 @@ export interface MarketFirstLeg {
   homeTeam?: string | null;
   awayTeam?: string | null;
   bookmaker?: string | null;
+  /** Panduan ganti line bila aplikasi pemilik sistem tak menyediakannya. */
+  substitutionHint?: string | null;
   /** Label market yang bisa dibaca manusia, mis. "Over 2.5 Gol". */
   displayLabel: string;
   selection: SelectionEval;
@@ -213,6 +215,7 @@ function preparePool(
       homeTeam: candidate.homeTeam ?? null,
       awayTeam: candidate.awayTeam ?? null,
       bookmaker: candidate.bookmaker ?? null,
+      substitutionHint: substitutionHint(candidate.marketKey),
       displayLabel: friendlyMarketLabel(candidate.marketKey),
       selection,
       pUsed,

@@ -77409,7 +77409,8 @@ function formatTicketMessage(ticket, generatedAt = /* @__PURE__ */ new Date()) {
     lines.push(
       `${i + 1}. ${match}${isBoosterLeg2 ? " \u2B50 PENGUAT" : ""}
    ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${leg.bookmaker ? leg.bookmaker === "M88" ? ` (${leg.bookmaker})` : ` (acuan ${leg.bookmaker} \xB7 odds di aplikasi bisa berbeda)` : ""}${best}
-   ${leg.league} \xB7 pasar ${pct2(leg.pUsed)} \xB7 ${leg.character}` + (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui" ? ` \xB7 konteks ${leg.contextRisk.level}` : "") + (hunt?.drift === "menjauh" ? " \xB7 \u26A0\uFE0F harga menjauh" : "")
+   ${leg.league} \xB7 pasar ${pct2(leg.pUsed)} \xB7 ${leg.character}` + (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui" ? ` \xB7 konteks ${leg.contextRisk.level}` : "") + (hunt?.drift === "menjauh" ? " \xB7 \u26A0\uFE0F harga menjauh" : "") + (leg.substitutionHint ? `
+   \u21AA ${leg.substitutionHint}` : "")
     );
   });
   const warnings = ticket.notes.filter((n) => n.includes("rapuh") || n.includes("TINGGI") || n.includes("tidak tercapai"));
@@ -77469,6 +77470,21 @@ function friendlyMarketLabel(marketKey2) {
     return `Babak Pertama \u2014 ${key.slice(3).replace(/_/g, " ")}`;
   }
   return key.replace(/[:_]/g, " ");
+}
+function substitutionHint(marketKey2) {
+  const parts = marketKey2.trim().toLowerCase().split(":");
+  if (parts[0] !== "tot" || parts.length < 3) return null;
+  const side = parts[1];
+  const line = Number(parts[2]);
+  if (!Number.isFinite(line) || Math.abs(line - Math.round(line)) > 1e-9) return null;
+  const fmt = (n) => Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0$/, "");
+  if (side === "over") {
+    return `bila Over ${fmt(line)} tak ada di aplikasi: Over ${fmt(line + 0.5)} (arah sama, tanpa refund bila tepat ${fmt(line)} gol)`;
+  }
+  if (side === "under") {
+    return `bila Under ${fmt(line)} tak ada di aplikasi: Under ${fmt(line + 0.5)} (arah sama, lebih longgar \u2014 tepat ${fmt(line)} gol ikut menang, odds lebih kecil)`;
+  }
+  return null;
 }
 var init_market_label = __esm({
   "src/lib/quant/market-label.ts"() {
@@ -77561,6 +77577,7 @@ function preparePool(candidates2, options, bounds) {
       homeTeam: candidate.homeTeam ?? null,
       awayTeam: candidate.awayTeam ?? null,
       bookmaker: candidate.bookmaker ?? null,
+      substitutionHint: substitutionHint(candidate.marketKey),
       displayLabel: friendlyMarketLabel(candidate.marketKey),
       selection,
       pUsed,
@@ -88193,15 +88210,9 @@ async function findFixturesAwaitingAnalysis(options = {}) {
   const rows = upcoming ?? [];
   if (rows.length === 0) return { fixtures: [], withOdds: 0, withoutOdds: 0 };
   const ids = rows.map((f) => f.fixture_id);
-  const { data: existing } = await client.from("ai_predictions").select("fixture_id, status, market_bet, best_market, best_odds").in("fixture_id", ids);
+  const { data: existing } = await client.from("ai_predictions").select("fixture_id").in("fixture_id", ids);
   const done = new Set(
-    (existing ?? []).filter((row) => {
-      const market = String(row.market_bet ?? row.best_market ?? "").trim().toLowerCase();
-      const odds = Number(row.best_odds);
-      return Boolean(
-        market && market !== "no_bet" && market !== "no bet" && Number.isFinite(odds) && odds > 1 && String(row.status ?? "active").toLowerCase() !== "no_bet"
-      );
-    }).map((row) => Number(row.fixture_id))
+    (existing ?? []).map((row) => Number(row.fixture_id))
   );
   const freshCutoffIso = new Date(Date.now() - ODDS_FRESHNESS_MAX_MS).toISOString();
   const oddsRows = await collectPagedRows(async (from, to) => {
