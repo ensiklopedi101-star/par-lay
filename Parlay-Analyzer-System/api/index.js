@@ -56019,7 +56019,7 @@ FORMAT OUTPUT (teks singkat lalu JSON):
   "risk_level": "Low|Medium|High",
   "total_odds": 0,
   "selections": [
-    {"fixture_id": "<id>", "market_type": "Totals", "outcome": "over", "line": 2.5,
+    {"fixture_id": "<FIXTURE_ID numerik dari baris FIXTURE_ID di prompt \u2014 salin persis, bukan nama tim>", "market_type": "Totals", "outcome": "over", "line": 2.5,
      "probability": 0.58, "confidence": 7.5, "odds": 1.85,
      "rationale": "satu-dua kalimat berbasis data prompt"}
   ],
@@ -58437,7 +58437,7 @@ function formatOddsBlock(homeTeam, awayTeam, odds) {
   }
   return lines.join("\n");
 }
-function buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, relationalBlock, homeStats, awayStats) {
+function buildPrompt(fixtureId, homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, relationalBlock, homeStats, awayStats) {
   const fmt = (stats, label) => {
     const meta = stats._meta;
     if (meta === "COMBINED" || meta === "BASELINE_ONLY") {
@@ -58453,6 +58453,7 @@ MUSIM SEBELUMNYA (${baselineLabel}): ${JSON.stringify(baseline)}
     return JSON.stringify(stats[label] ?? null);
   };
   return `PERTANDINGAN: ${homeTeam} vs ${awayTeam}
+FIXTURE_ID: ${fixtureId} \u2014 salin persis ID numerik ini ke field "fixture_id" pada setiap selection JSON (bukan nama tim).
 
 ${oddsBlock}
 
@@ -58546,7 +58547,14 @@ function extractPredictionRecommendation(text, fixtureId, teams = {}) {
   const matchingSelection = fixtureId ? selections.find(
     (item) => item && typeof item === "object" && String(item.fixture_id ?? "").trim() === fixtureId
   ) : void 0;
-  const selected = matchingSelection ?? (fixtureId && selections.length > 0 ? root : selections.find((item) => item && typeof item === "object") ?? root);
+  const teamLabelSelection = !matchingSelection && (teams.homeTeam || teams.awayTeam) ? selections.find((item) => {
+    if (!item || typeof item !== "object") return false;
+    const label = String(item.fixture_id ?? "").toLowerCase();
+    if (!label) return false;
+    return [teams.homeTeam, teams.awayTeam].filter((name) => Boolean(name)).some((name) => label.includes(name.toLowerCase()));
+  }) : void 0;
+  const singleSelection = !matchingSelection && !teamLabelSelection && selections.length === 1 ? selections[0] : void 0;
+  const selected = matchingSelection ?? teamLabelSelection ?? singleSelection ?? (fixtureId && selections.length > 0 ? root : selections.find((item) => item && typeof item === "object") ?? root);
   const explicitSelection = String(selected.selection ?? "").trim();
   const market = String(selected.market ?? selected.market_bet ?? root.market_bet ?? "").trim();
   const isNoBetToken = (value) => /^(no[\s_-]*bet|skip)$/i.test(value.trim());
@@ -58760,11 +58768,12 @@ ${agentInstructions}` : null,
     V5_CONTRACT_SUFFIX
   ].filter((section) => Boolean(section)).join("\n\n");
   console.log(`[AI-ANALYSIS] Persona sumber: ${persona === DEFAULT_SYSTEM_INSTRUCTION ? "DEFAULT (fallback)" : "SUPABASE (kustom)"}`);
-  const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, relationalBlock, homeStats, awayStats);
+  const promptText = buildPrompt(fixtureId, homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, relationalBlock, homeStats, awayStats);
   let aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
   let predictionText = aiResult.text;
   let parsedRecommendation = extractPredictionRecommendation(predictionText, fixtureId, { homeTeam, awayTeam });
-  if (parsedRecommendation.marketBet && parsedRecommendation.probability == null) {
+  const hasUnparsedSelections = parsedRecommendation.marketBet == null && /"selections"\s*:\s*\[\s*\{/.test(predictionText);
+  if (parsedRecommendation.marketBet && parsedRecommendation.probability == null || hasUnparsedSelections) {
     const repairPrompt = [
       `Perbaiki output terstruktur untuk fixture ${fixtureId}: ${homeTeam} vs ${awayTeam}.`,
       "Respons sebelumnya memilih market tetapi tidak menyimpan probability eksplisit.",
