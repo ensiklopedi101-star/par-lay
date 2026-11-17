@@ -1063,6 +1063,7 @@ function formatOddsBlock(homeTeam: string, awayTeam: string, odds: StructuredOdd
    BUILD FULL PROMPT (with Trend + RAG)
    ═══════════════════════════════════════════════════════════════ */
 function buildPrompt(
+  fixtureId: string,
   homeTeam: string,
   awayTeam: string,
   oddsBlock: string,
@@ -1095,6 +1096,7 @@ MUSIM SEBELUMNYA (${baselineLabel}): ${JSON.stringify(baseline)}
   };
 
   return `PERTANDINGAN: ${homeTeam} vs ${awayTeam}
+FIXTURE_ID: ${fixtureId} — salin persis ID numerik ini ke field "fixture_id" pada setiap selection JSON (bukan nama tim).
 
 ${oddsBlock}
 
@@ -1375,8 +1377,33 @@ export function extractPredictionRecommendation(
          String((item as Record<string, unknown>).fixture_id ?? "").trim() === fixtureId,
        )
      : undefined;
+   /*
+    * Model kerap menulis fixture_id sebagai label laga ("Home vs Away")
+    * alih-alih ID numerik — prompt lama tidak pernah memberi tahu ID-nya.
+    * Tanpa toleransi ini, seleksi valid dari model dibuang dan laga dicatat
+    * sebagai NO BET palsu (produksi 17 Nov 2026: Troyes & Bilbao sama-sama
+    * merekomendasikan market, keduanya tercatat NO BET confidence 0).
+    * Urutan toleransi: label memuat nama tim → seleksi tunggal (respons
+    * analyzeFixture selalu satu fixture). Respons multi-seleksi tanpa
+    * kecocokan tetap jatuh ke root seperti sebelumnya.
+    */
+   const teamLabelSelection = !matchingSelection && (teams.homeTeam || teams.awayTeam)
+     ? selections.find((item) => {
+         if (!item || typeof item !== "object") return false;
+         const label = String((item as Record<string, unknown>).fixture_id ?? "").toLowerCase();
+         if (!label) return false;
+         return [teams.homeTeam, teams.awayTeam]
+           .filter((name): name is string => Boolean(name))
+           .some((name) => label.includes(name.toLowerCase()));
+       })
+     : undefined;
+   const singleSelection = !matchingSelection && !teamLabelSelection && selections.length === 1
+     ? selections[0]
+     : undefined;
    const selected = (
      matchingSelection ??
+     teamLabelSelection ??
+     singleSelection ??
      (fixtureId && selections.length > 0
        ? root
        : selections.find((item) => item && typeof item === "object") ?? root)
@@ -1692,7 +1719,7 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
   ].filter((section): section is string => Boolean(section)).join("\n\n");
   console.log(`[AI-ANALYSIS] Persona sumber: ${persona === DEFAULT_SYSTEM_INSTRUCTION ? "DEFAULT (fallback)" : "SUPABASE (kustom)"}`);
 
-   const promptText = buildPrompt(homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, relationalBlock, homeStats, awayStats);
+   const promptText = buildPrompt(fixtureId, homeTeam, awayTeam, oddsBlock, trendBlock, lessonsBlock, relationalBlock, homeStats, awayStats);
     let aiResult = await generateAIResponse(apiKey, finalPersona, promptText);
     let predictionText = aiResult.text;
     let parsedRecommendation = extractPredictionRecommendation(predictionText, fixtureId, { homeTeam, awayTeam });
@@ -1703,7 +1730,9 @@ export async function analyzeFixture(fixtureId: string, context?: BatchAnalysisC
      * do not retry a deliberate NO BET or spend another provider request on a
      * negative-EV recommendation.
      */
-    if (parsedRecommendation.marketBet && parsedRecommendation.probability == null) {
+    const hasUnparsedSelections = parsedRecommendation.marketBet == null
+      && /"selections"\s*:\s*\[\s*\{/.test(predictionText);
+    if ((parsedRecommendation.marketBet && parsedRecommendation.probability == null) || hasUnparsedSelections) {
       const repairPrompt = [
         `Perbaiki output terstruktur untuk fixture ${fixtureId}: ${homeTeam} vs ${awayTeam}.`,
         "Respons sebelumnya memilih market tetapi tidak menyimpan probability eksplisit.",

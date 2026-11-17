@@ -94,7 +94,7 @@ FORMAT OUTPUT (teks singkat lalu JSON):
   "risk_level": "Low|Medium|High",
   "total_odds": 0,
   "selections": [
-    {"fixture_id": "<id>", "market_type": "Totals", "outcome": "over", "line": 2.5,
+    {"fixture_id": "<FIXTURE_ID numerik dari baris FIXTURE_ID di prompt — salin persis, bukan nama tim>", "market_type": "Totals", "outcome": "over", "line": 2.5,
      "probability": 0.58, "confidence": 7.5, "odds": 1.85,
      "rationale": "satu-dua kalimat berbasis data prompt"}
   ],
