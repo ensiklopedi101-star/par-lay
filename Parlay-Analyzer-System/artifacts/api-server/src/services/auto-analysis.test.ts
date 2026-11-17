@@ -180,6 +180,10 @@ test("kegagalan satu fixture tidak menghentikan yang lain", async () => {
   assert.equal(summary.analysed, 2);
   assert.equal(summary.failed, 1);
   assert.ok(summary.notes.some((n) => n.includes("gagal dianalisis")));
+  /* Kegagalan harus bisa dibaca dari respons: siapa dan kenapa. */
+  assert.equal(summary.failures.length, 1);
+  assert.equal(summary.failures[0]!.fixtureId, 2);
+  assert.equal(summary.failures[0]!.reason, "model menolak");
 });
 
 test("semua selesai dalam anggaran: dinyatakan selesai, bukan terpotong", async () => {

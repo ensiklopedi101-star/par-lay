@@ -63,6 +63,11 @@ export interface AutoAnalysisSummary {
   skippedForTime: number;
   /** Fixture yang gagal dianalisis (bukan soal waktu). */
   failed: number;
+  /** Rincian kegagalan per fixture: siapa dan kenapa. Tanpa ini,
+   * kegagalan hanya ada di log server yang tidak bisa dibaca pemilik
+   * sistem dari respons cron (temuan 17 Nov 2026: failed=3 tanpa
+   * satu pun petunjuk sebab). */
+  failures: Array<{ fixtureId: number; match: string; reason: string }>;
   /** Fixture yang masih belum dianalisis setelah putaran ini. */
   remaining: number;
   /** Milidetik yang terpakai. */
@@ -227,6 +232,7 @@ export async function runAutoAnalysis(
     analysed: 0,
     skippedForTime: 0,
     failed: 0,
+    failures: [],
     remaining: 0,
     elapsedMs: 0,
     stoppedByBudget: false,
@@ -297,6 +303,11 @@ export async function runAutoAnalysis(
       );
     } catch (err) {
       summary.failed++;
+      summary.failures.push({
+        fixtureId: fixture.fixture_id,
+        match: `${fixture.home_team_name ?? "?"} vs ${fixture.away_team_name ?? "?"}`,
+        reason: (err instanceof Error ? err.message : String(err)).slice(0, 300),
+      });
       logger.warn(
         { err, fixtureId: fixture.fixture_id },
         "[AUTO-ANALYSIS] Gagal menganalisis fixture, lanjut ke berikutnya",
