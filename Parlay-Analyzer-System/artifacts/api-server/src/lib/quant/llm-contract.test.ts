@@ -26,3 +26,13 @@ test("teks tanpa lambda_adjustment menghasilkan null", () => {
   assert.equal(extractLambdaAdjustment("tidak ada json di sini"), null);
   assert.equal(extractLambdaAdjustment(`{"selections":[{"probability":0.5}]}`), null);
 });
+
+test("Persona V6 terpadu: tanpa perintah lama yang bertabrakan", async () => {
+  const { PERSONA_V6 } = await import("./llm-contract.js");
+  assert.doesNotMatch(PERSONA_V6, /Sharp Money Detection/i);
+  assert.doesNotMatch(PERSONA_V6, /stake 1-3%/i);
+  assert.doesNotMatch(PERSONA_V6, /ANALISIS EV/i);
+  assert.match(PERSONA_V6, /jangan hitung ulang/i);
+  assert.match(PERSONA_V6, /NO BET/);
+  assert.match(PERSONA_V6, /lambda_adjustment/);
+});
