@@ -654,6 +654,28 @@ router.get("/sync/status", async (_req, res) => {
       lastSyncAt = fallback?.updated_at ?? null;
     }
 
+    /* Kesegaran NYATA dari artefaknya langsung (diagnosis 17 Nov 2026):
+     * panel sebelumnya hanya membaca sync_runs — yang hanya ditulis
+     * sync PENUH — sehingga sync per-liga cron-job.org yang sehat pun
+     * tampak "2 hari lalu". Odds terakhir dan analisis terakhir adalah
+     * dua jam yang sebenarnya ditanyakan pemilik sistem. */
+    let lastOddsAt: string | null = null;
+    let oddsRows24h = 0;
+    let lastAnalysisAt: string | null = null;
+    try {
+      const since24h = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const [oddsLatest, oddsCount, analysisLatest] = await Promise.all([
+        supabase.from("odds_history").select("captured_at").order("captured_at", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("odds_history").select("*", { count: "exact", head: true }).gte("captured_at", since24h),
+        supabase.from("ai_predictions").select("created_at").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      ]);
+      lastOddsAt = (oddsLatest.data as { captured_at?: string } | null)?.captured_at ?? null;
+      oddsRows24h = oddsCount.count ?? 0;
+      lastAnalysisAt = (analysisLatest.data as { created_at?: string } | null)?.created_at ?? null;
+    } catch (err) {
+      logger.debug({ err }, "Gagal membaca kesegaran odds/analisis");
+    }
+
     /* Run yang masih berjalan diambil terpisah: kalau sebuah run berstatus
      * `running`, created_at run itu adalah yang terbaru sehingga sudah
      * tertangkap di atas. Tetapi bila proses mati di tengah jalan (mis.
@@ -679,6 +701,9 @@ router.get("/sync/status", async (_req, res) => {
       /* ─── Detail transparansi (baru) ─── */
       lastSyncRun,
       recentSyncRuns,
+      lastOddsAt,
+      oddsRows24h,
+      lastAnalysisAt,
       scanDays,
       runningAgeSeconds,
       /* `true` bila ada run berstatus `running` yang umurnya melewati ambang —

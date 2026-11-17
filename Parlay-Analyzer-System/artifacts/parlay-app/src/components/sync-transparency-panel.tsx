@@ -182,6 +182,22 @@ export function SyncTransparencyPanel({
       </CardHeader>
 
       <CardContent className="space-y-3">
+        {/* Ringkasan satu pandangan — tiga pertanyaan pemilik sistem.
+            Dua jam berbeda di panel ini memang membingungkan dahulu:
+            odds/analisis dibaca dari artefaknya, sedangkan riwayat
+            sync_runs hanya mencatat sync PENUH (sync per-liga tiap jam
+            tidak menulis ke sana). */}
+        <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-xs leading-relaxed">
+          <div className="font-semibold text-sm">Apakah penjadwalan berjalan?</div>
+          <ul className="mt-1.5 space-y-1 text-muted-foreground">
+            <li>📈 <strong className="text-foreground">Odds:</strong> terakhir masuk <strong className="text-foreground">{formatRelative(status?.lastOddsAt)}</strong> ({formatCount(status?.oddsRows24h)} baris dalam 24 jam)</li>
+            <li>🧠 <strong className="text-foreground">Analisis:</strong> terakhir <strong className="text-foreground">{formatRelative(status?.lastAnalysisAt)}</strong></li>
+            <li>🗂️ <strong className="text-foreground">Sync penuh terakhir:</strong> {formatRelative(run?.finishedAt ?? run?.startedAt)} — status di bawah ini hanya riwayat sync penuh; sync per-liga tiap jam tidak tercatat di sini.</li>
+            {run?.status === "partial" && (
+              <li>ℹ️ <strong className="text-foreground">"Sebagian" bukan gagal:</strong> sync penuh berhenti pada batas waktu 45 detik dan sisa liga menyusul lewat job per-liga{run.errorMessage ? ` — ${run.errorMessage}` : ""} (error: {run.errors}).</li>
+            )}
+          </ul>
+        </div>
         {!run ? (
           <div className="rounded-lg border border-dashed border-border p-4 text-center">
             <History className="w-5 h-5 mx-auto text-muted-foreground/60" />

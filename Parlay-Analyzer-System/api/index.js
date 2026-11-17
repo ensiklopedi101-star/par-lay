@@ -84302,6 +84302,22 @@ router3.get("/sync/status", async (_req, res) => {
       const { data: fallback } = await supabase.from("fixtures").select("updated_at").order("updated_at", { ascending: false }).limit(1).maybeSingle();
       lastSyncAt = fallback?.updated_at ?? null;
     }
+    let lastOddsAt = null;
+    let oddsRows24h = 0;
+    let lastAnalysisAt = null;
+    try {
+      const since24h = new Date(Date.now() - 24 * 3600 * 1e3).toISOString();
+      const [oddsLatest, oddsCount, analysisLatest] = await Promise.all([
+        supabase.from("odds_history").select("captured_at").order("captured_at", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("odds_history").select("*", { count: "exact", head: true }).gte("captured_at", since24h),
+        supabase.from("ai_predictions").select("created_at").order("created_at", { ascending: false }).limit(1).maybeSingle()
+      ]);
+      lastOddsAt = oddsLatest.data?.captured_at ?? null;
+      oddsRows24h = oddsCount.count ?? 0;
+      lastAnalysisAt = analysisLatest.data?.created_at ?? null;
+    } catch (err) {
+      logger.debug({ err }, "Gagal membaca kesegaran odds/analisis");
+    }
     const runningRun = recentSyncRuns.find((r) => r.status === "running") ?? null;
     const runningAgeSeconds = runningRun ? Math.max(0, Math.round((Date.now() - new Date(runningRun.startedAt).getTime()) / 1e3)) : null;
     res.json({
@@ -84318,6 +84334,9 @@ router3.get("/sync/status", async (_req, res) => {
       /* ─── Detail transparansi (baru) ─── */
       lastSyncRun,
       recentSyncRuns,
+      lastOddsAt,
+      oddsRows24h,
+      lastAnalysisAt,
       scanDays,
       runningAgeSeconds,
       /* `true` bila ada run berstatus `running` yang umurnya melewati ambang —

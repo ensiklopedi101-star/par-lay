@@ -92,3 +92,23 @@ aslinya (`jobEvidence`): sync dari `odds_history`, analyze dari
 ini seluruhnya berada di 6 fixture berkick-off 20–21 Nov, closing &
 outcomes berstatus sah **"menunggu bukti pertama"** — jatuh temponya
 setelah kick-off pertama itu, bukan hari ini.
+
+## Diagnosis 17 Nov 2026 — panel membingungkan & analisis terjadwal belum terbukti
+
+Panel "Transparansi Sync" dulu hanya membaca `sync_runs` (yang hanya
+ditulis sync PENUH), jadi tertulis "2 hari lalu" padahal snapshot odds
+masuk beberapa menit lalu. Panel kini membuka dengan ringkasan tiga
+jam terpisah: odds terakhir (dari `odds_history`), analisis terakhir
+(dari `ai_predictions`), dan sync penuh terakhir.
+
+Status "partial" pada sync penuh **bukan gagal**: `error_message`
+selalu "Batas waktu tercapai — sisa liga dijadwalkan ulang", `errors=0`.
+Sync penuh memang berhenti di batas 45 detik setelah ±2 liga; sisa
+liga diambil job per-liga cron-job.org yang tidak menulis `sync_runs`.
+
+Bukti produksi 17 Nov 11:10 UTC: odds segar (2.816 baris hari itu),
+fixtures terjadwal jauh ke depan, **tetapi analisis hanya muncul pada
+13, 14, dan 17 Nov** (17 Nov = pemanggilan manual pemilik sistem).
+Artinya job `analyze` di cron-job.org **belum terbukti berjalan
+terjadwal** — periksa keberadaan/riwayat job #3 di cron-job.org
+(token salah → 401 tanpa jejak di database; lihat diagnosis 13 Nov).
