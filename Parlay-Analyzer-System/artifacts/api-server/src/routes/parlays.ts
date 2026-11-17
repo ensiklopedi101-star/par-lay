@@ -328,7 +328,7 @@ router.get("/parlays/compose-preview", async (req, res) => {
 
     const { data: rows, error } = await supabase
       .from("prediction_selections")
-      .select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative")
+      .select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative, bookmaker")
       .order("ev_conservative", { ascending: false })
       .limit(1000);
 

@@ -72,6 +72,8 @@ export interface CompositionCandidate {
   date?: string | null;
   homeTeam?: string | null;
   awayTeam?: string | null;
+  /** Bandar asal odds leg ini — wajib tampil agar pemilik sistem bisa memeriksa ketersediaan di aplikasinya. */
+  bookmaker?: string | null;
   selection: SelectionEval;
 }
 

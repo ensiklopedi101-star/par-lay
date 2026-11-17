@@ -38,6 +38,7 @@ export interface MarketFirstLeg {
   date?: string | null;
   homeTeam?: string | null;
   awayTeam?: string | null;
+  bookmaker?: string | null;
   /** Label market yang bisa dibaca manusia, mis. "Over 2.5 Gol". */
   displayLabel: string;
   selection: SelectionEval;
@@ -114,6 +115,7 @@ export interface MarketFirstCandidate {
   date?: string | null;
   homeTeam?: string | null;
   awayTeam?: string | null;
+  bookmaker?: string | null;
   selection: SelectionEval;
 }
 
@@ -210,6 +212,7 @@ function preparePool(
       date: candidate.date ?? null,
       homeTeam: candidate.homeTeam ?? null,
       awayTeam: candidate.awayTeam ?? null,
+      bookmaker: candidate.bookmaker ?? null,
       displayLabel: friendlyMarketLabel(candidate.marketKey),
       selection,
       pUsed,
@@ -266,6 +269,8 @@ function evaluateLegs(legs: MarketFirstLeg[], seed?: number): Attempt {
   };
 }
 
+export const EXECUTION_BOOKMAKER = "M88";
+
 function finalizeTicket(
   chosen: Attempt,
   targetOdds: number,
@@ -290,6 +295,12 @@ function finalizeTicket(
   if (contextRisky.length > 0) {
     notes.push(
       `${contextRisky.length} leg berisiko konteks TINGGI (jadwal) tetap terpilih karena kandidat segar tidak cukup — leg ini kandidat pertama untuk diganti manual.`,
+    );
+  }
+  const nonExecution = chosen.legs.filter((l) => l.bookmaker && l.bookmaker !== EXECUTION_BOOKMAKER);
+  if (nonExecution.length > 0) {
+    notes.push(
+      `⚠ ${nonExecution.length} leg berasal dari ${[...new Set(nonExecution.map((l) => l.bookmaker))].join(", ")} (bukan ${EXECUTION_BOOKMAKER}/Saba) — periksa dulu ketersediaan line & odds-nya di aplikasi Anda sebelum memasang.`,
     );
   }
   notes.push(

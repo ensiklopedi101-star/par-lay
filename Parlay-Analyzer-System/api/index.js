@@ -56416,7 +56416,11 @@ function computeLeagueAverages(rows) {
     warnings
   };
 }
-function buildOddsInput(structured) {
+function executionBookmakerPreference() {
+  const primary = (process.env["EXECUTION_BOOKMAKER"] ?? "M88").trim();
+  return [primary, "1xbet"].filter((b, i, a) => b.length > 0 && a.indexOf(b) === i);
+}
+function buildOddsInput(structured, preferred = executionBookmakerPreference()) {
   const warnings = [];
   const counts = /* @__PURE__ */ new Map();
   for (const m of structured.matchWinner) {
@@ -56424,7 +56428,13 @@ function buildOddsInput(structured) {
       counts.set(m.bookmaker, (counts.get(m.bookmaker) ?? 0) + 1);
     }
   }
-  const bookmaker = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? structured.matchWinner[0]?.bookmaker ?? null;
+  const preferredBook = preferred.find((b) => counts.has(b));
+  const bookmaker = preferredBook ?? [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? structured.matchWinner[0]?.bookmaker ?? null;
+  if (preferredBook && preferredBook !== preferred[0]) {
+    warnings.push(`bookmaker eksekusi ${preferred[0]} tidak menyediakan 1X2 lengkap \u2014 memakai ${preferredBook} (periksa ketersediaan di aplikasi Anda)`);
+  } else if (!preferredBook && bookmaker) {
+    warnings.push(`bookmaker eksekusi ${preferred[0]} tidak tersedia \u2014 memakai ${bookmaker} (periksa ketersediaan di aplikasi Anda)`);
+  }
   if (!bookmaker) {
     return { odds1x2: null, totals: [], ah: [], btts: null, bookmaker: null, warnings: ["tidak ada odds 1X2 dari bookmaker mana pun"] };
   }
@@ -56641,7 +56651,7 @@ function marketKeyForLabel(label, lineHint) {
 }
 function candidates(odds) {
   const out = [];
-  const mw = odds.matchWinner.find((r) => validOdds2(r.home) && validOdds2(r.draw) && validOdds2(r.away));
+  const mw = ["M88", "1xbet"].map((b) => odds.matchWinner.find((r) => r.bookmaker === b && validOdds2(r.home) && validOdds2(r.draw) && validOdds2(r.away))).find(Boolean) ?? odds.matchWinner.find((r) => validOdds2(r.home) && validOdds2(r.draw) && validOdds2(r.away));
   const book = mw?.bookmaker ?? odds.btts[0]?.bookmaker ?? odds.overUnder[0]?.bookmaker ?? null;
   const sameBook = (rows) => {
     if (!book) return rows;
@@ -77374,7 +77384,7 @@ function formatTicketMessage(ticket, generatedAt = /* @__PURE__ */ new Date()) {
     const isBoosterLeg2 = ticket.boosterMarketKey != null && leg.marketKey === ticket.boosterMarketKey && leg.fixtureId === ticket.legs.find((l) => l.marketKey === ticket.boosterMarketKey)?.fixtureId;
     lines.push(
       `${i + 1}. ${match}${isBoosterLeg2 ? " \u2B50 PENGUAT" : ""}
-   ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${best}
+   ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${leg.bookmaker ? ` (${leg.bookmaker})` : ""}${best}
    ${leg.league} \xB7 pasar ${pct2(leg.pUsed)} \xB7 ${leg.character}` + (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui" ? ` \xB7 konteks ${leg.contextRisk.level}` : "") + (hunt?.drift === "menjauh" ? " \xB7 \u26A0\uFE0F harga menjauh" : "")
     );
   });
@@ -77447,6 +77457,7 @@ var market_first_exports = {};
 __export(market_first_exports, {
   AGREE_TOLERANCE: () => AGREE_TOLERANCE,
   CONTRADICT_TOLERANCE: () => CONTRADICT_TOLERANCE,
+  EXECUTION_BOOKMAKER: () => EXECUTION_BOOKMAKER,
   buildMarketFirstTicket: () => buildMarketFirstTicket,
   buildParlayVariants: () => buildParlayVariants,
   classifyLeg: () => classifyLeg
@@ -77525,6 +77536,7 @@ function preparePool(candidates2, options, bounds) {
       date: candidate.date ?? null,
       homeTeam: candidate.homeTeam ?? null,
       awayTeam: candidate.awayTeam ?? null,
+      bookmaker: candidate.bookmaker ?? null,
       displayLabel: friendlyMarketLabel(candidate.marketKey),
       selection,
       pUsed,
@@ -77583,6 +77595,12 @@ function finalizeTicket(chosen, targetOdds, prefixNotes) {
   if (contextRisky.length > 0) {
     notes.push(
       `${contextRisky.length} leg berisiko konteks TINGGI (jadwal) tetap terpilih karena kandidat segar tidak cukup \u2014 leg ini kandidat pertama untuk diganti manual.`
+    );
+  }
+  const nonExecution = chosen.legs.filter((l) => l.bookmaker && l.bookmaker !== EXECUTION_BOOKMAKER);
+  if (nonExecution.length > 0) {
+    notes.push(
+      `\u26A0 ${nonExecution.length} leg berasal dari ${[...new Set(nonExecution.map((l) => l.bookmaker))].join(", ")} (bukan ${EXECUTION_BOOKMAKER}/Saba) \u2014 periksa dulu ketersediaan line & odds-nya di aplikasi Anda sebelum memasang.`
     );
   }
   notes.push(
@@ -77700,7 +77718,7 @@ function buildParlayVariants(candidates2, options = {}) {
   }
   return { utama, booster, jackpot, variantNotes: notes };
 }
-var AGREE_TOLERANCE, CONTRADICT_TOLERANCE, MIN_LEGS_DEFAULT, MAX_LEGS_DEFAULT;
+var AGREE_TOLERANCE, CONTRADICT_TOLERANCE, MIN_LEGS_DEFAULT, MAX_LEGS_DEFAULT, EXECUTION_BOOKMAKER;
 var init_market_first = __esm({
   "src/lib/quant/market-first.ts"() {
     "use strict";
@@ -77710,6 +77728,7 @@ var init_market_first = __esm({
     CONTRADICT_TOLERANCE = 0.12;
     MIN_LEGS_DEFAULT = 5;
     MAX_LEGS_DEFAULT = 8;
+    EXECUTION_BOOKMAKER = "M88";
   }
 });
 
@@ -77753,10 +77772,18 @@ function candidatesFromSelectionRows(rows, fixtureMeta, options = {}) {
       date: meta.date ?? null,
       homeTeam: meta.homeTeam ?? null,
       awayTeam: meta.awayTeam ?? null,
+      bookmaker: row.bookmaker ?? null,
       selection
     });
   }
-  return candidates2;
+  const rank = (b) => b === "M88" ? 0 : b === "1xbet" ? 1 : 2;
+  const byKey = /* @__PURE__ */ new Map();
+  for (const c of candidates2) {
+    const key = `${c.fixtureId}|${c.marketKey}`;
+    const existing = byKey.get(key);
+    if (!existing || rank(c.bookmaker) < rank(existing.bookmaker)) byKey.set(key, c);
+  }
+  return [...byKey.values()];
 }
 var init_parlay_candidates = __esm({
   "src/services/parlay-candidates.ts"() {
@@ -78027,7 +78054,7 @@ __export(telegram_notify_exports, {
 });
 async function buildLiveMarketFirstTicket() {
   if (!supabase) return null;
-  const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").order("ev_conservative", { ascending: false }).limit(1e3);
+  const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative, bookmaker").order("ev_conservative", { ascending: false }).limit(1e3);
   if (error) {
     logger.warn({ error }, "[TELEGRAM] gagal membaca ledger");
     return null;
@@ -89062,7 +89089,7 @@ router12.get("/parlays/compose-preview", async (req, res) => {
       res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
       return;
     }
-    const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative").order("ev_conservative", { ascending: false }).limit(1e3);
+    const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative, bookmaker").order("ev_conservative", { ascending: false }).limit(1e3);
     if (error) {
       res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
       return;
