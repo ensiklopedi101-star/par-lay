@@ -56694,6 +56694,14 @@ var init_quant_shadow = __esm({
 });
 
 // src/lib/llm-ledger.ts
+var llm_ledger_exports = {};
+__export(llm_ledger_exports, {
+  LLM_MODEL_VERSION: () => LLM_MODEL_VERSION,
+  LLM_MODEL_WEIGHT: () => LLM_MODEL_WEIGHT,
+  LLM_SIGMA: () => LLM_SIGMA,
+  buildLlmSelectionRows: () => buildLlmSelectionRows,
+  marketKeyForLabel: () => marketKeyForLabel
+});
 function marketKeyForLabel(label, lineHint) {
   const text = String(label ?? "").trim();
   if (!text) return null;
@@ -59468,59 +59476,6 @@ async function createMergedParlay(candidates2, sourceParlayIds, options = {}) {
     return { parlayId: null, legs, ...metrics, rejected };
   }
   return { parlayId: String(parlay.id), legs, ...metrics, rejected };
-}
-async function createParlayFromCandidates(candidates2) {
-  const uniqueCandidates = Array.from(
-    new Map(candidates2.map((candidate) => [String(candidate.fixtureId), candidate])).values()
-  ).slice(0, 5);
-  if (uniqueCandidates.length < 2) return null;
-  const metrics = calculateParlayMetrics(uniqueCandidates);
-  const { combinedOdds, winProbability, expectedValue: expectedValue2, avgConfidence } = metrics;
-  const leagues = new Set(uniqueCandidates.map((candidate) => candidate.league).filter(Boolean));
-  const { data: parlay, error: parlayError } = await supabase.from("parlays").insert({
-    parlay_name: `AI Batch Parlay \u2014 ${(/* @__PURE__ */ new Date()).toLocaleDateString("id-ID")}`,
-    legs_count: uniqueCandidates.length,
-    combined_odds: combinedOdds,
-    win_probability: winProbability,
-    expected_value: expectedValue2,
-    stake_pct: metrics.ticketStake?.stakePct ?? null,
-    ev_pessimistic: metrics.evPessimistic,
-    p_correlated: metrics.pCorrelated,
-    avg_confidence: avgConfidence,
-    status: "active",
-    generated_by: "AI_BATCH",
-    leagues_count: leagues.size,
-    countries_count: leagues.size,
-    reasoning: "Dibuat otomatis dari minimal dua leg dengan confidence AI >= 8.",
-    created_at: (/* @__PURE__ */ new Date()).toISOString(),
-    updated_at: (/* @__PURE__ */ new Date()).toISOString()
-  }).select("id").single();
-  if (parlayError || !parlay?.id) {
-    logger.error({ error: parlayError }, "[PARLAY] Gagal membuat parlay otomatis");
-    return null;
-  }
-  const { error: legsError } = await supabase.from("parlay_legs").insert(
-    uniqueCandidates.map((candidate, index) => ({
-      parlay_id: parlay.id,
-      prediction_id: candidate.predictionId ?? null,
-      fixture_id: Number(candidate.fixtureId),
-      leg_order: index + 1,
-      market: candidate.market,
-      selection: candidate.selection,
-      odds: candidate.odds,
-      probability: probabilityFor(candidate),
-      confidence: candidate.confidence,
-      result: null,
-      created_at: (/* @__PURE__ */ new Date()).toISOString()
-    }))
-  );
-  if (legsError) {
-    logger.error({ error: legsError, parlayId: parlay.id }, "[PARLAY] Gagal membuat legs");
-    await supabase.from("parlays").delete().eq("id", parlay.id);
-    return null;
-  }
-  logger.info({ parlayId: parlay.id, legs: uniqueCandidates.length }, "[PARLAY] Parlay otomatis dibuat");
-  return String(parlay.id);
 }
 async function settleParlaysForFixtures(fixtureIds) {
   if (fixtureIds.length === 0) return;
@@ -77392,6 +77347,11 @@ var init_telegram_format = __esm({
 });
 
 // src/lib/quant/market-label.ts
+var market_label_exports = {};
+__export(market_label_exports, {
+  friendlyMarketLabel: () => friendlyMarketLabel,
+  substitutionHint: () => substitutionHint
+});
 function friendlyMarketLabel(marketKey2) {
   const key = marketKey2.trim();
   const lower = key.toLowerCase();
@@ -86967,7 +86927,6 @@ function calculateKelly(odds, probWin) {
 }
 
 // src/routes/analyze.ts
-init_parlay_builder();
 init_odds_history();
 
 // src/lib/scan-job-status.ts
@@ -87300,30 +87259,7 @@ async function runBatchJob(job, fixtures, deadlineAt = Date.now() + BATCH_TIME_B
   }
   job.currentMatch = null;
   job.pending = [];
-  const fromTickets = job.tickets.filter(
-    (ticket) => ticket.is_parlay_leg && typeof ticket.probability === "number" && ticket.probability > 0 && ticket.probability < 1 && Number(ticket.odds) > 1 && Boolean(ticket.market)
-  ).map((ticket) => ({
-    predictionId: ticket.prediction_id,
-    fixtureId: Number(ticket.fixture_id),
-    homeTeam: ticket.home_team,
-    awayTeam: ticket.away_team,
-    league: ticket.league,
-    date: ticket.fixture_date ?? "",
-    market: ticket.market,
-    selection: ticket.selection,
-    odds: Number(ticket.odds),
-    confidence: Number(ticket.confidence),
-    probability: ticket.probability,
-    evPercent: Number(ticket.ev_percent)
-  }));
-  const candidateKey = (candidate) => `${candidate.fixtureId}::${String(candidate.market).toLowerCase()}`;
-  const mergedCandidates = /* @__PURE__ */ new Map();
-  for (const candidate of [...fromTickets, ...parlayCandidates]) {
-    if (!mergedCandidates.has(candidateKey(candidate))) {
-      mergedCandidates.set(candidateKey(candidate), candidate);
-    }
-  }
-  job.parlayId = await createParlayFromCandidates(Array.from(mergedCandidates.values()));
+  job.parlayId = null;
   const validTickets = job.tickets.filter(
     (ticket) => ticket.readiness_status === "bet_ready" && ticket.status === "scanned"
   );
@@ -89165,6 +89101,69 @@ router12.get("/parlays/compose-preview", async (req, res) => {
       marketFirstCandidates.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
     );
     const variantsRaw = buildParlayVariants2(marketFirstCandidates, { contextByCandidate });
+    const { classifyLeg: classifyLeg2 } = await Promise.resolve().then(() => (init_market_first(), market_first_exports));
+    const { marketKeyForLabel: marketKeyForLabel2 } = await Promise.resolve().then(() => (init_llm_ledger(), llm_ledger_exports));
+    const { friendlyMarketLabel: friendlyMarketLabel2 } = await Promise.resolve().then(() => (init_market_label(), market_label_exports));
+    const inTicketVariant = (fixtureId, marketKey2) => {
+      for (const [name, ticket] of [["utama", variantsRaw.utama], ["booster", variantsRaw.booster], ["jackpot", variantsRaw.jackpot]]) {
+        if (ticket?.legs.some((leg) => leg.fixtureId === fixtureId && leg.marketKey === marketKey2)) return name;
+      }
+      return null;
+    };
+    const todayIso = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const { data: pickRows } = await supabase.from("ai_predictions").select("fixture_id, home_team, away_team, best_market, best_odds, confidence_score, updated_at").not("best_market", "is", null).order("updated_at", { ascending: false }).limit(40);
+    const scanPicks = [];
+    for (const pick2 of pickRows ?? []) {
+      const fixtureId = Number(pick2.fixture_id);
+      const fixtureMeta = meta.get(fixtureId);
+      if (!fixtureMeta || fixtureMeta.date && fixtureMeta.date < todayIso) continue;
+      const marketKey2 = marketKeyForLabel2(pick2.best_market);
+      if (!marketKey2) continue;
+      const candidate = marketFirstCandidates.find((c) => c.fixtureId === fixtureId && c.marketKey === marketKey2);
+      if (!candidate) continue;
+      const sel = candidate.selection;
+      const pMarket = sel.pMarket != null && sel.pMarket > 0 && sel.pMarket < 1 ? sel.pMarket : sel.pFinal;
+      const character = classifyLeg2(sel).character;
+      const variant = inTicketVariant(fixtureId, marketKey2);
+      let gate;
+      let gateLabel;
+      if (variant) {
+        gate = "in_ticket";
+        gateLabel = `Sudah masuk tiket ${variant === "utama" ? "Utama" : variant === "booster" ? "Booster" : "Jackpot"}`;
+      } else if (pMarket >= 0.55 && sel.odds >= 1.25) {
+        gate = "utama_eligible";
+        gateLabel = "Lolos syarat Utama \u2014 belum terpilih (kolam/korelasi lebih kuat)";
+      } else if (sel.odds >= 1.85 && sel.odds <= 2.3 && pMarket >= 0.48 && pMarket < 0.55 && character === "didukung-statistik") {
+        gate = "booster_eligible";
+        gateLabel = "Kandidat Booster \u2014 menunggu inti Utama & giliran leg penguat";
+      } else if (sel.odds >= 1.8 && sel.odds <= 3 && (sel.pModelOnly - pMarket >= 0.05 || sel.evConservative > 0)) {
+        gate = "jackpot_eligible";
+        gateLabel = "Lolos gerbang nilai Jackpot \u2014 butuh 5 leg sekelas untuk membentuk tiket";
+      } else {
+        gate = "below_gate";
+        gateLabel = pMarket < 0.48 ? `Di luar gerbang \u2014 probabilitas pasar ${(pMarket * 100).toFixed(0)}% (Utama \u226555%, Booster \u226548%)` : `Di luar gerbang \u2014 probabilitas pasar ${(pMarket * 100).toFixed(0)}% (Utama \u226555%) atau statistik tidak mendukung`;
+      }
+      scanPicks.push({
+        fixtureId,
+        homeTeam: pick2.home_team ?? fixtureMeta.homeTeam,
+        awayTeam: pick2.away_team ?? fixtureMeta.awayTeam,
+        date: fixtureMeta.date,
+        marketKey: marketKey2,
+        marketLabel: friendlyMarketLabel2(marketKey2),
+        odds: sel.odds,
+        bookmaker: candidate.bookmaker ?? null,
+        aiConfidence: pick2.confidence_score != null ? Number(pick2.confidence_score) : null,
+        pMarket,
+        pModelOnly: sel.pModelOnly,
+        pFinal: sel.pFinal,
+        evConservative: sel.evConservative,
+        character,
+        gate,
+        gateLabel,
+        updatedAt: pick2.updated_at
+      });
+      if (scanPicks.length >= 12) break;
+    }
     const variants = {
       ...variantsRaw,
       utama: variantsRaw.utama ? await enrichTicketWithPriceHunt2(variantsRaw.utama) : null,
@@ -89172,7 +89171,7 @@ router12.get("/parlays/compose-preview", async (req, res) => {
       jackpot: variantsRaw.jackpot ? await enrichTicketWithPriceHunt2(variantsRaw.jackpot) : null
     };
     const marketFirst = variants.utama;
-    res.json({ ...composition, marketFirst, variants, ledgerRows: selectionRows.length });
+    res.json({ ...composition, marketFirst, variants, scanPicks, ledgerRows: selectionRows.length });
   } catch (err) {
     logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
     res.status(500).json({ error: "Gagal menyusun pratinjau komposisi parlay" });

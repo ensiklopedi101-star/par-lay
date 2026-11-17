@@ -11,7 +11,7 @@ import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
 import { calculateKelly } from "../lib/kelly-criterion";
 import { requireAdmin } from "../middlewares/admin";
-import { createParlayFromCandidates, type ParlayCandidate } from "../services/parlay-builder";
+import { type ParlayCandidate } from "../services/parlay-builder";
 import { collectPagedRows, latestOddsByMarket } from "../services/odds-history";
 import { recoverStaleScanJob } from "../lib/scan-job-status";
 import { ODDS_FRESHNESS_MAX_MS } from "../lib/market-odds-readiness";
@@ -529,39 +529,20 @@ async function runBatchJob(job: BatchJob, fixtures: Array<{
    * dilanjutkan (status `partial`) kandidat yang sudah ditemukan di run
    * sebelumnya hilang dan parlay yang dibuat hanya berisi sisa terakhir.
    */
-  const fromTickets: ParlayCandidate[] = job.tickets
-    .filter((ticket) =>
-      ticket.is_parlay_leg
-      && typeof ticket.probability === "number"
-      && ticket.probability > 0
-      && ticket.probability < 1
-      && Number(ticket.odds) > 1
-      && Boolean(ticket.market),
-    )
-    .map((ticket) => ({
-      predictionId: ticket.prediction_id as ParlayCandidate["predictionId"],
-      fixtureId: Number(ticket.fixture_id),
-      homeTeam: ticket.home_team,
-      awayTeam: ticket.away_team,
-      league: ticket.league,
-      date: ticket.fixture_date ?? "",
-      market: ticket.market,
-      selection: ticket.selection,
-      odds: Number(ticket.odds),
-      confidence: Number(ticket.confidence),
-      probability: ticket.probability as number,
-      evPercent: Number(ticket.ev_percent),
-    }));
-
-  const candidateKey = (candidate: ParlayCandidate) =>
-    `${candidate.fixtureId}::${String(candidate.market).toLowerCase()}`;
-  const mergedCandidates = new Map<string, ParlayCandidate>();
-  for (const candidate of [...fromTickets, ...parlayCandidates]) {
-    if (!mergedCandidates.has(candidateKey(candidate))) {
-      mergedCandidates.set(candidateKey(candidate), candidate);
-    }
-  }
-  job.parlayId = await createParlayFromCandidates(Array.from(mergedCandidates.values()));
+  /*
+   * PENYUSUN BATCH DIMATIKAN (keputusan pemilik sistem, 17 Nov 2026).
+   * Dulu scan menyimpan "AI Batch Parlay" sendiri dari pilihan LLM
+   * (createParlayFromCandidates di parlay-builder): minimum 2 leg,
+   * maksimum 5, dan SETIAP scan selesai menyisipkan parlay baru —
+   * scan yang sama menghasilkan tiket duplikat (produksi 17 Nov:
+   * dua parlay identik pukul 12:13 & 12:16). Itu penyusun kedua yang
+   * membingungkan di samping penyusun pasar-dulu dashboard/Telegram.
+   * Kini scan hanya menilai per laga; satu-satunya penyusun tiket
+   * adalah buildParlayVariants (compose-preview & notify-parlay).
+   * Pilihan AI terbaru tampil di dashboard sebagai "Leg Baru dari
+   * Scan" lengkap dengan status gerbang pasarnya (jalur hibrida).
+   */
+  job.parlayId = null;
   const validTickets = job.tickets.filter((ticket) =>
     ticket.readiness_status === "bet_ready" && ticket.status === "scanned",
   );
