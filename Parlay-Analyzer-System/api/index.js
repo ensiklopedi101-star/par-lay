@@ -88234,6 +88234,7 @@ async function runAutoAnalysis(options = {}) {
     analysed: 0,
     skippedForTime: 0,
     failed: 0,
+    failures: [],
     remaining: 0,
     elapsedMs: 0,
     stoppedByBudget: false,
@@ -88283,6 +88284,11 @@ async function runAutoAnalysis(options = {}) {
       );
     } catch (err) {
       summary.failed++;
+      summary.failures.push({
+        fixtureId: fixture.fixture_id,
+        match: `${fixture.home_team_name ?? "?"} vs ${fixture.away_team_name ?? "?"}`,
+        reason: (err instanceof Error ? err.message : String(err)).slice(0, 300)
+      });
       logger.warn(
         { err, fixtureId: fixture.fixture_id },
         "[AUTO-ANALYSIS] Gagal menganalisis fixture, lanjut ke berikutnya"
