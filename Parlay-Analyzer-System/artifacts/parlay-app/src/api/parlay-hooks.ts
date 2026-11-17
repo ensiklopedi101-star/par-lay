@@ -120,6 +120,11 @@ export interface SyncStatus {
   staleThresholdSeconds?: number;
   /** Jendela pemindaian fixture dalam hari (dari `scheduler_config.scan_days`). */
   scanDays?: number;
+  /** Snapshot odds paling baru (jam yang sebenarnya untuk kesegaran odds). */
+  lastOddsAt?: string | null;
+  oddsRows24h?: number;
+  /** Analisis AI paling baru. */
+  lastAnalysisAt?: string | null;
 }
 
 export interface Health {
