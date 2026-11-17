@@ -333,6 +333,8 @@ export interface OddsInputResult {
   ah: OfferedAH[];
   btts: { yes: number; no: number } | null;
   bookmaker: string | null;
+  /** Bandar sumber per keluarga pasar; berbeda dari bookmaker utama bila fallback per-pasar dipakai. */
+  sources: { ML: string | null; Totals: string | null; AH: string | null; BTTS: string | null };
   warnings: string[];
 }
 
@@ -382,10 +384,24 @@ export function buildOddsInput(
   }
 
   if (!bookmaker) {
-    return { odds1x2: null, totals: [], ah: [], btts: null, bookmaker: null, warnings: ["tidak ada odds 1X2 dari bookmaker mana pun"] };
+    return { odds1x2: null, totals: [], ah: [], btts: null, bookmaker: null, sources: { ML: null, Totals: null, AH: null, BTTS: null }, warnings: ["tidak ada odds 1X2 dari bookmaker mana pun"] };
   }
 
   const pick = <T extends MarketOddsRow>(rows: T[]) => rows.filter((r) => r.bookmaker === bookmaker);
+  /* Fallback PER-PASAR (keputusan pemilik sistem, 17 Nov 2026): pasar
+   * yang tidak disediakan bandar eksekusi (mis. BTTS di M88) boleh
+   * dipinjam utuh dari bandar cadangan — pasangan odds-nya tetap dari
+   * satu bandar sehingga de-vig pasar itu sah. Pemilik memakai pasar
+   * sebagai patokan dan mencocokkan odds di aplikasinya (Saba). */
+  const fallbackBook = preferred.find((b) => b !== bookmaker)
+    ?? [...counts.keys()].find((b) => b !== bookmaker)
+    ?? null;
+  const pickWithFallback = <T extends MarketOddsRow>(rows: T[]): { rows: T[]; source: string | null } => {
+    const own = pick(rows);
+    if (own.length > 0 || !fallbackBook) return { rows: own, source: own.length > 0 ? bookmaker : null };
+    const borrowed = rows.filter((r) => r.bookmaker === fallbackBook);
+    return { rows: borrowed, source: borrowed.length > 0 ? fallbackBook : null };
+  };
 
   const mw = pick(structured.matchWinner).find((r) => validOdds(r.home) && validOdds(r.draw) && validOdds(r.away));
   const odds1x2 = mw && validOdds(mw.home) && validOdds(mw.draw) && validOdds(mw.away)
@@ -393,19 +409,22 @@ export function buildOddsInput(
     : null;
   if (!odds1x2) warnings.push(`bookmaker ${bookmaker} tidak menyediakan 1X2 lengkap`);
 
+  const totalsPick = pickWithFallback(structured.overUnder);
+  const ahPick = pickWithFallback(structured.asianHandicap);
+  const bttsPick = pickWithFallback(structured.btts);
   const totals: OfferedTotals[] = [];
-  for (const r of pick(structured.overUnder)) {
+  for (const r of totalsPick.rows) {
     if (validOdds(r.over) && validOdds(r.under) && Number.isFinite(r.line)) {
       totals.push({ line: Number(r.line), overOdds: r.over, underOdds: r.under });
     }
   }
   const ah: OfferedAH[] = [];
-  for (const r of pick(structured.asianHandicap)) {
+  for (const r of ahPick.rows) {
     if (validOdds(r.home) && validOdds(r.away) && Number.isFinite(r.line)) {
       ah.push({ line: Number(r.line), homeOdds: r.home, awayOdds: r.away });
     }
   }
-  const bttsRow = pick(structured.btts).find((r) => validOdds(r.yes) && validOdds(r.no));
+  const bttsRow = bttsPick.rows.find((r) => validOdds(r.yes) && validOdds(r.no));
   const btts = bttsRow && validOdds(bttsRow.yes) && validOdds(bttsRow.no)
     ? { yes: bttsRow.yes, no: bttsRow.no }
     : null;
@@ -416,12 +435,24 @@ export function buildOddsInput(
     return xs.filter((x) => (seen.has(x.line) ? false : (seen.add(x.line), true)));
   };
 
+  const sources = {
+    ML: bookmaker,
+    Totals: totalsPick.source,
+    AH: ahPick.source,
+    BTTS: bttsPick.source,
+  };
+  for (const [family, source] of Object.entries(sources)) {
+    if (source && source !== bookmaker) {
+      warnings.push(`pasar ${family} tidak ada di ${bookmaker} — memakai acuan ${source} (odds di aplikasi Anda bisa berbeda)`);
+    }
+  }
   return {
     odds1x2,
     totals: dedupe(totals),
     ah: dedupe(ah),
     btts,
     bookmaker,
+    sources,
     warnings,
   };
 }
@@ -491,6 +522,7 @@ export function runQuantEngine(input: QuantEngineInput): QuantEngineResult {
     totals: odds.totals,
     ah: odds.ah,
     btts: odds.btts,
+    bookmakerByFamily: odds.sources,
     league: league.averages,
     home: home.rates,
     away: away.rates,

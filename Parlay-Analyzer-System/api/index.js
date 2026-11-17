@@ -56214,7 +56214,8 @@ function analyzeMatch(input) {
       stakePct: rejectReasons.length ? 0 : sp.stakePct,
       minOdds: pFinal > 0 ? (1 + minEv) / pFinal : Infinity,
       passes: rejectReasons.length === 0,
-      rejectReasons
+      rejectReasons,
+      bookmaker: input.bookmakerByFamily?.[family] ?? null
     });
   };
   const binary = (p) => ({ win: p, halfWin: 0, push: 0, halfLoss: 0, loss: 1 - p });
@@ -56436,36 +56437,58 @@ function buildOddsInput(structured, preferred = executionBookmakerPreference()) 
     warnings.push(`bookmaker eksekusi ${preferred[0]} tidak tersedia \u2014 memakai ${bookmaker} (periksa ketersediaan di aplikasi Anda)`);
   }
   if (!bookmaker) {
-    return { odds1x2: null, totals: [], ah: [], btts: null, bookmaker: null, warnings: ["tidak ada odds 1X2 dari bookmaker mana pun"] };
+    return { odds1x2: null, totals: [], ah: [], btts: null, bookmaker: null, sources: { ML: null, Totals: null, AH: null, BTTS: null }, warnings: ["tidak ada odds 1X2 dari bookmaker mana pun"] };
   }
   const pick2 = (rows) => rows.filter((r) => r.bookmaker === bookmaker);
+  const fallbackBook = preferred.find((b) => b !== bookmaker) ?? [...counts.keys()].find((b) => b !== bookmaker) ?? null;
+  const pickWithFallback = (rows) => {
+    const own = pick2(rows);
+    if (own.length > 0 || !fallbackBook) return { rows: own, source: own.length > 0 ? bookmaker : null };
+    const borrowed = rows.filter((r) => r.bookmaker === fallbackBook);
+    return { rows: borrowed, source: borrowed.length > 0 ? fallbackBook : null };
+  };
   const mw = pick2(structured.matchWinner).find((r) => validOdds(r.home) && validOdds(r.draw) && validOdds(r.away));
   const odds1x2 = mw && validOdds(mw.home) && validOdds(mw.draw) && validOdds(mw.away) ? { home: mw.home, draw: mw.draw, away: mw.away } : null;
   if (!odds1x2) warnings.push(`bookmaker ${bookmaker} tidak menyediakan 1X2 lengkap`);
+  const totalsPick = pickWithFallback(structured.overUnder);
+  const ahPick = pickWithFallback(structured.asianHandicap);
+  const bttsPick = pickWithFallback(structured.btts);
   const totals = [];
-  for (const r of pick2(structured.overUnder)) {
+  for (const r of totalsPick.rows) {
     if (validOdds(r.over) && validOdds(r.under) && Number.isFinite(r.line)) {
       totals.push({ line: Number(r.line), overOdds: r.over, underOdds: r.under });
     }
   }
   const ah = [];
-  for (const r of pick2(structured.asianHandicap)) {
+  for (const r of ahPick.rows) {
     if (validOdds(r.home) && validOdds(r.away) && Number.isFinite(r.line)) {
       ah.push({ line: Number(r.line), homeOdds: r.home, awayOdds: r.away });
     }
   }
-  const bttsRow = pick2(structured.btts).find((r) => validOdds(r.yes) && validOdds(r.no));
+  const bttsRow = bttsPick.rows.find((r) => validOdds(r.yes) && validOdds(r.no));
   const btts = bttsRow && validOdds(bttsRow.yes) && validOdds(bttsRow.no) ? { yes: bttsRow.yes, no: bttsRow.no } : null;
   const dedupe = (xs) => {
     const seen = /* @__PURE__ */ new Set();
     return xs.filter((x) => seen.has(x.line) ? false : (seen.add(x.line), true));
   };
+  const sources = {
+    ML: bookmaker,
+    Totals: totalsPick.source,
+    AH: ahPick.source,
+    BTTS: bttsPick.source
+  };
+  for (const [family, source] of Object.entries(sources)) {
+    if (source && source !== bookmaker) {
+      warnings.push(`pasar ${family} tidak ada di ${bookmaker} \u2014 memakai acuan ${source} (odds di aplikasi Anda bisa berbeda)`);
+    }
+  }
   return {
     odds1x2,
     totals: dedupe(totals),
     ah: dedupe(ah),
     btts,
     bookmaker,
+    sources,
     warnings
   };
 }
@@ -56502,6 +56525,7 @@ function runQuantEngine(input) {
     totals: odds.totals,
     ah: odds.ah,
     btts: odds.btts,
+    bookmakerByFamily: odds.sources,
     league: league.averages,
     home: home.rates,
     away: away.rates,
@@ -56585,7 +56609,7 @@ async function shadowLogQuantAnalysis(input) {
       ev: s.ev,
       ev_conservative: s.evConservative,
       was_bet: input.betMarketKey != null && input.betMarketKey === s.key,
-      bookmaker: result2.bookmaker
+      bookmaker: s.bookmaker ?? result2.bookmaker
     }));
     const { error } = await supabase.from("prediction_selections").upsert(rows, { onConflict: "fixture_id,model_version,market_key" });
     if (error) {
@@ -77384,7 +77408,7 @@ function formatTicketMessage(ticket, generatedAt = /* @__PURE__ */ new Date()) {
     const isBoosterLeg2 = ticket.boosterMarketKey != null && leg.marketKey === ticket.boosterMarketKey && leg.fixtureId === ticket.legs.find((l) => l.marketKey === ticket.boosterMarketKey)?.fixtureId;
     lines.push(
       `${i + 1}. ${match}${isBoosterLeg2 ? " \u2B50 PENGUAT" : ""}
-   ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${leg.bookmaker ? ` (${leg.bookmaker})` : ""}${best}
+   ${leg.displayLabel} @${leg.selection.odds.toFixed(2)}${leg.bookmaker ? leg.bookmaker === "M88" ? ` (${leg.bookmaker})` : ` (acuan ${leg.bookmaker} \xB7 odds di aplikasi bisa berbeda)` : ""}${best}
    ${leg.league} \xB7 pasar ${pct2(leg.pUsed)} \xB7 ${leg.character}` + (leg.contextRisk && leg.contextRisk.level !== "tidak-diketahui" ? ` \xB7 konteks ${leg.contextRisk.level}` : "") + (hunt?.drift === "menjauh" ? " \xB7 \u26A0\uFE0F harga menjauh" : "")
     );
   });

@@ -132,7 +132,7 @@ export function ParlayCompositionPanel({
                   </span>
                   <span className="text-muted-foreground">@{leg.selection.odds}</span>
                   {leg.bookmaker && (
-                    <Badge variant={leg.bookmaker === "M88" ? "default" : "outline"} className="text-[10px]">{leg.bookmaker}</Badge>
+                    <Badge variant={leg.bookmaker === "M88" ? "default" : "outline"} className="text-[10px]">{leg.bookmaker === "M88" ? leg.bookmaker : `acuan ${leg.bookmaker}`}</Badge>
                   )}
                   <span className="ml-auto text-muted-foreground">
                     peluang {pct(leg.pUsed)} · {characterLabel[leg.character] ?? leg.character}
@@ -218,7 +218,7 @@ export function ParlayCompositionPanel({
                     </span>
                     <span className="text-muted-foreground">@{leg.selection.odds}</span>
                     {leg.bookmaker && (
-                      <Badge variant={leg.bookmaker === "M88" ? "default" : "outline"} className="text-[10px]">{leg.bookmaker}</Badge>
+                      <Badge variant={leg.bookmaker === "M88" ? "default" : "outline"} className="text-[10px]">{leg.bookmaker === "M88" ? leg.bookmaker : `acuan ${leg.bookmaker}`}</Badge>
                     )}
                     <span className="ml-auto text-muted-foreground">peluang {pct(leg.pUsed)} · {characterLabel[leg.character] ?? leg.character}</span>
                   </div>
