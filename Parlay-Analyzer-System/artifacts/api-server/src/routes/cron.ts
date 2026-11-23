@@ -249,6 +249,44 @@ async function handleCron(req: any, res: any) {
     return;
   }
 
+  if (action === "settle") {
+    /* Settlement prediksi + leg parlay tercatat (termasuk snapshot
+     * Tiket Hari Ini): mengisi hasil per leg dari skor akhir, lalu
+     * menurunkan status tiket won/lost. Dibatasi pada laga yang
+     * selesai dalam 5 hari terakhir agar satu putaran muat dalam
+     * batas cron-job.org; runSettlement penuh tetap tersedia manual
+     * lewat POST /sync/settle. Tanpa aksi ini, outcome tiket yang
+     * tercatat tidak pernah terisi otomatis (celah 23 Nov 2026:
+     * runSettlement hanya dipanggil scheduler internal/manual). */
+    (async () => {
+      const since = new Date(Date.now() - 5 * 86_400_000).toISOString();
+      const { data: finished, error } = await supabase
+        .from("fixtures")
+        .select("fixture_id")
+        .in("status_short", ["FT", "AET", "PEN", "finished", "completed", "settled"])
+        .not("home_goals", "is", null)
+        .not("away_goals", "is", null)
+        .gte("fixture_date", since)
+        .limit(200);
+      if (error) throw error;
+      const fixtureIds = (finished ?? []).map((f) => Number((f as { fixture_id: number }).fixture_id)).filter(Number.isFinite);
+      if (fixtureIds.length === 0) {
+        return { settled: 0, lessons: 0, skipped: 0, fixtures: 0 };
+      }
+      const { runSettlement } = await import("../services/settlement");
+      const result = await runSettlement({ fixtureIds, refreshResults: false });
+      return { ...result, fixtures: fixtureIds.length };
+    })()
+      .then((result) => {
+        res.json({ message: "Settlement prediksi & tiket selesai", ...result, timestamp: new Date().toISOString() });
+      })
+      .catch((err) => {
+        logger.error({ err }, "Cron-triggered settlement gagal");
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      });
+    return;
+  }
+
   if (action === "analyze") {
     /* Analisis AI dengan anggaran waktu.
      *

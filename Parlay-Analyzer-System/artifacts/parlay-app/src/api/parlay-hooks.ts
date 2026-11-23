@@ -789,6 +789,23 @@ export interface ParlayComposition {
   }>;
 }
 
+export interface RecordTodayResult {
+  recorded: Array<{ variant: string; parlayId: string; legs: number; combinedOdds: number }>;
+  skipped: Array<{ variant: string; reason: string }>;
+  recordedAt?: string;
+}
+
+/** Catat Tiket Hari Ini sebagai snapshot agar outcome-nya terlacak. */
+export function useRecordTodayTickets() {
+  const queryClient = useQueryClient();
+  return useMutation<RecordTodayResult, Error, void>({
+    mutationFn: () => apiPost<RecordTodayResult>(`${API_BASE}/parlays/record-today`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["supabase/parlays"] });
+    },
+  });
+}
+
 export const getGetParlayCompositionQueryKey = () => ["parlays/compose-preview"];
 export function useGetParlayComposition() {
   return useQuery<ParlayComposition>({

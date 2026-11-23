@@ -96,6 +96,20 @@ export async function notifyParlayViaTelegram(): Promise<TelegramNotifyResult> {
     if (ticket) await enrichTicketWithPriceHunt(ticket);
   }
   const result = await sendTelegramMessage(formatVariantsMessage(variants));
+  /* Tiket yang terkirim ke pemilik sistem adalah tiket resmi hari
+   * itu — catat sebagai snapshot agar outcome-nya (menang/kalah)
+   * bisa dilihat kemudian di menu Tiket Hari Ini → Riwayat.
+   * Pencatatan tidak boleh menggagalkan notifikasi yang sudah
+   * terkirim; kegagalannya hanya dicatat di log. */
+  if (result.sent) {
+    try {
+      const { recordVariantTickets } = await import("./ticket-recorder");
+      const recorded = await recordVariantTickets(variants);
+      logger.info({ recorded: recorded.recorded.map((r) => r.variant) }, "[TELEGRAM] Tiket terkirim tercatat sebagai snapshot");
+    } catch (recordError) {
+      logger.warn({ recordError }, "[TELEGRAM] Gagal mencatat tiket terkirim (notifikasi tetap terkirim)");
+    }
+  }
   const main = variants.utama ?? variants.booster ?? variants.jackpot!;
   return { ...result, legs: main.legs.length, combinedOdds: main.combinedOdds };
 }

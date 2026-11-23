@@ -77997,6 +77997,143 @@ var init_price_hunt_live = __esm({
   }
 });
 
+// src/services/ticket-recorder.ts
+var ticket_recorder_exports = {};
+__export(ticket_recorder_exports, {
+  RECORDER_GENERATED_BY: () => RECORDER_GENERATED_BY,
+  recordVariantTickets: () => recordVariantTickets,
+  ticketSignature: () => ticketSignature
+});
+function ticketSignature(variant, legs) {
+  const parts = legs.map((leg) => `${leg.fixtureId}:${leg.marketKey}`).sort().join(",");
+  return `${variant}|${parts}`;
+}
+function startOfTodayIso(now) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+async function recordVariantTickets(variants, options = {}) {
+  const supabase2 = options.supabase ?? supabase;
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const result2 = { recorded: [], skipped: [] };
+  if (!supabase2) {
+    return {
+      recorded: [],
+      skipped: Object.keys(RECORDER_GENERATED_BY).map((variant) => ({
+        variant,
+        reason: "Supabase tidak terkonfigurasi"
+      }))
+    };
+  }
+  const generatedByValues = Object.values(RECORDER_GENERATED_BY);
+  const { data: todaysParlays } = await supabase2.from("parlays").select("id, generated_by").in("generated_by", generatedByValues).gte("created_at", startOfTodayIso(now));
+  const existingSignatures = /* @__PURE__ */ new Set();
+  if (todaysParlays && todaysParlays.length > 0) {
+    const ids = todaysParlays.map((p) => p.id);
+    const { data: todaysLegs } = await supabase2.from("parlay_legs").select("parlay_id, fixture_id, market, selection").in("parlay_id", ids);
+    const variantByParlay = /* @__PURE__ */ new Map();
+    for (const p of todaysParlays) {
+      const variant = Object.keys(RECORDER_GENERATED_BY).find(
+        (key) => RECORDER_GENERATED_BY[key] === p.generated_by
+      );
+      if (variant) variantByParlay.set(String(p.id), variant);
+    }
+    const legsByParlay = /* @__PURE__ */ new Map();
+    const { marketKeyForLabel: marketKeyForLabel2 } = await Promise.resolve().then(() => (init_llm_ledger(), llm_ledger_exports));
+    for (const leg of todaysLegs ?? []) {
+      const marketKey2 = marketKeyForLabel2(leg.selection ?? leg.market);
+      if (!marketKey2) continue;
+      const list = legsByParlay.get(String(leg.parlay_id)) ?? [];
+      list.push({ fixtureId: Number(leg.fixture_id), marketKey: marketKey2 });
+      legsByParlay.set(String(leg.parlay_id), list);
+    }
+    for (const [parlayId, variant] of variantByParlay) {
+      const legs = legsByParlay.get(parlayId);
+      if (legs && legs.length > 0) existingSignatures.add(ticketSignature(variant, legs));
+    }
+  }
+  const dateLabel = now.toLocaleDateString("id-ID", { day: "numeric", month: "numeric", year: "numeric" });
+  for (const variant of ["utama", "booster", "jackpot"]) {
+    const ticket = variants[variant];
+    if (!ticket) {
+      result2.skipped.push({ variant, reason: variants.variantNotes[variant] ?? "Varian tidak terbentuk" });
+      continue;
+    }
+    const signature = ticketSignature(variant, ticket.legs);
+    if (existingSignatures.has(signature)) {
+      result2.skipped.push({ variant, reason: "Isi tiket sama persis dengan yang sudah tercatat hari ini" });
+      continue;
+    }
+    const { data: parlay, error: parlayError } = await supabase2.from("parlays").insert({
+      parlay_name: `${VARIANT_TITLES[variant]} \u2014 ${dateLabel}`,
+      legs_count: ticket.legs.length,
+      combined_odds: ticket.combinedOdds,
+      win_probability: ticket.pCombined,
+      expected_value: ticket.evVsBook,
+      avg_confidence: null,
+      status: "active",
+      generated_by: RECORDER_GENERATED_BY[variant],
+      leagues_count: new Set(ticket.legs.map((leg) => leg.league).filter(Boolean)).size,
+      countries_count: new Set(ticket.legs.map((leg) => leg.league).filter(Boolean)).size,
+      reasoning: ticket.notes.join(" ").slice(0, 900),
+      created_at: now.toISOString(),
+      updated_at: now.toISOString()
+    }).select("id").single();
+    if (parlayError || !parlay?.id) {
+      logger.error({ error: parlayError, variant }, "[TICKET-RECORDER] Gagal mencatat tiket");
+      result2.skipped.push({ variant, reason: `Gagal menyimpan: ${parlayError?.message ?? "tidak ada id"}` });
+      continue;
+    }
+    const { error: legsError } = await supabase2.from("parlay_legs").insert(
+      ticket.legs.map((leg, index) => ({
+        parlay_id: parlay.id,
+        prediction_id: null,
+        fixture_id: leg.fixtureId,
+        leg_order: index + 1,
+        market: leg.displayLabel,
+        selection: leg.displayLabel,
+        odds: leg.selection.odds,
+        probability: leg.pUsed,
+        confidence: null,
+        result: null
+      }))
+    );
+    if (legsError) {
+      logger.error({ error: legsError, variant, parlayId: parlay.id }, "[TICKET-RECORDER] Gagal mencatat leg tiket");
+      result2.skipped.push({ variant, reason: `Tiket tersimpan tanpa leg: ${legsError.message}` });
+      continue;
+    }
+    existingSignatures.add(signature);
+    result2.recorded.push({
+      variant,
+      parlayId: String(parlay.id),
+      legs: ticket.legs.length,
+      combinedOdds: ticket.combinedOdds
+    });
+    logger.info({ variant, parlayId: parlay.id, legs: ticket.legs.length }, "[TICKET-RECORDER] Tiket tercatat");
+  }
+  return result2;
+}
+var RECORDER_GENERATED_BY, VARIANT_TITLES;
+var init_ticket_recorder = __esm({
+  "src/services/ticket-recorder.ts"() {
+    "use strict";
+    init_supabase_client();
+    init_logger();
+    RECORDER_GENERATED_BY = {
+      utama: "MARKET_FIRST_UTAMA",
+      booster: "MARKET_FIRST_BOOSTER",
+      jackpot: "MARKET_FIRST_JACKPOT"
+    };
+    VARIANT_TITLES = {
+      utama: "Tiket Utama",
+      booster: "Tiket Booster",
+      jackpot: "Tiket Jackpot"
+    };
+  }
+});
+
 // src/services/telegram-notify.ts
 var telegram_notify_exports = {};
 __export(telegram_notify_exports, {
@@ -78066,6 +78203,15 @@ async function notifyParlayViaTelegram() {
     if (ticket) await enrichTicketWithPriceHunt(ticket);
   }
   const result2 = await sendTelegramMessage(formatVariantsMessage(variants));
+  if (result2.sent) {
+    try {
+      const { recordVariantTickets: recordVariantTickets2 } = await Promise.resolve().then(() => (init_ticket_recorder(), ticket_recorder_exports));
+      const recorded = await recordVariantTickets2(variants);
+      logger.info({ recorded: recorded.recorded.map((r) => r.variant) }, "[TELEGRAM] Tiket terkirim tercatat sebagai snapshot");
+    } catch (recordError) {
+      logger.warn({ recordError }, "[TELEGRAM] Gagal mencatat tiket terkirim (notifikasi tetap terkirim)");
+    }
+  }
   const main = variants.utama ?? variants.booster ?? variants.jackpot;
   return { ...result2, legs: main.legs.length, combinedOdds: main.combinedOdds };
 }
@@ -88415,6 +88561,26 @@ async function handleCron(req, res) {
     });
     return;
   }
+  if (action === "settle") {
+    (async () => {
+      const since = new Date(Date.now() - 5 * 864e5).toISOString();
+      const { data: finished, error } = await supabase.from("fixtures").select("fixture_id").in("status_short", ["FT", "AET", "PEN", "finished", "completed", "settled"]).not("home_goals", "is", null).not("away_goals", "is", null).gte("fixture_date", since).limit(200);
+      if (error) throw error;
+      const fixtureIds = (finished ?? []).map((f) => Number(f.fixture_id)).filter(Number.isFinite);
+      if (fixtureIds.length === 0) {
+        return { settled: 0, lessons: 0, skipped: 0, fixtures: 0 };
+      }
+      const { runSettlement: runSettlement2 } = await Promise.resolve().then(() => (init_settlement(), settlement_exports));
+      const result2 = await runSettlement2({ fixtureIds, refreshResults: false });
+      return { ...result2, fixtures: fixtureIds.length };
+    })().then((result2) => {
+      res.json({ message: "Settlement prediksi & tiket selesai", ...result2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+    }).catch((err) => {
+      logger.error({ err }, "Cron-triggered settlement gagal");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    });
+    return;
+  }
   if (action === "analyze") {
     const rawLimit = Number(req.query["limit"]);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), 20) : 10;
@@ -89187,6 +89353,33 @@ router12.get("/parlays/compose-preview", async (req, res) => {
   } catch (err) {
     logger.error({ err }, "Gagal menyusun pratinjau komposisi parlay");
     res.status(500).json({ error: "Gagal menyusun pratinjau komposisi parlay" });
+  }
+});
+router12.post("/parlays/record-today", requireAdmin, async (_req, res) => {
+  try {
+    if (!supabase) {
+      res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
+      return;
+    }
+    const { buildLiveMarketFirstTicket: buildLiveMarketFirstTicket2 } = await Promise.resolve().then(() => (init_telegram_notify(), telegram_notify_exports));
+    const { enrichTicketWithPriceHunt: enrichTicketWithPriceHunt2 } = await Promise.resolve().then(() => (init_price_hunt_live(), price_hunt_live_exports));
+    const { recordVariantTickets: recordVariantTickets2 } = await Promise.resolve().then(() => (init_ticket_recorder(), ticket_recorder_exports));
+    const variants = await buildLiveMarketFirstTicket2();
+    if (!variants) {
+      res.json({
+        recorded: [],
+        skipped: [{ variant: "semua", reason: "Tidak ada tiket yang bisa disusun dari ledger saat ini" }]
+      });
+      return;
+    }
+    for (const ticket of [variants.utama, variants.booster, variants.jackpot]) {
+      if (ticket) await enrichTicketWithPriceHunt2(ticket);
+    }
+    const result2 = await recordVariantTickets2(variants);
+    res.json({ ...result2, recordedAt: (/* @__PURE__ */ new Date()).toISOString() });
+  } catch (err) {
+    logger.error({ err }, "Gagal mencatat Tiket Hari Ini");
+    res.status(500).json({ error: "Gagal mencatat Tiket Hari Ini" });
   }
 });
 router12.post("/parlays/compose", requireAdmin, async (_req, res) => {

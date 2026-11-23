@@ -34,7 +34,7 @@ const navGroups = [
     label: "Utama",
     items: [
       { title: "Hari Ini", url: "/", icon: Activity, hint: "Tiket & status" },
-      { title: "Tiket & Prediksi", url: "/ai-center", icon: Layers3, hint: "Pilih dan pasang" },
+      { title: "Tiket Hari Ini", url: "/ai-center", icon: Layers3, hint: "Tiket, catatan & outcome" },
     ],
   },
   {
@@ -61,9 +61,9 @@ const pageTitles: Record<string, { title: string; subtitle: string }> = {
   "/fixtures": { title: "Jadwal", subtitle: "Pertandingan dan odds" },
   "/teams": { title: "Statistik Tim", subtitle: "Performa setiap tim" },
   "/standings": { title: "Klasemen", subtitle: "Posisi dan tren liga" },
-  "/ai-center": { title: "Tiket & Prediksi", subtitle: "Prediksi laga dan tiket parlay" },
-  "/risk-center": { title: "Tiket & Prediksi", subtitle: "Prediksi laga dan tiket parlay" },
-  "/parlays": { title: "Tiket & Prediksi", subtitle: "Prediksi laga dan tiket parlay" },
+  "/ai-center": { title: "Tiket Hari Ini", subtitle: "Tiket resmi, snapshot & outcome" },
+  "/risk-center": { title: "Tiket Hari Ini", subtitle: "Tiket resmi, snapshot & outcome" },
+  "/parlays": { title: "Tiket Hari Ini", subtitle: "Tiket resmi, snapshot & outcome" },
   "/ai-learning": { title: "Pembelajaran", subtitle: "Belajar dari hasil pertandingan" },
   "/settings": { title: "Pengaturan", subtitle: "Liga, data, dan jadwal otomatis" },
 };
