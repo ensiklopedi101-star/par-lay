@@ -26,7 +26,7 @@ eksekusi di cron-job.org adalah tempat pertama memeriksa kegagalan.
 | 1 | keep-alive | tiap 30 mnt | `action=keep-alive` | 200 + `staleRunsClosed` |
 | 2 | sync per liga (7 job) | tiap jam, menit bergeser (0, 8, 16, …) | `action=sync&league=<slug>&max=10` | baris baru di `odds_history` |
 | 3 | **analyze** | tiap 6 jam (keputusan pemilik 17 Nov 2026) | `action=analyze` (bawaan 10 fixture/putaran, anggaran bawaan 20 detik agar respons tiba sebelum timeout ±30 detik cron-job.org; antrean dari kick-off terdekat) | respons `analysed > 0` saat ada fixture berharga; baris baru di `ai_predictions` + `prediction_selections` |
-| 4 | closing | tiap 5 mnt | `action=closing` | `odds_close` terisi pada ledger (T-10 mnt) |
+| 4 | closing | tiap 5 mnt (per-jam pun cukup sejak backfill 48 jam, 23 Nov) | `action=closing` | `odds_close` terisi pada ledger (T-10 mnt atau backfill pra-kick-off) |
 | 5 | results | tiap jam | `action=results` | skor akhir terisi di `fixtures` |
 | 6 | outcomes | tiap jam, ±5 mnt setelah results | `action=outcomes` (batch: 1000 baris terlama, fixtures satu query, update berkelompok — perbaiki starvation & timeout 17 Nov 2026) | `outcome` terisi pada `prediction_selections` |
 | 7 | notify-parlay (Telegram) | 1–2× sehari, setelah analyze pagi | `action=notify-parlay` | pesan tiket masuk ke Telegram; respons `sent: true`; tiket terkirim otomatis tercatat sebagai snapshot |

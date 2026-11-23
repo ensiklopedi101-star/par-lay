@@ -26,6 +26,22 @@ export const CLOSING_WINDOW_MINUTES = 10;
 /** Jangan sentuh fixture yang kick-off-nya lebih jauh dari ini. */
 const MAX_LOOKAHEAD_HOURS = 6;
 
+/**
+ * Berapa lama SETELAH kick-off harga penutup masih boleh di-backfill.
+ *
+ * Akar masalah odds_close = 0/1044 (audit Fase A, 23 Nov 2026): harga hanya
+ * diisi bila job kebetulan berjalan dalam jendela T-10 menit sebelum
+ * kick-off; satu putaran yang terlewat (cron 5-menit tidak terpasang,
+ * timeout, jeda deploy) membuat baris itu hilang SELAMANYA karena kandidat
+ * dibatasi fixture masa depan. Padahal harga penutup menurut definisinya
+ * adalah snapshot terakhir SEBELUM kick-off (`selectClosingSnapshots`
+ * membuang semua snapshot >= kick-off), jadi mengisinya beberapa jam
+ * setelah kick-off dari snapshot pra-kick-off tetap harga penutup yang
+ * sah — bukan harga live. Batas 48 jam menjaga backfill tetap segar dan
+ * mencegah baris yatim berusia berminggu-minggu membanjiri putaran.
+ */
+export const CLOSING_BACKFILL_HOURS = 48;
+
 /** Batas baris per permintaan agar tidak menabrak batas PostgREST. */
 const PAGE_SIZE = 1000;
 
@@ -51,18 +67,22 @@ interface SelectionRow {
 
 /**
  * Ambil selection yang belum punya harga penutup, untuk fixture yang
- * kick-off-nya jatuh dalam jendela [now, now + lookahead).
+ * kick-off-nya jatuh dalam jendela [now - backfill, now + lookahead).
+ * Sisi masa lalu adalah jalur backfill: kick-off yang terlewat jendela
+ * T-10 tetap bisa diisi dari snapshot pra-kick-off (lihat
+ * CLOSING_BACKFILL_HOURS).
  */
 async function loadOpenSelections(
   supabase: SupabaseClient,
   now: Date,
 ): Promise<SelectionRow[]> {
   const lookahead = new Date(now.getTime() + MAX_LOOKAHEAD_HOURS * 60 * 60 * 1000);
+  const backfillFrom = new Date(now.getTime() - CLOSING_BACKFILL_HOURS * 60 * 60 * 1000);
 
   const { data: fixtures, error: fixtureError } = await supabase
     .from("fixtures")
     .select("fixture_id, fixture_date")
-    .gte("fixture_date", now.toISOString())
+    .gte("fixture_date", backfillFrom.toISOString())
     .lt("fixture_date", lookahead.toISOString());
 
   if (fixtureError) throw fixtureError;
@@ -172,10 +192,13 @@ export async function runClosingOddsCapture(
       if (!Number.isFinite(kickoff.getTime())) continue;
 
       /* Jangan isi harga penutup bila masih jauh dari kick-off: snapshot
-         terakhir saat ini bukan harga penutup, hanya harga sementara. */
+         terakhir saat ini bukan harga penutup, hanya harga sementara.
+         Kick-off yang sudah lewat TIDAK lagi dibuang: snapshot yang
+         dipakai tetap yang terakhir sebelum kick-off, jadi hasilnya
+         adalah harga penutup yang sesungguhnya (jalur backfill). */
       const minutesToKickoff = (kickoff.getTime() - now.getTime()) / 60000;
       if (minutesToKickoff > CLOSING_WINDOW_MINUTES) continue;
-      if (minutesToKickoff < 0) continue;
+      if (minutesToKickoff < -CLOSING_BACKFILL_HOURS * 60) continue;
 
       const snapshots = await loadSnapshots(supabase, fixtureId);
       if (snapshots.length === 0) continue;

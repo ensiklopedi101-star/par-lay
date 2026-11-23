@@ -176,6 +176,26 @@ test("fixture yang kick-off-nya masih > 10 menit dilewati", async () => {
   assert.equal(tables.prediction_selections.rows[0]!.odds_close, null);
 });
 
+test("backfill: kick-off terlewat 2 jam tetap diisi dari snapshot pra-kick-off", async () => {
+  /* Regresi Fase A: dulu kandidat dibatasi fixture masa depan dan
+     minutesToKickoff < 0 dibuang, jadi satu putaran T-10 yang terlewat
+     membuat odds_close hilang selamanya (produksi: 0/1044 terisi). */
+  const tables = seedTables();
+  const afterKickoff = new Date(KICKOFF.getTime() + 2 * 60 * 60 * 1000);
+  const { summary } = await runWithFake(tables, afterKickoff);
+  assert.equal(summary.rowsUpdated, 2);
+  const home = tables.prediction_selections.rows.find((r) => r.id === 1)!;
+  assert.equal(home.odds_close, 2.1, "harga dari snapshot 14:50 (pra-kick-off), bukan harga live");
+});
+
+test("backfill dibatasi 48 jam: kick-off 3 hari lalu tidak lagi disentuh", async () => {
+  const tables = seedTables();
+  const longAfter = new Date(KICKOFF.getTime() + 72 * 60 * 60 * 1000);
+  const { summary } = await runWithFake(tables, longAfter);
+  assert.equal(summary.rowsUpdated, 0);
+  assert.equal(tables.prediction_selections.rows[0]!.odds_close, null);
+});
+
 test("snapshot in-play tidak dipakai sebagai harga penutup", async () => {
   const tables = seedTables({
     snapshots: [
