@@ -32,7 +32,7 @@ function Router() {
           <AICenter defaultTab="predictions" />
         </Route>
         <Route path="/parlays">
-          <AICenter defaultTab="parlays" />
+          <AICenter defaultTab="history" />
         </Route>
         <Route path="/settings" component={SettingsPage} />
         <Route path="/ai-learning" component={AILearning} />

@@ -513,6 +513,45 @@ router.get("/parlays/compose-preview", async (req, res) => {
 });
 
 /**
+ * POST /parlays/record-today — catat Tiket Hari Ini sebagai snapshot.
+ *
+ * compose-preview adalah pratinjau hidup: isinya berubah mengikuti
+ * ledger dan tidak pernah tersimpan, sehingga outcome tiket tidak
+ * pernah bisa diketahui. Endpoint ini mengambil varian yang sama
+ * (lewat builder Telegram yang berbagi jalur ledger), memperkayanya
+ * dengan berburu harga seperti pratinjau, lalu menyimpannya lewat
+ * ticket-recorder (anti-duplikat per hari berdasarkan isi tiket).
+ * Butuh admin; settlement outcome berjalan lewat cron action=settle.
+ */
+router.post("/parlays/record-today", requireAdmin, async (_req, res) => {
+  try {
+    if (!supabase) {
+      res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
+      return;
+    }
+    const { buildLiveMarketFirstTicket } = await import("../services/telegram-notify");
+    const { enrichTicketWithPriceHunt } = await import("../services/price-hunt-live");
+    const { recordVariantTickets } = await import("../services/ticket-recorder");
+    const variants = await buildLiveMarketFirstTicket();
+    if (!variants) {
+      res.json({
+        recorded: [],
+        skipped: [{ variant: "semua", reason: "Tidak ada tiket yang bisa disusun dari ledger saat ini" }],
+      });
+      return;
+    }
+    for (const ticket of [variants.utama, variants.booster, variants.jackpot]) {
+      if (ticket) await enrichTicketWithPriceHunt(ticket);
+    }
+    const result = await recordVariantTickets(variants);
+    res.json({ ...result, recordedAt: new Date().toISOString() });
+  } catch (err) {
+    logger.error({ err }, "Gagal mencatat Tiket Hari Ini");
+    res.status(500).json({ error: "Gagal mencatat Tiket Hari Ini" });
+  }
+});
+
+/**
  * POST /parlays/compose — susun DAN simpan (butuh admin).
  *
  * Berbeda dari `/parlays/merge`: rute itu menerima leg yang sudah dipilih,

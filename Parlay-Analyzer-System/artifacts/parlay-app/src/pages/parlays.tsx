@@ -66,6 +66,10 @@ function parlaySourceLabel(generatedBy?: string | null) {
   if (generatedBy === "USER_MANUAL") return "Pilihan manual";
   if (generatedBy === "USER_MIXED") return "AI + manual";
   if (generatedBy === "AI_SELECTED") return "Prediksi AI";
+  if (generatedBy === "MARKET_FIRST_UTAMA") return "🎯 Tiket Utama (tercatat)";
+  if (generatedBy === "MARKET_FIRST_BOOSTER") return "🚀 Tiket Booster (tercatat)";
+  if (generatedBy === "MARKET_FIRST_JACKPOT") return "💎 Tiket Jackpot (tercatat)";
+  if (generatedBy === "AI_BATCH") return "Warisan batch scan (lama)";
   return "AI";
 }
 
