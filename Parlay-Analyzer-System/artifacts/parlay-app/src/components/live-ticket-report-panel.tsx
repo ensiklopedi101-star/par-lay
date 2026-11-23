@@ -98,6 +98,13 @@ export function LiveTicketReportPanel() {
                   style={{ width: `${data.ledger.pct}%` }}
                 />
               </div>
+              {data.generatedFrom.lateRecordedTickets > 0 && (
+                <p className="text-[11px] font-medium text-destructive">
+                  {data.generatedFrom.lateRecordedTickets} tiket dikeluarkan dari laporan: dicatat setelah laga
+                  di dalamnya sudah dimulai (tercemar look-ahead) — bukan bukti live yang sah. Catat ulang dari
+                  pratinjau di atas; komposer kini menolak pertandingan yang sudah kick-off.
+                </p>
+              )}
               {data.generatedFrom.legacyTickets > 0 && (
                 <p className="text-[11px] text-muted-foreground">
                   {data.generatedFrom.legacyTickets} tiket lama (komposer lama) tidak dicampur ke laporan varian ini.

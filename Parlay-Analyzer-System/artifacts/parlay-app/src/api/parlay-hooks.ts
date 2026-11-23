@@ -826,7 +826,7 @@ export interface LiveVariantSlice {
 }
 
 export interface LiveTicketReport {
-  generatedFrom: { recordedTickets: number; legacyTickets: number };
+  generatedFrom: { recordedTickets: number; legacyTickets: number; lateRecordedTickets: number };
   variants: LiveVariantSlice[];
   ledger: { settled: number; target: number; pct: number; withClose: number };
   verdict: string;

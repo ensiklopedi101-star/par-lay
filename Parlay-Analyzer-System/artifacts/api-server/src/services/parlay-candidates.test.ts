@@ -171,6 +171,21 @@ test("label market dibentuk ulang dari kunci agar bisa dibaca", () => {
   assert.equal(candidate!.selection.label, "over 2.5");
 });
 
+test("candidatesFromSelectionRows: fixture yang sudah kick-off / selesai dibuang (pagar anti look-ahead)", () => {
+  const now = new Date("2026-11-23T04:00:00Z");
+  const row = (fixture_id: number) => ({
+    fixture_id, market_key: "TOT:over:2.5", family: "Totals", line: 2.5,
+    odds: 1.9, p_final: 0.56, p_market_fair: 0.53, p_model_only: 0.58, ev: 0.06, ev_conservative: 0.02,
+  });
+  const meta = new Map<number, FixtureMeta>([
+    [11, { fixtureId: 11, league: "x", date: "2026-11-20", kickoffAt: "2026-11-20T19:45:00Z", statusShort: "settled" }],
+    [12, { fixtureId: 12, league: "x", date: "2026-11-23", kickoffAt: "2026-11-23T01:00:00Z", statusShort: "live" }],
+    [13, { fixtureId: 13, league: "x", date: "2026-11-24", kickoffAt: "2026-11-24T19:45:00Z", statusShort: "pending" }],
+  ]);
+  const candidates = candidatesFromSelectionRows([row(11), row(12), row(13)], meta, { requirePassing: false, now });
+  assert.deepEqual(candidates.map((c) => c.fixtureId), [13], "hanya fixture yang belum kick-off yang boleh direkomendasikan");
+});
+
 test("candidatesFromSelectionRows: requirePassing=false membuka gerbang EV untuk jalur pasar-dulu", () => {
   const meta = new Map<number, FixtureMeta>([[7, { fixtureId: 7, league: "x", date: "2026-11-21" }]]);
   const rows = [{
