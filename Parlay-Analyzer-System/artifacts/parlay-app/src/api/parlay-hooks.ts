@@ -802,7 +802,41 @@ export function useRecordTodayTickets() {
     mutationFn: () => apiPost<RecordTodayResult>(`${API_BASE}/parlays/record-today`, {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["supabase/parlays"] });
+      queryClient.invalidateQueries({ queryKey: ["parlays/live-report"] });
     },
+  });
+}
+
+export interface LiveVariantSlice {
+  variant: string;
+  recorded: number;
+  active: number;
+  won: number;
+  lost: number;
+  pushed: number;
+  settled: number;
+  hitRate: number | null;
+  avgPromisedProb: number | null;
+  calibrationGap: number | null;
+  roi: number | null;
+  legsTotal: number;
+  legsSettled: number;
+  legHitRate: number | null;
+  sampleSufficient: boolean;
+}
+
+export interface LiveTicketReport {
+  generatedFrom: { recordedTickets: number; legacyTickets: number };
+  variants: LiveVariantSlice[];
+  ledger: { settled: number; target: number; pct: number; withClose: number };
+  verdict: string;
+}
+
+/** Laporan tiket live Fase B: bukti dari snapshot yang tercatat & ter-settle. */
+export function useLiveTicketReport() {
+  return useQuery<LiveTicketReport>({
+    queryKey: ["parlays/live-report"],
+    queryFn: () => apiGet<LiveTicketReport>(`${API_BASE}/parlays/live-report`),
   });
 }
 

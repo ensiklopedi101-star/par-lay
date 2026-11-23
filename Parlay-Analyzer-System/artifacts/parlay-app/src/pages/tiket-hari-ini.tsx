@@ -2,6 +2,7 @@ import { useState } from "react";
 import { BookmarkCheck, TicketCheck } from "lucide-react";
 import { useGetParlayComposition, useRecordTodayTickets, type RecordTodayResult } from "@/api/parlay-hooks";
 import { ParlayCompositionPanel } from "@/components/parlay-composition-panel";
+import { LiveTicketReportPanel } from "@/components/live-ticket-report-panel";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -86,6 +87,8 @@ export default function TiketHariIni() {
       </p>
 
       <ParlayCompositionPanel composition={composition} isLoading={isLoading} />
+
+      <LiveTicketReportPanel />
 
       <AdminPasswordDialog open={open} onOpenChange={onCancel} onSubmit={onSubmit} />
     </div>
