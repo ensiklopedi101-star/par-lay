@@ -1,5 +1,7 @@
 # Peta Sistem — satu halaman
 
+Arsitektur lengkap & keputusan desain: [architecture-blueprint.md](architecture-blueprint.md).
+
 ## Yang dilihat setiap hari
 1. **Telegram** — tiga tiket terkirim otomatis (cron `notify-parlay`).
 2. **Halaman "Hari Ini"** — tiket yang sama + status sistem sekilas.
