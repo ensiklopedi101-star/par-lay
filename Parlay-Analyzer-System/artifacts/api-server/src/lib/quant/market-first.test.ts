@@ -108,6 +108,19 @@ describe("parlay variants", () => {
     assert.ok(v.jackpot!.pCombined >= 0.025);
   });
 
+  it("diagnostik kolam dilaporkan dan catatan utama menyebut angka saat kolam kurang", async () => {
+    const { buildParlayVariants } = await import("./market-first");
+    /* Hanya 3 laga dengan leg stabil — di bawah minimum 5 leg. */
+    const few = [1, 2, 3].map((i) =>
+      candidate(i, { odds: 1.5, pMarket: 0.64, pModelOnly: 0.64, pFinal: 0.62 }));
+    const v = buildParlayVariants(few);
+    assert.equal(v.utama, null);
+    assert.equal(v.diagnostics.stablePoolSize, 3);
+    assert.equal(v.diagnostics.minLegs, 5);
+    assert.equal(v.diagnostics.candidatesIn, 3);
+    assert.match(v.variantNotes.utama ?? "", /hanya 3 leg/);
+  });
+
   it("jackpot ditolak terbuka bila leg nilai tidak cukup", async () => {
     const { buildParlayVariants } = await import("./market-first");
     const v = buildParlayVariants(stable);

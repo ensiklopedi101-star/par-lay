@@ -77454,6 +77454,7 @@ function classifyLeg(selection) {
 }
 function preparePool(candidates2, options, bounds) {
   let excludedWorthless = 0;
+  let gatedLegs = 0;
   const rankedCharacter = {
     "didukung-statistik": 3,
     "pasar-stabil": 2,
@@ -77497,6 +77498,7 @@ function preparePool(candidates2, options, bounds) {
       characterNote: contextRisk && contextRisk.flags.length > 0 ? `${note} Konteks: ${contextRisk.flags.join(" ")}` : note,
       contextRisk
     };
+    gatedLegs++;
     const existing = byFixture.get(candidate.fixtureId);
     if (!existing) {
       byFixture.set(candidate.fixtureId, leg);
@@ -77509,7 +77511,7 @@ function preparePool(candidates2, options, bounds) {
   const pool = Array.from(byFixture.values()).sort(
     (a, b) => selectionScore(b) - selectionScore(a) || b.stability - a.stability
   );
-  return { pool, excludedWorthless };
+  return { pool, excludedWorthless, gatedLegs };
 }
 function evaluateLegs(legs, seed) {
   const parlayLegs = legs.map((leg) => ({
@@ -77609,9 +77611,11 @@ function buildParlayVariants(candidates2, options = {}) {
   const notes = { utama: null, booster: null, jackpot: null };
   const utamaBase = buildMarketFirstTicket(candidates2, { ...options, targetOdds: options.mainTargetOdds ?? 4 });
   const utama = utamaBase ? { ...utamaBase, variant: "utama" } : null;
-  if (!utama) notes.utama = "Kandidat stabil tidak cukup untuk 5 leg.";
   let booster = null;
   const stable = preparePool(candidates2, options, { minProb: 0.55, maxProb: maxMarketProb, minOdds });
+  if (!utama) {
+    notes.utama = stable.pool.length === 0 && stable.gatedLegs === 0 ? `Tidak ada kandidat stabil sama sekali (${candidates2.length} kandidat masuk, 0 lolos gerbang probabilitas pasar \u226555% & odds \u22651,25 dari laga yang belum kick-off). Analisis untuk laga mendatang kemungkinan masih berjalan \u2014 tiket biasanya terbentuk setelah putaran analisis berikutnya.` : `Kandidat stabil tidak cukup untuk ${minLegs} leg \u2014 kolam stabil hanya ${stable.pool.length} leg dari ${stable.gatedLegs} kandidat lolos gerbang (satu leg per laga). Analisis laga mendatang mungkin masih berjalan; coba lagi setelah putaran analisis berikutnya.`;
+  }
   const boosterPoolAll = preparePool(candidates2, options, {
     minProb: 0.4,
     maxProb: 0.55,
@@ -77668,7 +77672,18 @@ function buildParlayVariants(candidates2, options = {}) {
   } else {
     notes.jackpot = `Hanya ${jackpotPool.length} leg berodds 1,80\u20133,00 yang lolos syarat nilai \u2014 jackpot tidak disusun.`;
   }
-  return { utama, booster, jackpot, variantNotes: notes };
+  return {
+    utama,
+    booster,
+    jackpot,
+    variantNotes: notes,
+    diagnostics: {
+      candidatesIn: candidates2.length,
+      stablePoolSize: stable.pool.length,
+      stableGatedLegs: stable.gatedLegs,
+      minLegs
+    }
+  };
 }
 var AGREE_TOLERANCE, CONTRADICT_TOLERANCE, MIN_LEGS_DEFAULT, MAX_LEGS_DEFAULT, EXECUTION_BOOKMAKER;
 var init_market_first = __esm({
@@ -77760,6 +77775,48 @@ var init_parlay_candidates = __esm({
       "COMPLETED",
       "SETTLED"
     ]);
+  }
+});
+
+// src/services/upcoming-selections.ts
+async function loadUpcomingSelectionRows(supabase2, options = {}) {
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const horizonDays = options.horizonDays ?? DEFAULT_HORIZON_DAYS;
+  const limit = options.limit ?? DEFAULT_LIMIT;
+  const horizon = new Date(now.getTime() + horizonDays * 24 * 60 * 60 * 1e3);
+  const { data: fixtures, error: fixtureError } = await supabase2.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name, status_short").gt("fixture_date", now.toISOString()).lte("fixture_date", horizon.toISOString()).order("fixture_date", { ascending: true }).limit(MAX_FIXTURES);
+  if (fixtureError) throw new Error(`Gagal membaca fixtures mendatang: ${fixtureError.message}`);
+  const meta = /* @__PURE__ */ new Map();
+  for (const f of fixtures ?? []) {
+    if (FINISHED_FIXTURE_STATUSES.has((f.status_short ?? "").toUpperCase())) continue;
+    const fixtureId = Number(f.fixture_id);
+    meta.set(fixtureId, {
+      fixtureId,
+      league: f.league_name ?? "unknown",
+      date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
+      homeTeam: f.home_team_name ?? null,
+      awayTeam: f.away_team_name ?? null,
+      kickoffAt: f.fixture_date ?? null,
+      statusShort: f.status_short ?? null
+    });
+  }
+  if (meta.size === 0) return { rows: [], meta, fixtureCount: 0 };
+  const { data: rows, error } = await supabase2.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative, bookmaker").in("fixture_id", [...meta.keys()].map(String)).order("ev_conservative", { ascending: false }).limit(limit);
+  if (error) throw new Error(`Gagal membaca ledger seleksi: ${error.message}`);
+  return {
+    rows: rows ?? [],
+    meta,
+    fixtureCount: meta.size
+  };
+}
+var DEFAULT_HORIZON_DAYS, DEFAULT_LIMIT, MAX_FIXTURES;
+var init_upcoming_selections = __esm({
+  "src/services/upcoming-selections.ts"() {
+    "use strict";
+    init_parlay_candidates();
+    DEFAULT_HORIZON_DAYS = 7;
+    DEFAULT_LIMIT = 1e3;
+    MAX_FIXTURES = 500;
   }
 });
 
@@ -78163,27 +78220,17 @@ __export(telegram_notify_exports, {
 });
 async function buildLiveMarketFirstTicket() {
   if (!supabase) return null;
-  const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative, bookmaker").order("ev_conservative", { ascending: false }).limit(1e3);
-  if (error) {
+  let selectionRows;
+  let meta;
+  try {
+    const loaded = await loadUpcomingSelectionRows(supabase);
+    selectionRows = loaded.rows;
+    meta = loaded.meta;
+  } catch (error) {
     logger.warn({ error }, "[TELEGRAM] gagal membaca ledger");
     return null;
   }
-  const selectionRows = rows ?? [];
   if (selectionRows.length === 0) return null;
-  const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-  const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name, status_short").in("fixture_id", fixtureIds);
-  const meta = /* @__PURE__ */ new Map();
-  for (const f of fixtures ?? []) {
-    meta.set(Number(f.fixture_id), {
-      fixtureId: Number(f.fixture_id),
-      league: f.league_name ?? "unknown",
-      date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
-      homeTeam: f.home_team_name ?? null,
-      awayTeam: f.away_team_name ?? null,
-      kickoffAt: f.fixture_date ?? null,
-      statusShort: f.status_short ?? null
-    });
-  }
   const candidates2 = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
   const contextByCandidate = await computeContextForCandidates(
     candidates2.map((c) => ({ fixtureId: c.fixtureId, marketKey: c.marketKey }))
@@ -78245,6 +78292,7 @@ var init_telegram_notify = __esm({
     init_telegram_format();
     init_market_first();
     init_parlay_candidates();
+    init_upcoming_selections();
     init_context_live();
     init_price_hunt_live();
   }
@@ -89094,6 +89142,7 @@ init_odds_history();
 init_settlement();
 init_parlay_builder();
 init_composition();
+init_upcoming_selections();
 init_parlay_candidates();
 var router12 = (0, import_express12.Router)();
 var READINESS_MAX_AGE_MINUTES = 3 * 60;
@@ -89241,12 +89290,19 @@ router12.get("/parlays/compose-preview", async (req, res) => {
       res.status(503).json({ error: "Supabase tidak terkonfigurasi" });
       return;
     }
-    const { data: rows, error } = await supabase.from("prediction_selections").select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative, bookmaker").order("ev_conservative", { ascending: false }).limit(1e3);
-    if (error) {
-      res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
+    let selectionRows;
+    let meta;
+    try {
+      const loaded = await loadUpcomingSelectionRows(supabase);
+      selectionRows = loaded.rows;
+      meta = loaded.meta;
+    } catch (err) {
+      res.status(500).json({
+        error: "Gagal membaca ledger",
+        detail: err instanceof Error ? err.message : String(err)
+      });
       return;
     }
-    const selectionRows = rows ?? [];
     if (selectionRows.length === 0) {
       res.json({
         best: null,
@@ -89264,25 +89320,11 @@ router12.get("/parlays/compose-preview", async (req, res) => {
         maxLegs: MAX_LEGS,
         ledgerRows: 0,
         notes: [
-          "Ledger quant (prediction_selections) kosong. Komposisi butuh harga hasil hitungan engine; tanpa itu tidak ada yang bisa dipilih. Ini bukan kegagalan komposisi \u2014 bahan bakunya memang belum ada."
+          "Belum ada seleksi ledger untuk laga yang belum kick-off dalam 7 hari ke depan. Komposisi butuh harga hasil hitungan engine dari analisis terbaru; tanpa itu tidak ada yang bisa dipilih. Ini bukan kegagalan komposisi \u2014 bahan bakunya memang belum ada."
         ],
         generatedAt: (/* @__PURE__ */ new Date()).toISOString()
       });
       return;
-    }
-    const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-    const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name, status_short").in("fixture_id", fixtureIds);
-    const meta = /* @__PURE__ */ new Map();
-    for (const f of fixtures ?? []) {
-      meta.set(Number(f.fixture_id), {
-        fixtureId: Number(f.fixture_id),
-        league: f.league_name ?? "unknown",
-        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
-        homeTeam: f.home_team_name ?? null,
-        awayTeam: f.away_team_name ?? null,
-        kickoffAt: f.fixture_date ?? null,
-        statusShort: f.status_short ?? null
-      });
     }
     const candidates2 = candidatesFromSelectionRows(selectionRows, meta);
     const marketFirstCandidates = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
