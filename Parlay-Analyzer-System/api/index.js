@@ -77685,7 +77685,17 @@ var init_market_first = __esm({
 });
 
 // src/services/parlay-candidates.ts
+function isFixtureComposable(meta, now) {
+  const status = (meta.statusShort ?? "").toUpperCase();
+  if (FINISHED_FIXTURE_STATUSES.has(status)) return false;
+  if (meta.kickoffAt) {
+    const kickoff = new Date(meta.kickoffAt).getTime();
+    if (Number.isFinite(kickoff) && kickoff <= now.getTime()) return false;
+  }
+  return true;
+}
 function candidatesFromSelectionRows(rows, fixtureMeta, options = {}) {
+  const now = options.now ?? /* @__PURE__ */ new Date();
   const requirePassing = options.requirePassing ?? true;
   const candidates2 = [];
   for (const row of rows) {
@@ -77693,6 +77703,7 @@ function candidatesFromSelectionRows(rows, fixtureMeta, options = {}) {
     if (!Number.isInteger(fixtureId)) continue;
     const meta = fixtureMeta.get(fixtureId);
     if (!meta) continue;
+    if (!isFixtureComposable(meta, now)) continue;
     const passing = row.ev_conservative > 0;
     const selection = {
       key: row.market_key,
@@ -77737,9 +77748,18 @@ function candidatesFromSelectionRows(rows, fixtureMeta, options = {}) {
   }
   return [...byKey.values()];
 }
+var FINISHED_FIXTURE_STATUSES;
 var init_parlay_candidates = __esm({
   "src/services/parlay-candidates.ts"() {
     "use strict";
+    FINISHED_FIXTURE_STATUSES = /* @__PURE__ */ new Set([
+      "FT",
+      "AET",
+      "PEN",
+      "FINISHED",
+      "COMPLETED",
+      "SETTLED"
+    ]);
   }
 });
 
@@ -78151,7 +78171,7 @@ async function buildLiveMarketFirstTicket() {
   const selectionRows = rows ?? [];
   if (selectionRows.length === 0) return null;
   const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-  const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name").in("fixture_id", fixtureIds);
+  const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name, status_short").in("fixture_id", fixtureIds);
   const meta = /* @__PURE__ */ new Map();
   for (const f of fixtures ?? []) {
     meta.set(Number(f.fixture_id), {
@@ -78159,7 +78179,9 @@ async function buildLiveMarketFirstTicket() {
       league: f.league_name ?? "unknown",
       date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
       homeTeam: f.home_team_name ?? null,
-      awayTeam: f.away_team_name ?? null
+      awayTeam: f.away_team_name ?? null,
+      kickoffAt: f.fixture_date ?? null,
+      statusShort: f.status_short ?? null
     });
   }
   const candidates2 = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
@@ -89249,7 +89271,7 @@ router12.get("/parlays/compose-preview", async (req, res) => {
       return;
     }
     const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-    const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name").in("fixture_id", fixtureIds);
+    const { data: fixtures } = await supabase.from("fixtures").select("fixture_id, league_name, fixture_date, home_team_name, away_team_name, status_short").in("fixture_id", fixtureIds);
     const meta = /* @__PURE__ */ new Map();
     for (const f of fixtures ?? []) {
       meta.set(Number(f.fixture_id), {
@@ -89257,7 +89279,9 @@ router12.get("/parlays/compose-preview", async (req, res) => {
         league: f.league_name ?? "unknown",
         date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
         homeTeam: f.home_team_name ?? null,
-        awayTeam: f.away_team_name ?? null
+        awayTeam: f.away_team_name ?? null,
+        kickoffAt: f.fixture_date ?? null,
+        statusShort: f.status_short ?? null
       });
     }
     const candidates2 = candidatesFromSelectionRows(selectionRows, meta);

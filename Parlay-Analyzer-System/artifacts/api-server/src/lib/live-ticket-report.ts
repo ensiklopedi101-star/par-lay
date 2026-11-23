@@ -36,6 +36,8 @@ export interface LiveTicketLegRow {
   parlay_id: string;
   odds: number | string | null;
   result: string | null;
+  /** Kick-off fixture leg ini (ISO), untuk uji pencatatan terlambat. */
+  kickoffAt?: string | null;
 }
 
 export interface LedgerProgressInput {
@@ -66,7 +68,7 @@ export interface VariantSlice {
 }
 
 export interface LiveTicketReport {
-  generatedFrom: { recordedTickets: number; legacyTickets: number };
+  generatedFrom: { recordedTickets: number; legacyTickets: number; lateRecordedTickets: number };
   variants: VariantSlice[];
   ledger: { settled: number; target: number; pct: number; withClose: number };
   verdict: string;
@@ -178,12 +180,36 @@ export function buildLiveTicketReport(
     else legsByTicket.set(leg.parlay_id, [leg]);
   }
 
+  /*
+   * Tiket tercemar look-ahead: dicatat SETELAH salah satu leg-nya
+   * kick-off (kasus nyata 23 Nov 2026 — tiket "hari ini" berisi laga
+   * 20–22 Nov yang sudah selesai karena komposer belum berpagar
+   * waktu). Tiket seperti itu tidak sah sebagai bukti live: dikeluarkan
+   * dari statistik varian dan dilaporkan jumlahnya secara terbuka,
+   * tidak dihapus dan tidak disembunyikan.
+   */
+  const isLateRecorded = (ticket: LiveTicketRow): boolean => {
+    if (!ticket.created_at) return false;
+    const recordedAt = new Date(ticket.created_at).getTime();
+    if (!Number.isFinite(recordedAt)) return false;
+    return (legsByTicket.get(ticket.id) ?? []).some((leg) => {
+      if (!leg.kickoffAt) return false;
+      const kickoff = new Date(leg.kickoffAt).getTime();
+      return Number.isFinite(kickoff) && kickoff <= recordedAt;
+    });
+  };
+
   const byVariant = new Map<LiveVariant, LiveTicketRow[]>();
   let legacyTickets = 0;
+  let lateRecordedTickets = 0;
   for (const ticket of tickets) {
     const variant = variantOfTicketName(ticket.parlay_name);
     if (!variant) {
       legacyTickets += 1;
+      continue;
+    }
+    if (isLateRecorded(ticket)) {
+      lateRecordedTickets += 1;
       continue;
     }
     const list = byVariant.get(variant);
@@ -198,7 +224,9 @@ export function buildLiveTicketReport(
   const totalActive = variants.reduce((acc, v) => acc + v.active, 0);
 
   let verdict: string;
-  if (totalSettled === 0) {
+  if (lateRecordedTickets > 0 && variants.every((v) => v.recorded === 0)) {
+    verdict = `${lateRecordedTickets} tiket tercatat SETELAH laga di dalamnya kick-off (tercemar look-ahead) dan dikeluarkan dari laporan — bukan bukti live yang sah. Catat ulang tiket dari menu Tiket Hari Ini; komposer kini menolak pertandingan yang sudah dimulai.`;
+  } else if (totalSettled === 0) {
     verdict = totalActive > 0
       ? `${totalActive} tiket live tercatat dan masih berjalan — belum ada yang settled, jadi belum ada bukti menang/kalah. Laporan ini terisi sendiri begitu cron settle berjalan.`
       : "Belum ada tiket live yang tercatat. Catat lewat menu Tiket Hari Ini agar bukti live mulai terkumpul.";
@@ -212,6 +240,7 @@ export function buildLiveTicketReport(
     generatedFrom: {
       recordedTickets: variants.reduce((acc, v) => acc + v.recorded, 0),
       legacyTickets,
+      lateRecordedTickets,
     },
     variants,
     ledger: {

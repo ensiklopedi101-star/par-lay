@@ -35,17 +35,34 @@ async function loadTickets(): Promise<LiveTicketRow[]> {
 
 async function loadLegs(ticketIds: string[]): Promise<LiveTicketLegRow[]> {
   if (ticketIds.length === 0) return [];
-  const rows: LiveTicketLegRow[] = [];
+  const raw: Array<LiveTicketLegRow & { fixture_id: number | string | null }> = [];
   for (let i = 0; i < ticketIds.length; i += 200) {
     const chunk = ticketIds.slice(i, i + 200);
     const { data, error } = await supabase
       .from("parlay_legs")
-      .select("parlay_id, odds, result")
+      .select("parlay_id, odds, result, fixture_id")
       .in("parlay_id", chunk);
     if (error) throw new Error(`Gagal membaca parlay_legs: ${error.message}`);
-    rows.push(...((data ?? []) as unknown as LiveTicketLegRow[]));
+    raw.push(...((data ?? []) as unknown as Array<LiveTicketLegRow & { fixture_id: number | string | null }>));
   }
-  return rows;
+  /* Tempelkan kick-off tiap leg agar pembangun laporan bisa membuang
+   * tiket yang dicatat setelah laganya dimulai (uji look-ahead). */
+  const fixtureIds = [...new Set(raw.map((l) => Number(l.fixture_id)).filter(Number.isFinite))];
+  const kickoffByFixture = new Map<number, string | null>();
+  for (let i = 0; i < fixtureIds.length; i += 200) {
+    const { data, error } = await supabase
+      .from("fixtures")
+      .select("fixture_id, fixture_date")
+      .in("fixture_id", fixtureIds.slice(i, i + 200));
+    if (error) throw new Error(`Gagal membaca fixtures: ${error.message}`);
+    for (const f of (data ?? []) as Array<{ fixture_id: number; fixture_date: string | null }>) {
+      kickoffByFixture.set(Number(f.fixture_id), f.fixture_date ?? null);
+    }
+  }
+  return raw.map(({ fixture_id, ...leg }) => ({
+    ...leg,
+    kickoffAt: fixture_id != null ? (kickoffByFixture.get(Number(fixture_id)) ?? null) : null,
+  }));
 }
 
 async function countWhere(

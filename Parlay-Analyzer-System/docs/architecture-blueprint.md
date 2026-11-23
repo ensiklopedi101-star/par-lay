@@ -320,6 +320,25 @@ ROI pada odds tercatat) dari `parlays`, berdampingan dengan ledger
 per-leg menuju gerbang 300 settled. *Selesai bila:* laporan tiket
 live pertama terbit dari data, bukan simulasi.
 
+Kemajuan 23 Nov 2026: snapshot live pertama tercatat (Utama 6 leg,
+Booster 5 leg, Jackpot 5 leg) dan laporan tiket live terbit sebagai
+`GET /parlays/live-report` + panel "Laporan Tiket Live"
+(`lib/live-ticket-report.ts`): per varian tercatat/aktif/menang/
+kalah, hit-rate vs probabilitas yang dijanjikan (selisih kalibrasi),
+ROI taruhan satuan, label sampel kecil di bawah 10 tiket settled,
+dan bilah kemajuan ledger menuju 300. Audit di hari yang sama
+menemukan snapshot pertama itu **tercemar look-ahead**: komposer
+membaca ledger tanpa pagar waktu, sehingga tiket berisi laga
+20–22 Nov yang sudah selesai saat dicatat 23 Nov. Perbaikan
+struktural: pagar `isFixtureComposable` di
+`candidatesFromSelectionRows` (satu-satunya chokepoint komposisi —
+fixture yang sudah kick-off/selesai dibuang; kedua loader kini
+mengisi metadata kick-off), dan laporan live mengeluarkan tiket
+yang dicatat setelah kick-off leg-nya (`lateRecordedTickets`,
+ditampilkan terbuka, tidak dihapus dari basis data). Bukti live
+hanya sah dari tiket yang dicatat sebelum pertandingan dimulai —
+konsekuensi langsung P7.
+
 **Fase C — Kalibrasi.** Dengan bukti Fase B: sesuaikan bobot blend
 (≤0,30), ambang gerbang varian, dan kebijakan pembelajaran — selalu
 lewat gerbang statistik (≥100 sampel latih + holdout), selalu lewat

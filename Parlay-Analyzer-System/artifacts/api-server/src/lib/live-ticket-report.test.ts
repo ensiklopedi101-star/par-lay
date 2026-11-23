@@ -75,6 +75,25 @@ test("belum ada tiket settled → verdict menyatakan belum ada bukti, bukan nol 
   assert.equal(report.generatedFrom.legacyTickets, 0);
 });
 
+test("tiket yang dicatat setelah kick-off leg-nya dibuang dari statistik dan dilaporkan terbuka", () => {
+  /* Kasus produksi 23 Nov 2026: tiket tercatat 23 Nov berisi laga
+   * 20–22 Nov yang sudah selesai — tercemar look-ahead. */
+  const tickets: LiveTicketRow[] = [
+    ticket("late", "Tiket Utama — 23/11/2026", "lost", 0.1351),
+    ticket("late2", "Tiket Booster — 23/11/2026", "active", 0.1386),
+  ];
+  const legs: LiveTicketLegRow[] = [
+    { parlay_id: "late", odds: 1.9, result: "LOSS", kickoffAt: "2026-11-20T19:45:00Z" },
+    { parlay_id: "late2", odds: 1.9, result: null, kickoffAt: "2026-11-21T12:30:00Z" },
+  ];
+  const report = buildLiveTicketReport(tickets, legs, { settled: 0, withClose: 0 });
+  const utama = report.variants.find((v) => v.variant === "Utama")!;
+  assert.equal(report.generatedFrom.lateRecordedTickets, 2);
+  assert.equal(utama.recorded, 0, "tiket tercemar tidak dihitung sebagai tercatat");
+  assert.equal(utama.settled, 0, "kekalahan tiket tercemar tidak masuk hit-rate");
+  assert.match(report.verdict, /look-ahead/);
+});
+
 test("tiket legacy dihitung terpisah dan tidak mengotori varian", () => {
   const tickets: LiveTicketRow[] = [
     ticket("l1", "AI Batch Parlay — 17/11/2026", "lost", 0.38),

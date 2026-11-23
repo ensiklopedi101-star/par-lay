@@ -91,6 +91,38 @@ export interface FixtureMeta {
   date?: string | null;
   homeTeam?: string | null;
   awayTeam?: string | null;
+  /** Timestamp kick-off penuh (ISO). Diisi loader produksi; tanpa ini
+   *  pagar "belum kick-off" tidak bisa ditegakkan untuk fixture tsb. */
+  kickoffAt?: string | null;
+  /** Status fixture dari provider (FT/AET/PEN/settled/dll.). */
+  statusShort?: string | null;
+}
+
+/** Status yang berarti pertandingan sudah selesai — tidak boleh direkomendasikan. */
+export const FINISHED_FIXTURE_STATUSES = new Set([
+  "FT", "AET", "PEN", "FINISHED", "COMPLETED", "SETTLED",
+]);
+
+/**
+ * Pagar integritas komposisi: fixture hanya boleh masuk tiket bila
+ * BELUM kick-off dan belum selesai pada saat penyusunan.
+ *
+ * Akar masalah (23 Nov 2026): ledger menampung seleksi untuk fixture
+ * yang sudah dimainkan, dan tanpa pagar ini komposer menyusun "Tiket
+ * Hari Ini" dari pertandingan 20–22 Nov yang hasilnya sudah diketahui
+ * — rekomendasi tercemar look-ahead, tidak sah sebagai bukti live.
+ * Bila kickoffAt tidak diketahui, fixture dilewatkan dari pagar waktu
+ * (pemanggil lama tanpa metadata waktu), tetapi status selesai selalu
+ * membuangnya.
+ */
+export function isFixtureComposable(meta: FixtureMeta, now: Date): boolean {
+  const status = (meta.statusShort ?? "").toUpperCase();
+  if (FINISHED_FIXTURE_STATUSES.has(status)) return false;
+  if (meta.kickoffAt) {
+    const kickoff = new Date(meta.kickoffAt).getTime();
+    if (Number.isFinite(kickoff) && kickoff <= now.getTime()) return false;
+  }
+  return true;
 }
 
 /**
@@ -104,8 +136,9 @@ export interface FixtureMeta {
 export function candidatesFromSelectionRows(
   rows: SelectionRow[],
   fixtureMeta: Map<number, FixtureMeta>,
-  options: { requirePassing?: boolean } = {},
+  options: { requirePassing?: boolean; now?: Date } = {},
 ): CompositionCandidate[] {
+  const now = options.now ?? new Date();
   /* requirePassing (bawaan true) mempertahankan perilaku komposisi EV
    * lama. Jalur pasar-dulu memanggil dengan false: probabilitas pasar
    * adalah hakimnya, dan menyaring kandidat dengan EV konservatif
@@ -121,6 +154,9 @@ export function candidatesFromSelectionRows(
      * Lebih baik melewatkan daripada mengarang nilai netral. */
     const meta = fixtureMeta.get(fixtureId);
     if (!meta) continue;
+    /* Pagar anti look-ahead: pertandingan yang sudah kick-off/selesai
+     * tidak pernah boleh direkomendasikan (lihat isFixtureComposable). */
+    if (!isFixtureComposable(meta, now)) continue;
 
     const passing = row.ev_conservative > 0;
     const selection: SelectionEval = {

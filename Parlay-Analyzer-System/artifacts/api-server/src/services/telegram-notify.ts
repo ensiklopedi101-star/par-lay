@@ -40,16 +40,18 @@ export async function buildLiveMarketFirstTicket(): Promise<ParlayVariants | nul
   const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
   const { data: fixtures } = await supabase
     .from("fixtures")
-    .select("fixture_id, league_name, fixture_date, home_team_name, away_team_name")
+    .select("fixture_id, league_name, fixture_date, home_team_name, away_team_name, status_short")
     .in("fixture_id", fixtureIds);
   const meta = new Map<number, FixtureMeta>();
-  for (const f of (fixtures ?? []) as Array<{ fixture_id: number; league_name: string | null; fixture_date: string | null; home_team_name: string | null; away_team_name: string | null }>) {
+  for (const f of (fixtures ?? []) as Array<{ fixture_id: number; league_name: string | null; fixture_date: string | null; home_team_name: string | null; away_team_name: string | null; status_short: string | null }>) {
     meta.set(Number(f.fixture_id), {
       fixtureId: Number(f.fixture_id),
       league: f.league_name ?? "unknown",
       date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
       homeTeam: f.home_team_name ?? null,
       awayTeam: f.away_team_name ?? null,
+      kickoffAt: f.fixture_date ?? null,
+      statusShort: f.status_short ?? null,
     });
   }
 
