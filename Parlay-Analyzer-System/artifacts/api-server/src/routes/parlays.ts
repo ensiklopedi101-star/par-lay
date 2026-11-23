@@ -24,6 +24,7 @@ import {
   type ParlayCandidate,
 } from "../services/parlay-builder";
 import { ALLOW_TWO_LEG_PARLAY, MAX_LEGS, MIN_LEGS } from "../lib/quant/composition";
+import { getLiveTicketReport } from "../services/live-ticket-report";
 import {
   candidatesFromSelectionRows,
   type FixtureMeta,
