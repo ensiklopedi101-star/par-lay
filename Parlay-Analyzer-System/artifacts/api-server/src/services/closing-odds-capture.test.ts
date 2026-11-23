@@ -55,18 +55,30 @@ function makeFakeSupabase(tables: Record<string, FakeTable>) {
         return Promise.resolve({ data: rows[0] ?? null, error: null });
       },
       update: (patch: Record<string, unknown>) => {
+        const updateFilters: Array<(row: Record<string, unknown>) => boolean> = [];
         const updateBuilder: any = {
           eq: (column: string, value: unknown) => {
             updateBuilder._match = { column, value };
+            updateFilters.push((r) => String(r[column]) === String(value));
             return updateBuilder;
           },
-          is: () => updateBuilder,
+          in: (column: string, values: unknown[]) => {
+            const set = new Set(values.map(String));
+            updateFilters.push((r) => set.has(String(r[column])));
+            return updateBuilder;
+          },
+          is: (column: string, value: unknown) => {
+            updateFilters.push((r) => (value === null ? r[column] == null : r[column] === value));
+            return updateBuilder;
+          },
           then: (resolve: (v: unknown) => void) => {
-            const match = updateBuilder._match;
-            const row = table.rows.find((r) => String(r[match.column]) === String(match.value));
-            if (row) {
+            /* Tanpa filter eksplisit, perilaku lama: satu baris via eq. */
+            const rows = updateFilters.length > 0
+              ? table.rows.filter((r) => updateFilters.every((f) => f(r)))
+              : table.rows.filter((r) => String(r[updateBuilder._match.column]) === String(updateBuilder._match.value));
+            for (const row of rows) {
               Object.assign(row, patch);
-              updates.push({ table: tableName, patch, id: match.value });
+              updates.push({ table: tableName, patch, id: row["id"] });
             }
             resolve({ error: null });
           },
@@ -246,6 +258,30 @@ test("fixture tanpa skor tidak menghasilkan outcome", async () => {
   const result = await runOutcomeSettlement({ supabase: fake.client });
   assert.equal(result.outcomesFilled, 0);
   assert.equal(tables.prediction_selections.rows[0]!.outcome, null);
+});
+
+test("laga selesai terisi walau antrean didahului laga belum selesai (regresi starvation)", async () => {
+  const tables: Record<string, FakeTable> = {
+    fixtures: {
+      rows: [
+        { fixture_id: 99010, home_goals: null, away_goals: null },
+        { fixture_id: 99011, home_goals: 3, away_goals: 1, home_goals_ht: 1, away_goals_ht: 0 },
+      ],
+    },
+    prediction_selections: {
+      rows: [
+        { id: 1, fixture_id: "99010", market_key: "ML:home", outcome: null },
+        { id: 2, fixture_id: "99010", market_key: "BTTS:yes", outcome: null },
+        { id: 3, fixture_id: "99011", market_key: "ML:home", outcome: null },
+        { id: 4, fixture_id: "99011", market_key: "TOT:over:2.5", outcome: null },
+      ],
+    },
+  };
+  const fake = makeFakeSupabase(tables);
+  const result = await runOutcomeSettlement({ supabase: fake.client });
+  assert.equal(result.outcomesFilled, 2);
+  assert.equal(tables.prediction_selections.rows.find((r) => r.id === 3)!.outcome, "win");
+  assert.equal(tables.prediction_selections.rows.find((r) => r.id === 1)!.outcome, null);
 });
 
 test("outcome yang sudah terisi tidak ditimpa", async () => {

@@ -83190,9 +83190,9 @@ async function runClosingOddsCapture(options = {}) {
 async function runOutcomeSettlement(options = {}) {
   const supabase2 = options.supabase ?? supabase;
   const errors = [];
-  const limit = options.limit ?? 200;
+  const limit = options.limit ?? 1e3;
   if (!supabase2) return { fixturesChecked: 0, outcomesFilled: 0, errors };
-  const { data: openRows, error: openError } = await supabase2.from("prediction_selections").select("id, fixture_id, market_key").is("outcome", null).limit(limit);
+  const { data: openRows, error: openError } = await supabase2.from("prediction_selections").select("id, fixture_id, market_key").is("outcome", null).order("analysed_at", { ascending: true }).limit(limit);
   if (openError) {
     errors.push(`baca selection: ${openError.message}`);
     return { fixturesChecked: 0, outcomesFilled: 0, errors };
@@ -83207,35 +83207,47 @@ async function runOutcomeSettlement(options = {}) {
     if (list) list.push(entry);
     else byFixture.set(row.fixture_id, [entry]);
   }
+  const fixtureIds = [...byFixture.keys()].map((id) => Number(id)).filter(Number.isFinite);
+  const { data: fixtureRows, error: fixturesError } = await supabase2.from("fixtures").select("fixture_id, home_goals, away_goals, home_goals_ht, away_goals_ht, status_short").in("fixture_id", fixtureIds);
+  if (fixturesError) {
+    errors.push(`baca fixtures: ${fixturesError.message}`);
+    return { fixturesChecked: 0, outcomesFilled: 0, errors };
+  }
+  const fixtureById = /* @__PURE__ */ new Map();
+  for (const row of fixtureRows ?? []) {
+    fixtureById.set(String(row["fixture_id"]), row);
+  }
   let outcomesFilled = 0;
   let fixturesChecked = 0;
   for (const [fixtureId, selections] of byFixture) {
-    const { data: fixtureRow, error: fixtureError } = await supabase2.from("fixtures").select("home_goals, away_goals, home_goals_ht, away_goals_ht, status_short").eq("fixture_id", Number(fixtureId)).maybeSingle();
-    if (fixtureError) {
-      errors.push(`${fixtureId}: ${fixtureError.message}`);
-      continue;
-    }
+    const fixtureRow = fixtureById.get(String(fixtureId));
     if (!fixtureRow) continue;
-    if (fixtureRow.home_goals == null || fixtureRow.away_goals == null) continue;
+    if (fixtureRow["home_goals"] == null || fixtureRow["away_goals"] == null) continue;
     fixturesChecked++;
     const outcomes = outcomeMapForFixture(
       selections.map((s) => s.market_key),
       {
-        home: Number(fixtureRow.home_goals),
-        away: Number(fixtureRow.away_goals),
-        homeHT: fixtureRow.home_goals_ht == null ? null : Number(fixtureRow.home_goals_ht),
-        awayHT: fixtureRow.away_goals_ht == null ? null : Number(fixtureRow.away_goals_ht)
+        home: Number(fixtureRow["home_goals"]),
+        away: Number(fixtureRow["away_goals"]),
+        homeHT: fixtureRow["home_goals_ht"] == null ? null : Number(fixtureRow["home_goals_ht"]),
+        awayHT: fixtureRow["away_goals_ht"] == null ? null : Number(fixtureRow["away_goals_ht"])
       }
     );
+    const idsByOutcome = /* @__PURE__ */ new Map();
     for (const selection of selections) {
       const outcome = outcomes.get(selection.market_key);
       if (!outcome) continue;
-      const { error } = await supabase2.from("prediction_selections").update({ outcome }).eq("id", selection.id).is("outcome", null);
+      const ids = idsByOutcome.get(outcome);
+      if (ids) ids.push(selection.id);
+      else idsByOutcome.set(outcome, [selection.id]);
+    }
+    for (const [outcome, ids] of idsByOutcome) {
+      const { error } = await supabase2.from("prediction_selections").update({ outcome }).in("id", ids).is("outcome", null);
       if (error) {
-        errors.push(`${fixtureId}/${selection.market_key}: ${error.message}`);
+        errors.push(`${fixtureId}/${outcome}: ${error.message}`);
         continue;
       }
-      outcomesFilled++;
+      outcomesFilled += ids.length;
     }
   }
   if (outcomesFilled > 0) {
@@ -88407,7 +88419,7 @@ async function handleCron(req, res) {
     const rawLimit = Number(req.query["limit"]);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), 20) : 10;
     const rawBudget = Number(req.query["budgetMs"]);
-    const budgetMs = Number.isFinite(rawBudget) && rawBudget >= 1e4 ? Math.min(Math.trunc(rawBudget), 5e4) : void 0;
+    const budgetMs = Number.isFinite(rawBudget) && rawBudget >= 1e4 ? Math.min(Math.trunc(rawBudget), 5e4) : 2e4;
     runAutoAnalysis({ limit, budgetMs }).then((summary) => {
       res.json({ message: "Analisis otomatis selesai", ...summary });
     }).catch((err) => {

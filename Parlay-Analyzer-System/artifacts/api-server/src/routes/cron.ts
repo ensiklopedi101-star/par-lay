@@ -268,10 +268,17 @@ async function handleCron(req: any, res: any) {
      * menaikkan limit aman; fixture diproses dari kick-off terdekat. */
     const rawLimit = Number(req.query["limit"]);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), 20) : 10;
+    /* Bawaan 20 detik (bukan 38): cron-job.org memutus permintaan pada ±30
+     * detik dan melaporkan "Failed (timeout)" walau pekerjaan di
+     * server sebenarnya selesai — status gagal palsu yang menutupi
+     * ringkasan asli. 20 detik memberi ruang cold-start + serialisasi
+     * respons di bawah batas itu; pekerjaan tetap berhenti sendiri
+     * lewat anggaran yang sama. `&budgetMs=` tetap bisa menaikkan
+     * sampai 50 detik untuk pemanggil yang batasnya lebih longgar. */
     const rawBudget = Number(req.query["budgetMs"]);
     const budgetMs = Number.isFinite(rawBudget) && rawBudget >= 10_000
       ? Math.min(Math.trunc(rawBudget), 50_000)
-      : undefined;
+      : 20_000;
     runAutoAnalysis({ limit, budgetMs })
       .then((summary) => {
         res.json({ message: "Analisis otomatis selesai", ...summary });

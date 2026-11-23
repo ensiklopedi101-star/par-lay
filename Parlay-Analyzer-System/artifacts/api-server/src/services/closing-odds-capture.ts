@@ -242,15 +242,25 @@ export async function runOutcomeSettlement(
 ): Promise<{ fixturesChecked: number; outcomesFilled: number; errors: string[] }> {
   const supabase = options.supabase ?? defaultSupabase;
   const errors: string[] = [];
-  const limit = options.limit ?? 200;
+  const limit = options.limit ?? 1000;
 
   if (!supabase) return { fixturesChecked: 0, outcomesFilled: 0, errors };
 
-  /* Hanya baris yang belum punya hasil; menjalankan berulang aman. */
+  /* Hanya baris yang belum punya hasil; menjalankan berulang aman.
+   *
+   * Batch, bukan per-baris (perbaikan 17 Nov 2026): versi lama membaca
+   * 200 baris tanpa urutan, lalu SATU query per fixture dan SATU update
+   * per baris secara serial. Di produksi itu berarti cron outcomes
+   * selalu kehabisan waktu di sisi cron-job.org (timeout ±30 detik)
+   * dan 25 laga yang sudah selesai tidak pernah terisi outcome-nya —
+   * antrean 200 baris pertama menelan semua putaran. Kini: baca
+   * sampai 1000 baris terlama, ambil semua fixture dalam SATU query,
+   * dan tulis outcome berkelompok per nilai (win/loss/…) per fixture. */
   const { data: openRows, error: openError } = await supabase
     .from("prediction_selections")
     .select("id, fixture_id, market_key")
     .is("outcome", null)
+    .order("analysed_at", { ascending: true })
     .limit(limit);
 
   if (openError) {
@@ -269,53 +279,67 @@ export async function runOutcomeSettlement(
     else byFixture.set(row.fixture_id, [entry]);
   }
 
+  /* Semua fixture dalam satu query — bukan maybeSingle per fixture. */
+  const fixtureIds = [...byFixture.keys()].map((id) => Number(id)).filter(Number.isFinite);
+  const { data: fixtureRows, error: fixturesError } = await supabase
+    .from("fixtures")
+    .select("fixture_id, home_goals, away_goals, home_goals_ht, away_goals_ht, status_short")
+    .in("fixture_id", fixtureIds);
+
+  if (fixturesError) {
+    errors.push(`baca fixtures: ${fixturesError.message}`);
+    return { fixturesChecked: 0, outcomesFilled: 0, errors };
+  }
+  const fixtureById = new Map<string, Record<string, unknown>>();
+  for (const row of (fixtureRows ?? []) as Array<Record<string, unknown>>) {
+    fixtureById.set(String(row["fixture_id"]), row);
+  }
+
   let outcomesFilled = 0;
   let fixturesChecked = 0;
 
   for (const [fixtureId, selections] of byFixture) {
+    const fixtureRow = fixtureById.get(String(fixtureId));
+    if (!fixtureRow) continue;
     /* Skor dikirim sebagai string oleh sebagian penyedia; Number() menormalkan
        keduanya dan menghasilkan NaN untuk nilai kosong — yang ditolak modul
        penilai, bukan ditebak menjadi 0-0. */
-    const { data: fixtureRow, error: fixtureError } = await supabase
-      .from("fixtures")
-      .select("home_goals, away_goals, home_goals_ht, away_goals_ht, status_short")
-      .eq("fixture_id", Number(fixtureId))
-      .maybeSingle();
-
-    if (fixtureError) {
-      errors.push(`${fixtureId}: ${fixtureError.message}`);
-      continue;
-    }
-    if (!fixtureRow) continue;
-    if (fixtureRow.home_goals == null || fixtureRow.away_goals == null) continue;
+    if (fixtureRow["home_goals"] == null || fixtureRow["away_goals"] == null) continue;
 
     fixturesChecked++;
 
     const outcomes = outcomeMapForFixture(
       selections.map((s) => s.market_key),
       {
-        home: Number(fixtureRow.home_goals),
-        away: Number(fixtureRow.away_goals),
-        homeHT: fixtureRow.home_goals_ht == null ? null : Number(fixtureRow.home_goals_ht),
-        awayHT: fixtureRow.away_goals_ht == null ? null : Number(fixtureRow.away_goals_ht),
+        home: Number(fixtureRow["home_goals"]),
+        away: Number(fixtureRow["away_goals"]),
+        homeHT: fixtureRow["home_goals_ht"] == null ? null : Number(fixtureRow["home_goals_ht"]),
+        awayHT: fixtureRow["away_goals_ht"] == null ? null : Number(fixtureRow["away_goals_ht"]),
       },
     );
 
+    /* Kelompokkan id per nilai outcome: satu update per kelompok. */
+    const idsByOutcome = new Map<string, number[]>();
     for (const selection of selections) {
       const outcome = outcomes.get(selection.market_key);
       if (!outcome) continue;
+      const ids = idsByOutcome.get(outcome);
+      if (ids) ids.push(selection.id);
+      else idsByOutcome.set(outcome, [selection.id]);
+    }
 
+    for (const [outcome, ids] of idsByOutcome) {
       const { error } = await supabase
         .from("prediction_selections")
         .update({ outcome })
-        .eq("id", selection.id)
+        .in("id", ids)
         .is("outcome", null);
 
       if (error) {
-        errors.push(`${fixtureId}/${selection.market_key}: ${error.message}`);
+        errors.push(`${fixtureId}/${outcome}: ${error.message}`);
         continue;
       }
-      outcomesFilled++;
+      outcomesFilled += ids.length;
     }
   }
 
