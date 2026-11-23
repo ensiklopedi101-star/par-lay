@@ -83221,10 +83221,12 @@ function outcomeMapForFixture(marketKeys, score) {
 // src/services/closing-odds-capture.ts
 var CLOSING_WINDOW_MINUTES = 10;
 var MAX_LOOKAHEAD_HOURS = 6;
+var CLOSING_BACKFILL_HOURS = 48;
 var PAGE_SIZE = 1e3;
 async function loadOpenSelections(supabase2, now) {
   const lookahead = new Date(now.getTime() + MAX_LOOKAHEAD_HOURS * 60 * 60 * 1e3);
-  const { data: fixtures, error: fixtureError } = await supabase2.from("fixtures").select("fixture_id, fixture_date").gte("fixture_date", now.toISOString()).lt("fixture_date", lookahead.toISOString());
+  const backfillFrom = new Date(now.getTime() - CLOSING_BACKFILL_HOURS * 60 * 60 * 1e3);
+  const { data: fixtures, error: fixtureError } = await supabase2.from("fixtures").select("fixture_id, fixture_date").gte("fixture_date", backfillFrom.toISOString()).lt("fixture_date", lookahead.toISOString());
   if (fixtureError) throw fixtureError;
   if (!fixtures || fixtures.length === 0) return [];
   const fixtureIds = fixtures.map((f) => String(f.fixture_id));
@@ -83292,7 +83294,7 @@ async function runClosingOddsCapture(options = {}) {
       if (!Number.isFinite(kickoff.getTime())) continue;
       const minutesToKickoff = (kickoff.getTime() - now.getTime()) / 6e4;
       if (minutesToKickoff > CLOSING_WINDOW_MINUTES) continue;
-      if (minutesToKickoff < 0) continue;
+      if (minutesToKickoff < -CLOSING_BACKFILL_HOURS * 60) continue;
       const snapshots = await loadSnapshots(supabase2, fixtureId);
       if (snapshots.length === 0) continue;
       const marketKeys = fixtureSelections.map((s) => s.market_key);

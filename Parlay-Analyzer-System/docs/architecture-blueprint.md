@@ -302,6 +302,18 @@ mengalir; tidak ada laga "gagal teknis" karena data yang sebenarnya
 bisa dilengkapi. *Selesai bila:* satu pekan tanpa kegagalan analisis
 karena statistik kosong.
 
+Kemajuan 23 Nov 2026: Bundesliga 2026-27 **18/18** — Bayern Munich dan
+1. FC Cologne diisi dari derivaasi deterministik skor akhir milik
+sistem sendiri (`src/lib/derived-team-stats.ts`,
+`scripts/derive-missing-team-stats.ts`; `stats_xg` berupa proxy yang
+disusutkan ke rata-rata liga, selalu kalah dari baris FootyStats asli
+lewat jalur merge ingest). *odds_close* 0/1044 terdiagnosis: harga
+hanya diisi dalam jendela T-10 menit dan kandidat dibatasi fixture
+masa depan, jadi satu putaran terlewat = hilang selamanya. Kini ada
+jalur backfill ≤48 jam dari snapshot pra-kick-off
+(`CLOSING_BACKFILL_HOURS` di `closing-odds-capture.ts`) — job closing
+cukup berjalan per-jam, tidak lagi wajib 5 menit.
+
 **Fase B — Bukti live.** Snapshot Tiket Hari Ini ter-settle rutin;
 laporan pertama tiket live (Utama/Booster/Jackpot: menang dari total,
 ROI pada odds tercatat) dari `parlays`, berdampingan dengan ledger
