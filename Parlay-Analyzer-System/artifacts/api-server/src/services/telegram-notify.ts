@@ -12,6 +12,7 @@ import { logger } from "../lib/logger";
 import { formatVariantsMessage } from "../lib/telegram-format";
 import { buildParlayVariants, type ParlayVariants } from "../lib/quant/market-first";
 import { candidatesFromSelectionRows, type FixtureMeta, type SelectionRow } from "./parlay-candidates";
+import { loadUpcomingSelectionRows } from "./upcoming-selections";
 import { computeContextForCandidates } from "./context-live";
 import { enrichTicketWithPriceHunt } from "./price-hunt-live";
 
@@ -25,35 +26,20 @@ export interface TelegramNotifyResult {
 /** Susun tiket yang sama persis dengan yang tampil di panel Komposisi. */
 export async function buildLiveMarketFirstTicket(): Promise<ParlayVariants | null> {
   if (!supabase) return null;
-  const { data: rows, error } = await supabase
-    .from("prediction_selections")
-    .select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative, bookmaker")
-    .order("ev_conservative", { ascending: false })
-    .limit(1000);
-  if (error) {
+  /* Loader yang sama dengan panel: hanya laga belum kick-off, disaring
+   * di query — jalur Telegram/pencatat tidak boleh menyusun tiket dari
+   * pertandingan yang sudah dimulai. */
+  let selectionRows: SelectionRow[];
+  let meta: Map<number, FixtureMeta>;
+  try {
+    const loaded = await loadUpcomingSelectionRows(supabase);
+    selectionRows = loaded.rows;
+    meta = loaded.meta;
+  } catch (error) {
     logger.warn({ error }, "[TELEGRAM] gagal membaca ledger");
     return null;
   }
-  const selectionRows = (rows ?? []) as SelectionRow[];
   if (selectionRows.length === 0) return null;
-
-  const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-  const { data: fixtures } = await supabase
-    .from("fixtures")
-    .select("fixture_id, league_name, fixture_date, home_team_name, away_team_name, status_short")
-    .in("fixture_id", fixtureIds);
-  const meta = new Map<number, FixtureMeta>();
-  for (const f of (fixtures ?? []) as Array<{ fixture_id: number; league_name: string | null; fixture_date: string | null; home_team_name: string | null; away_team_name: string | null; status_short: string | null }>) {
-    meta.set(Number(f.fixture_id), {
-      fixtureId: Number(f.fixture_id),
-      league: f.league_name ?? "unknown",
-      date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
-      homeTeam: f.home_team_name ?? null,
-      awayTeam: f.away_team_name ?? null,
-      kickoffAt: f.fixture_date ?? null,
-      statusShort: f.status_short ?? null,
-    });
-  }
 
   const candidates = candidatesFromSelectionRows(selectionRows, meta, { requirePassing: false });
   const contextByCandidate = await computeContextForCandidates(

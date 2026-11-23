@@ -25,6 +25,7 @@ import {
 } from "../services/parlay-builder";
 import { ALLOW_TWO_LEG_PARLAY, MAX_LEGS, MIN_LEGS } from "../lib/quant/composition";
 import { getLiveTicketReport } from "../services/live-ticket-report";
+import { loadUpcomingSelectionRows } from "../services/upcoming-selections";
 import {
   candidatesFromSelectionRows,
   type FixtureMeta,
@@ -327,18 +328,22 @@ router.get("/parlays/compose-preview", async (req, res) => {
       return;
     }
 
-    const { data: rows, error } = await supabase
-      .from("prediction_selections")
-      .select("fixture_id, market_key, family, line, odds, p_final, p_market_fair, p_model_only, ev, ev_conservative, bookmaker")
-      .order("ev_conservative", { ascending: false })
-      .limit(1000);
-
-    if (error) {
-      res.status(500).json({ error: "Gagal membaca ledger", detail: error.message });
+    /* Bahan komposisi HANYA seleksi untuk laga yang belum kick-off,
+     * disaring di query (services/upcoming-selections) — bukan 1000
+     * baris ber-EV tertinggi yang disaring belakangan di memori. */
+    let selectionRows: SelectionRow[];
+    let meta: Map<number, FixtureMeta>;
+    try {
+      const loaded = await loadUpcomingSelectionRows(supabase);
+      selectionRows = loaded.rows;
+      meta = loaded.meta;
+    } catch (err) {
+      res.status(500).json({
+        error: "Gagal membaca ledger",
+        detail: err instanceof Error ? err.message : String(err),
+      });
       return;
     }
-
-    const selectionRows = (rows ?? []) as SelectionRow[];
     if (selectionRows.length === 0) {
       res.json({
         best: null,
@@ -356,35 +361,17 @@ router.get("/parlays/compose-preview", async (req, res) => {
         maxLegs: MAX_LEGS,
         ledgerRows: 0,
         notes: [
-          "Ledger quant (prediction_selections) kosong. Komposisi butuh harga hasil " +
-            "hitungan engine; tanpa itu tidak ada yang bisa dipilih. Ini bukan kegagalan " +
-            "komposisi — bahan bakunya memang belum ada.",
+          "Belum ada seleksi ledger untuk laga yang belum kick-off dalam 7 hari ke depan. " +
+            "Komposisi butuh harga hasil hitungan engine dari analisis terbaru; tanpa itu tidak " +
+            "ada yang bisa dipilih. Ini bukan kegagalan komposisi — bahan bakunya memang belum ada.",
         ],
         generatedAt: new Date().toISOString(),
       });
       return;
     }
 
-    /* Metadata fixture diperlukan untuk korelasi (liga + tanggal). Tanpa itu
-     * dua leg dari pertandingan berbeda di hari sama tidak bisa dibedakan. */
-    const fixtureIds = [...new Set(selectionRows.map((r) => Number(r.fixture_id)))];
-    const { data: fixtures } = await supabase
-      .from("fixtures")
-      .select("fixture_id, league_name, fixture_date, home_team_name, away_team_name, status_short")
-      .in("fixture_id", fixtureIds);
-
-    const meta = new Map<number, FixtureMeta>();
-    for (const f of (fixtures ?? []) as Array<{ fixture_id: number; league_name: string | null; fixture_date: string | null; home_team_name: string | null; away_team_name: string | null; status_short: string | null }>) {
-      meta.set(Number(f.fixture_id), {
-        fixtureId: Number(f.fixture_id),
-        league: f.league_name ?? "unknown",
-        date: f.fixture_date ? f.fixture_date.slice(0, 10) : null,
-        homeTeam: f.home_team_name ?? null,
-        awayTeam: f.away_team_name ?? null,
-        kickoffAt: f.fixture_date ?? null,
-        statusShort: f.status_short ?? null,
-      });
-    }
+    /* Metadata fixture (liga + tanggal + kick-off) sudah dimuat loader
+     * bersama seleksinya — diperlukan untuk korelasi dan pagar waktu. */
 
     /* Komposisi EV memakai kandidat lolos-EV (perilaku lama); tiket
      * pasar-dulu memakai SEMUA kandidat — probabilitas pasar hakimnya,

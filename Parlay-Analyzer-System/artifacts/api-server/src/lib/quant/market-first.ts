@@ -168,6 +168,8 @@ interface PoolBounds {
 interface PreparedPool {
   pool: MarketFirstLeg[];
   excludedWorthless: number;
+  /** Kandidat yang lolos seluruh gerbang (sebelum dedupe satu-leg-per-laga). */
+  gatedLegs: number;
 }
 
 /** Siapkan pool leg: satu per laga, gerbang kualitas selalu diterapkan. */
@@ -177,6 +179,7 @@ function preparePool(
   bounds: PoolBounds,
 ): PreparedPool {
   let excludedWorthless = 0;
+  let gatedLegs = 0;
   const rankedCharacter: Record<LegCharacter, number> = {
     "didukung-statistik": 3,
     "pasar-stabil": 2,
@@ -226,6 +229,7 @@ function preparePool(
         : note,
       contextRisk,
     };
+    gatedLegs++;
     const existing = byFixture.get(candidate.fixtureId);
     if (!existing) {
       byFixture.set(candidate.fixtureId, leg);
@@ -242,7 +246,7 @@ function preparePool(
   const pool = Array.from(byFixture.values()).sort(
     (a, b) => selectionScore(b) - selectionScore(a) || b.stability - a.stability,
   );
-  return { pool, excludedWorthless };
+  return { pool, excludedWorthless, gatedLegs };
 }
 
 interface Attempt {
@@ -376,6 +380,19 @@ export interface ParlayVariants {
   jackpot: VariantTicket | null;
   /** Alasan terbuka bila sebuah varian tidak terbentuk. */
   variantNotes: Record<ParlayVariantName, string | null>;
+  /**
+   * Angka di balik keputusan kolam — kegagalan harus bisa didiagnosis
+   * dari respons API, bukan ditebak (P6). `stablePoolSize` adalah
+   * jumlah leg stabil satu-per-laga yang tersedia untuk Utama;
+   * `stableGatedLegs` jumlah kandidat yang lolos gerbang sebelum
+   * dedupe per laga.
+   */
+  diagnostics: {
+    candidatesIn: number;
+    stablePoolSize: number;
+    stableGatedLegs: number;
+    minLegs: number;
+  };
 }
 
 export interface ParlayVariantOptions extends MarketFirstOptions {
@@ -422,11 +439,19 @@ export function buildParlayVariants(
   /* — Utama — */
   const utamaBase = buildMarketFirstTicket(candidates, { ...options, targetOdds: options.mainTargetOdds ?? 4 });
   const utama: VariantTicket | null = utamaBase ? { ...utamaBase, variant: "utama" } : null;
-  if (!utama) notes.utama = "Kandidat stabil tidak cukup untuk 5 leg.";
 
   /* — Booster — */
   let booster: VariantTicket | null = null;
   const stable = preparePool(candidates, options, { minProb: 0.55, maxProb: maxMarketProb, minOdds });
+  if (!utama) {
+    /* Catatan wajib menyebut angka: kolam yang tersedia vs minimum,
+     * agar "tidak cukup" berikutnya bisa didiagnosis tanpa menebak —
+     * penyebab tersering adalah analisis laga mendatang yang masih
+     * berjalan, bukan gerbang yang terlalu ketat. */
+    notes.utama = stable.pool.length === 0 && stable.gatedLegs === 0
+      ? `Tidak ada kandidat stabil sama sekali (${candidates.length} kandidat masuk, 0 lolos gerbang probabilitas pasar ≥55% & odds ≥1,25 dari laga yang belum kick-off). Analisis untuk laga mendatang kemungkinan masih berjalan — tiket biasanya terbentuk setelah putaran analisis berikutnya.`
+      : `Kandidat stabil tidak cukup untuk ${minLegs} leg — kolam stabil hanya ${stable.pool.length} leg dari ${stable.gatedLegs} kandidat lolos gerbang (satu leg per laga). Analisis laga mendatang mungkin masih berjalan; coba lagi setelah putaran analisis berikutnya.`;
+  }
   const boosterPoolAll = preparePool(candidates, options, {
     minProb: 0.4, maxProb: 0.55, minOdds, maxOdds: 2.3,
   }).pool.filter(isBoosterLeg);
@@ -487,5 +512,16 @@ export function buildParlayVariants(
     notes.jackpot = `Hanya ${jackpotPool.length} leg berodds 1,80–3,00 yang lolos syarat nilai — jackpot tidak disusun.`;
   }
 
-  return { utama, booster, jackpot, variantNotes: notes };
+  return {
+    utama,
+    booster,
+    jackpot,
+    variantNotes: notes,
+    diagnostics: {
+      candidatesIn: candidates.length,
+      stablePoolSize: stable.pool.length,
+      stableGatedLegs: stable.gatedLegs,
+      minLegs,
+    },
+  };
 }
