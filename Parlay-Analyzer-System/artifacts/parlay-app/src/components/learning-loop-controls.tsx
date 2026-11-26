@@ -86,14 +86,14 @@ export default function LearningLoopControls() {
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
   const state = stateQuery.data;
 
-  function runAction(path: string, label: string, body?: unknown) {
+  function runAction(path: string, label: string, body?: unknown, summarize?: (data: unknown) => string) {
     setActionError(null);
     setActionMessage(null);
     admin.withPassword(() => {
       setPendingLabel(label);
       action.mutate({ path, body }, {
-        onSuccess: () => {
-          setActionMessage(`${label} selesai.`);
+        onSuccess: (data) => {
+          setActionMessage(summarize ? summarize(data) : `${label} selesai.`);
           setPendingLabel(null);
         },
         onError: (error) => {
@@ -187,6 +187,30 @@ export default function LearningLoopControls() {
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
+                  disabled={action.isPending}
+                  onClick={() => runAction("/learning/autonomous-cycle", "Siklus belajar penuh", undefined, (data) => {
+                    const result = (data ?? {}) as {
+                      status?: string;
+                      summary?: {
+                        reason?: string;
+                        repair?: { reverified?: number; nowEligible?: number; error?: string };
+                        classification?: { classified?: number };
+                        auditedClassifiedCount?: number;
+                      };
+                    };
+                    const summary = result.summary ?? {};
+                    if (result.status === "skipped") {
+                      return `Siklus hari ini sudah berjalan (dilewati: ${summary.reason ?? "already_claimed"}). Repair: ${summary.repair?.error ? `gagal — ${summary.repair.error}` : `${summary.repair?.reverified ?? 0} diverifikasi ulang, ${summary.repair?.nowEligible ?? 0} kini eligible`}. Terklasifikasi siklus ini: ${summary.classification?.classified ?? 0}.`;
+                    }
+                    return `Siklus ${result.status ?? "selesai"}: repair ${summary.repair?.reverified ?? 0} diverifikasi ulang (${summary.repair?.nowEligible ?? 0} eligible), klasifikasi baru ${summary.classification?.classified ?? 0}, total eligible terklasifikasi ${summary.auditedClassifiedCount ?? "—"}${summary.reason ? ` — ${summary.reason}` : ""}.`;
+                  })}
+                  title="Menjalankan seluruh siklus: impor settlement, repair verifikasi provider, klasifikasi sebab, proposal, backtest, dan promosi bergerbang. Idempoten per hari."
+                >
+                  {pendingLabel === "Siklus belajar penuh" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                  Jalankan siklus belajar penuh
+                </Button>
+                <Button
+                  size="sm"
                   variant="outline"
                   disabled={action.isPending || state.evaluations.notImported <= 0}
                   onClick={() => runAction("/learning/evaluations/backfill", "Impor settlement lama")}
@@ -207,7 +231,7 @@ export default function LearningLoopControls() {
                   size="sm"
                   disabled={action.isPending || state.evaluations.classified < 30}
                   onClick={() => runAction("/learning/proposals", "Buat proposal kebijakan")}
-                  title="Memerlukan sekurangnya 20 data training dan 10 data holdout yang diklasifikasi."
+                  title="Memerlukan sekurangnya 30 data training dan 20 data holdout eligible yang diklasifikasi. Promosi tetap digerbang 100 + 100."
                 >
                   {pendingLabel === "Buat proposal kebijakan" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
                   Buat proposal dari data training
@@ -217,7 +241,7 @@ export default function LearningLoopControls() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Split berdasarkan waktu: 70% data awal untuk usulan, 30% data terbaru ditahan sebagai validasi. Minimal 20 training + 10 holdout.
+                Split berdasarkan waktu: 70% data awal untuk usulan, 30% data terbaru ditahan sebagai validasi. Proposal dapat disusun sejak 30 training + 20 holdout eligible; promosi otomatis tetap menuntut 100 + 100 dan backtest lolos. Tombol siklus penuh juga menjalankan repair verifikasi settlement terhadap provider.
               </p>
 
               {actionError && (

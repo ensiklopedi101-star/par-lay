@@ -91868,6 +91868,14 @@ router13.get("/learning/optimizer", requireAdmin, async (_req, res) => {
     res.status(message.includes("schema is unavailable") ? 503 : 500).json({ error: message });
   }
 });
+router13.post("/learning/autonomous-cycle", requireAdmin, async (_req, res) => {
+  try {
+    res.json(await runAutonomousLearningCycle());
+  } catch (error) {
+    logger.error({ error }, "[LEARNING] Failed to run autonomous learning cycle manually");
+    res.status(500).json({ error: errorMessage(error) });
+  }
+});
 router13.post("/learning/evaluations/backfill", requireAdmin, async (_req, res) => {
   try {
     res.json(await backfillSettledPredictionEvaluations());
