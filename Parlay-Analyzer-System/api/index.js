@@ -57713,9 +57713,11 @@ function makassarDailyRunKey() {
   return `daily:${values.year}-${values.month}-${values.day}`;
 }
 async function repairExcludedSettlementVerifications(limit = 200) {
-  const { data, error } = await supabase.from("prediction_learning_evaluations").select("prediction_id, fixture_id, analysis_at, settled_at, home_score, away_score, input_snapshot, audit_reasons").eq("audit_status", "excluded").contains("audit_reasons", ["settlement_result_not_provider_verified"]).order("settled_at", { ascending: false }).limit(Math.max(1, Math.min(500, Math.floor(limit))));
+  const { data, error } = await supabase.from("prediction_learning_evaluations").select("prediction_id, fixture_id, analysis_at, settled_at, home_score, away_score, input_snapshot, audit_reasons").eq("audit_status", "excluded").order("settled_at", { ascending: false }).limit(Math.max(1, Math.min(500, Math.floor(limit))));
   if (error) throw new Error(`Failed to load evaluations for verification repair: ${error.message}`);
-  const rows = data ?? [];
+  const rows = (data ?? []).filter(
+    (row) => Array.isArray(row.audit_reasons) && row.audit_reasons.includes("settlement_result_not_provider_verified")
+  );
   if (rows.length === 0) return { scanned: 0, reverified: 0, nowEligible: 0, stillExcluded: 0 };
   const fixtureIds = [...new Set(rows.map((row) => Number(row.fixture_id)).filter((id) => Number.isInteger(id)))];
   const refresh = await refreshFixtureResultsForSettlement(fixtureIds);
