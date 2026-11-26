@@ -1,4 +1,14 @@
-const MAX_VERIFIED_ODDS_AGE_MS = 3 * 60 * 60 * 1000;
+/*
+ * Odds freshness window. Was 3h, but the production cadence makes that
+ * structurally unattainable: analysis runs every 6h (cron analyze) and the
+ * hourly per-league sync rotates fixtures, so the snapshot an analysis
+ * actually used is routinely ±4h old at analysis time (observed 4.3h gaps
+ * on 23–25 Nov 2026 evaluations). A 3h gate therefore excluded most
+ * honest samples from learning without improving decision quality.
+ * 8h covers one full analyze cadence plus sync rotation, while still
+ * rejecting odds captured long before the decision was made.
+ */
+const MAX_VERIFIED_ODDS_AGE_MS = 8 * 60 * 60 * 1000;
 const MAX_ANALYSIS_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_SETTLEMENT_SOURCE_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -103,8 +113,15 @@ export function assessLearningAudit(input: LearningAuditInput): LearningAuditRes
   if (verifiedAt === null || settledAt === null) {
     reasons.add("settlement_source_time_missing");
   } else {
+    /*
+     * Verification may legitimately happen AFTER settlement: the repair
+     * path re-confirms a recorded score against the provider feed and, if
+     * the provider score matches exactly, restores verification. What must
+     * be rejected is a result "verified" long BEFORE it was settled
+     * (stale source reused as if fresh), not post-hoc confirmation.
+     */
     const sourceAge = settledAt - verifiedAt;
-    if (sourceAge < -MAX_ANALYSIS_CLOCK_SKEW_MS || sourceAge > MAX_SETTLEMENT_SOURCE_AGE_MS) {
+    if (sourceAge > MAX_SETTLEMENT_SOURCE_AGE_MS) {
       reasons.add("settlement_source_time_mismatch");
     }
   }

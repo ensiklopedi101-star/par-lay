@@ -56936,7 +56936,7 @@ function assessLearningAudit(input) {
     reasons.add("settlement_source_time_missing");
   } else {
     const sourceAge = settledAt - verifiedAt;
-    if (sourceAge < -MAX_ANALYSIS_CLOCK_SKEW_MS || sourceAge > MAX_SETTLEMENT_SOURCE_AGE_MS) {
+    if (sourceAge > MAX_SETTLEMENT_SOURCE_AGE_MS) {
       reasons.add("settlement_source_time_mismatch");
     }
   }
@@ -56947,7 +56947,7 @@ var MAX_VERIFIED_ODDS_AGE_MS2, MAX_ANALYSIS_CLOCK_SKEW_MS, MAX_SETTLEMENT_SOURCE
 var init_learning_audit = __esm({
   "src/services/learning-audit.ts"() {
     "use strict";
-    MAX_VERIFIED_ODDS_AGE_MS2 = 3 * 60 * 60 * 1e3;
+    MAX_VERIFIED_ODDS_AGE_MS2 = 8 * 60 * 60 * 1e3;
     MAX_ANALYSIS_CLOCK_SKEW_MS = 5 * 60 * 1e3;
     MAX_SETTLEMENT_SOURCE_AGE_MS = 24 * 60 * 60 * 1e3;
   }
@@ -57090,6 +57090,7 @@ __export(prompt_learning_exports, {
   promoteLearningPromptProposal: () => promoteLearningPromptProposal,
   recordSettledPredictionEvaluation: () => recordSettledPredictionEvaluation,
   rejectLearningPromptProposal: () => rejectLearningPromptProposal,
+  repairExcludedSettlementVerifications: () => repairExcludedSettlementVerifications,
   rollbackLearningPromptVersion: () => rollbackLearningPromptVersion,
   runAutonomousLearningCycle: () => runAutonomousLearningCycle,
   validateProposalPolicy: () => validateProposalPolicy
@@ -57506,9 +57507,9 @@ async function generateLearningPromptProposal() {
   if (!active.id) throw new Error("No active learning prompt version is available");
   const all = await getClassifiedEvaluations(1e3);
   const split = splitChronologicalSamples(all);
-  if (split.training.length < MIN_TRAINING_SAMPLES || split.validation.length < MIN_VALIDATION_SAMPLES || !split.validationStart) {
+  if (split.training.length < MIN_PROPOSAL_TRAINING_SAMPLES || split.validation.length < MIN_PROPOSAL_VALIDATION_SAMPLES || !split.validationStart) {
     throw new Error(
-      `Perlu minimal ${MIN_TRAINING_SAMPLES} data training dan ${MIN_VALIDATION_SAMPLES} data holdout yang sudah diklasifikasi; tersedia ${split.training.length} dan ${split.validation.length}.`
+      `Perlu minimal ${MIN_PROPOSAL_TRAINING_SAMPLES} data training dan ${MIN_PROPOSAL_VALIDATION_SAMPLES} data holdout yang sudah diklasifikasi untuk menyusun proposal; tersedia ${split.training.length} dan ${split.validation.length}.`
     );
   }
   const training = split.training;
@@ -57583,7 +57584,7 @@ ${JSON.stringify({
   if (!isPolicyStrictlyTighter(boundedCandidate, baselinePolicy)) {
     throw new Error("Belum ada perubahan kebijakan yang cukup didukung untuk dibuat menjadi kandidat.");
   }
-  if (split.validation.length < MIN_VALIDATION_SAMPLES) {
+  if (split.validation.length < MIN_PROPOSAL_VALIDATION_SAMPLES) {
     throw new Error("Data holdout terlalu sedikit untuk backtest.");
   }
   const proposalId = (0, import_node_crypto2.randomUUID)();
@@ -57602,6 +57603,9 @@ ${JSON.stringify({
     categoryCounts,
     marketMetrics,
     holdoutNotSharedWithModel: true,
+    /* Tiered gates: a proposal drafted below the 100+100 promotion pool is
+     * evidence for review/backtest only — never auto-promotable. */
+    sampleTier: split.training.length >= MIN_TRAINING_SAMPLES && split.validation.length >= MIN_VALIDATION_SAMPLES ? "promotion_grade" : "proposal_grade_below_promotion_pool",
     sourceAudit: {
       trainingSamplesAudited: training.length,
       validationSamplesAudited: split.validation.length,
@@ -57708,6 +57712,62 @@ function makassarDailyRunKey() {
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `daily:${values.year}-${values.month}-${values.day}`;
 }
+async function repairExcludedSettlementVerifications(limit = 200) {
+  const { data, error } = await supabase.from("prediction_learning_evaluations").select("prediction_id, fixture_id, analysis_at, settled_at, home_score, away_score, input_snapshot, audit_reasons").eq("audit_status", "excluded").contains("audit_reasons", ["settlement_result_not_provider_verified"]).order("settled_at", { ascending: false }).limit(Math.max(1, Math.min(500, Math.floor(limit))));
+  if (error) throw new Error(`Failed to load evaluations for verification repair: ${error.message}`);
+  const rows = data ?? [];
+  if (rows.length === 0) return { scanned: 0, reverified: 0, nowEligible: 0, stillExcluded: 0 };
+  const fixtureIds = [...new Set(rows.map((row) => Number(row.fixture_id)).filter((id) => Number.isInteger(id)))];
+  const refresh = await refreshFixtureResultsForSettlement(fixtureIds);
+  const providerConfirmed = new Set(refresh.refreshedFixtureIds);
+  const { data: fixtures, error: fixtureError } = await supabase.from("fixtures").select("fixture_id, home_goals, away_goals").in("fixture_id", fixtureIds);
+  if (fixtureError) throw new Error(`Failed to read repaired fixture scores: ${fixtureError.message}`);
+  const fixtureScores = new Map(
+    (fixtures ?? []).map((fixture) => [
+      Number(fixture.fixture_id),
+      { home: finiteNumber(fixture.home_goals), away: finiteNumber(fixture.away_goals) }
+    ])
+  );
+  let reverified = 0;
+  let nowEligible = 0;
+  for (const row of rows) {
+    const fixtureId = Number(row.fixture_id);
+    const scores = fixtureScores.get(fixtureId);
+    if (!providerConfirmed.has(fixtureId) || !scores || scores.home == null || scores.away == null) continue;
+    if (scores.home !== finiteNumber(row.home_score) || scores.away !== finiteNumber(row.away_score)) continue;
+    const verifiedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const audit = assessLearningAudit({
+      inputSnapshot: row.input_snapshot,
+      analysisAt: typeof row.analysis_at === "string" ? row.analysis_at : null,
+      settledAt: typeof row.settled_at === "string" ? row.settled_at : null,
+      settlementSource: "odds_api_historical",
+      settlementVerified: true,
+      settlementVerifiedAt: verifiedAt
+    });
+    const { error: updateError } = await supabase.from("prediction_learning_evaluations").update({
+      settlement_source: "odds_api_historical",
+      settlement_verified: true,
+      settlement_verified_at: verifiedAt,
+      audit_status: audit.eligible ? "eligible" : "excluded",
+      audit_reasons: audit.reasons,
+      updated_at: verifiedAt
+    }).eq("prediction_id", String(row.prediction_id)).eq("audit_status", "excluded");
+    if (updateError) {
+      logger.error({ err: updateError, predictionId: row.prediction_id }, "[LEARNING-REPAIR] Gagal memulihkan verifikasi evaluasi");
+      continue;
+    }
+    reverified++;
+    if (audit.eligible) nowEligible++;
+  }
+  const result2 = {
+    scanned: rows.length,
+    reverified,
+    nowEligible,
+    stillExcluded: rows.length - nowEligible
+  };
+  logger.info(result2, "[LEARNING-REPAIR] Perbaikan verifikasi settlement selesai");
+  return result2;
+}
 async function runAutonomousLearningCycle() {
   const runKey = makassarDailyRunKey();
   const { data: claimData, error: claimError } = await supabase.rpc(
@@ -57728,6 +57788,14 @@ async function runAutonomousLearningCycle() {
   let errorMessage2 = null;
   try {
     summary.backfill = await backfillSettledPredictionEvaluations();
+    try {
+      summary.repair = await repairExcludedSettlementVerifications();
+    } catch (repairError) {
+      summary.repair = {
+        error: repairError instanceof Error ? repairError.message : String(repairError)
+      };
+      logger.warn({ err: repairError }, "[LEARNING-AUTO] Perbaikan verifikasi gagal \u2014 siklus tetap lanjut");
+    }
     let batches = 0;
     let requested = 0;
     let classified = 0;
@@ -57747,7 +57815,7 @@ async function runAutonomousLearningCycle() {
       const { count, error } = await supabase.from("prediction_learning_evaluations").select("prediction_id", { count: "exact", head: true }).eq("audit_status", "eligible").eq("classification_status", "classified");
       if (error) throw new Error(`Failed to count audited training data: ${error.message}`);
       summary.auditedClassifiedCount = count ?? 0;
-      if ((count ?? 0) < MIN_TRAINING_SAMPLES + MIN_VALIDATION_SAMPLES) {
+      if ((count ?? 0) < MIN_PROPOSAL_TRAINING_SAMPLES + MIN_PROPOSAL_VALIDATION_SAMPLES) {
         summary.reason = "insufficient_audited_history";
       } else {
         let proposal = null;
@@ -57771,7 +57839,11 @@ async function runAutonomousLearningCycle() {
           };
           const backtest = await backtestLearningPromptProposal(proposalId);
           summary.backtest = backtest;
-          if (backtest.eligible === true) {
+          const promotionPoolReady = (count ?? 0) >= MIN_TRAINING_SAMPLES + MIN_VALIDATION_SAMPLES;
+          summary.promotionPoolReady = promotionPoolReady;
+          if (!promotionPoolReady) {
+            summary.reason = "proposal_drafted_below_promotion_pool";
+          } else if (backtest.eligible === true) {
             summary.activation = await promoteLearningPromptProposal(proposalId);
             status = "completed";
           } else {
@@ -57896,7 +57968,7 @@ function validateProposalPolicy(candidateInput, baselineInput) {
 function formatPolicyBacktest(metrics) {
   return `${metrics.selected}/${metrics.totalSettled} selections; hit ${metrics.hitRate == null ? "n/a" : `${(metrics.hitRate * 100).toFixed(1)}%`}; ROI ${metrics.roiPerBet == null ? "n/a" : `${(metrics.roiPerBet * 100).toFixed(1)}%`}`;
 }
-var import_node_crypto2, MIN_TRAINING_SAMPLES, MIN_VALIDATION_SAMPLES, MAX_EVALUATIONS_PER_CLASSIFY, MAX_BACKTEST_SAMPLES, AUTO_PROMOTION_CONFIDENCE_THRESHOLD, MAX_AUTO_CLASSIFICATION_BATCHES, ACTIVE_PROMPT_CACHE_MS, OUTCOMES, EVALUATION_CATEGORIES, activePromptCache, activePromptFailureCache;
+var import_node_crypto2, MIN_TRAINING_SAMPLES, MIN_VALIDATION_SAMPLES, MIN_PROPOSAL_TRAINING_SAMPLES, MIN_PROPOSAL_VALIDATION_SAMPLES, MAX_EVALUATIONS_PER_CLASSIFY, MAX_BACKTEST_SAMPLES, AUTO_PROMOTION_CONFIDENCE_THRESHOLD, MAX_AUTO_CLASSIFICATION_BATCHES, ACTIVE_PROMPT_CACHE_MS, OUTCOMES, EVALUATION_CATEGORIES, activePromptCache, activePromptFailureCache;
 var init_prompt_learning = __esm({
   "src/services/prompt-learning.ts"() {
     "use strict";
@@ -57908,6 +57980,8 @@ var init_prompt_learning = __esm({
     init_learning_policy();
     MIN_TRAINING_SAMPLES = 100;
     MIN_VALIDATION_SAMPLES = 100;
+    MIN_PROPOSAL_TRAINING_SAMPLES = 30;
+    MIN_PROPOSAL_VALIDATION_SAMPLES = 20;
     MAX_EVALUATIONS_PER_CLASSIFY = 10;
     MAX_BACKTEST_SAMPLES = 500;
     AUTO_PROMOTION_CONFIDENCE_THRESHOLD = 0.9;
@@ -88778,7 +88852,7 @@ async function handleCron(req, res) {
         return { settled: 0, lessons: 0, skipped: 0, fixtures: 0 };
       }
       const { runSettlement: runSettlement2 } = await Promise.resolve().then(() => (init_settlement(), settlement_exports));
-      const result2 = await runSettlement2({ fixtureIds, refreshResults: false });
+      const result2 = await runSettlement2({ fixtureIds, refreshResults: true });
       return { ...result2, fixtures: fixtureIds.length };
     })().then((result2) => {
       res.json({ message: "Settlement prediksi & tiket selesai", ...result2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
