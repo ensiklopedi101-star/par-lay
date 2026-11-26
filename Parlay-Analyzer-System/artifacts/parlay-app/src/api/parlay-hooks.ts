@@ -840,6 +840,32 @@ export function useLiveTicketReport() {
   });
 }
 
+/** Fase C — evaluasi holdout kronologis bobot blend dari laporan ledger. */
+export interface BlendHoldoutReport {
+  blendHoldout: {
+    status: "insufficient_data" | "evaluated";
+    trainN: number;
+    holdoutN: number;
+    cutoff: string | null;
+    fittedWeight: number | null;
+    holdout: {
+      marketLogLoss: number;
+      incumbentLogLoss: number;
+      candidateLogLoss: number;
+      modelLogLoss: number;
+    } | null;
+    adoption: { adoptCandidate: boolean; reason: string };
+  };
+}
+
+export function useBlendHoldoutReport() {
+  return useQuery<BlendHoldoutReport>({
+    queryKey: ["learning/ledger-blend-holdout"],
+    queryFn: () => apiGet<BlendHoldoutReport>(`${API_BASE}/learning/ledger`),
+    refetchInterval: 300_000,
+  });
+}
+
 export const getGetParlayCompositionQueryKey = () => ["parlays/compose-preview"];
 export function useGetParlayComposition() {
   return useQuery<ParlayComposition>({

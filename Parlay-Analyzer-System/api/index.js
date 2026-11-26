@@ -56109,6 +56109,95 @@ function blendLambdas(market, model, w) {
 function defaultModelWeight(reliability, cap = DEFAULT_MAX_MODEL_WEIGHT) {
   return Math.min(cap, Math.max(0, cap * reliability));
 }
+function logLossOf(samples, pOf) {
+  let sum = 0;
+  let n = 0;
+  for (const s of samples) {
+    const p = pOf(s);
+    if (p == null || !Number.isFinite(p)) continue;
+    const q = clampP(p);
+    sum += -(s.outcome === 1 ? Math.log(q) : Math.log(1 - q));
+    n++;
+  }
+  return n > 0 ? sum / n : null;
+}
+function brierOf(samples, pOf) {
+  let sum = 0;
+  let n = 0;
+  for (const s of samples) {
+    const p = pOf(s);
+    if (p == null || !Number.isFinite(p)) continue;
+    sum += (p - s.outcome) ** 2;
+    n++;
+  }
+  return n > 0 ? sum / n : null;
+}
+function evaluateBlendHoldout(samples, trainingFraction = 0.7) {
+  const usable = samples.filter((s) => Number.isFinite(s.pModel) && Number.isFinite(s.pMarket) && s.pFinal != null && Number.isFinite(s.pFinal) && (s.outcome === 0 || s.outcome === 1) && s.analysedAt != null && Number.isFinite(new Date(s.analysedAt).getTime())).slice().sort((a, b) => new Date(a.analysedAt).getTime() - new Date(b.analysedAt).getTime());
+  let splitIndex = Math.floor(usable.length * trainingFraction);
+  const splitTime = usable[splitIndex] ? new Date(usable[splitIndex].analysedAt).getTime() : null;
+  if (splitTime != null) {
+    let groupStart = splitIndex;
+    while (groupStart > 0 && new Date(usable[groupStart - 1].analysedAt).getTime() === splitTime) groupStart--;
+    let groupEnd = splitIndex;
+    while (groupEnd < usable.length && new Date(usable[groupEnd].analysedAt).getTime() === splitTime) groupEnd++;
+    const boundaries = [groupStart, groupEnd].filter((b) => b > 0 && b < usable.length);
+    if (boundaries.length > 0) {
+      splitIndex = boundaries.sort((x, y) => Math.abs(x - splitIndex) - Math.abs(y - splitIndex))[0];
+    }
+  }
+  const train = usable.slice(0, splitIndex);
+  const holdout = usable.slice(splitIndex);
+  const cutoff = holdout[0]?.analysedAt ?? null;
+  const insufficient = (reason2) => ({
+    status: "insufficient_data",
+    trainN: train.length,
+    holdoutN: holdout.length,
+    cutoff,
+    fittedWeight: null,
+    holdout: null,
+    adoption: { adoptCandidate: false, gainVsIncumbent: null, gainVsMarket: null, reason: reason2 }
+  });
+  if (train.length < MIN_BLEND_TRAIN_SAMPLES || holdout.length < MIN_BLEND_HOLDOUT_SAMPLES) {
+    return insufficient(
+      `Perlu \u2265${MIN_BLEND_TRAIN_SAMPLES} latih + \u2265${MIN_BLEND_HOLDOUT_SAMPLES} holdout decisive; tersedia ${train.length} + ${holdout.length}.`
+    );
+  }
+  const fit = fitBlendWeight(train);
+  if (!fit) return insufficient("fitBlendWeight gagal pada data latih.");
+  const w = fit.weight;
+  const marketLogLoss = logLossOf(holdout, (s) => s.pMarket);
+  const incumbentLogLoss = logLossOf(holdout, (s) => s.pFinal);
+  const candidateLogLoss = logLossOf(holdout, blendP(w));
+  const modelLogLoss = logLossOf(holdout, (s) => s.pModel);
+  const marketBrier = brierOf(holdout, (s) => s.pMarket);
+  const incumbentBrier = brierOf(holdout, (s) => s.pFinal);
+  const candidateBrier = brierOf(holdout, blendP(w));
+  if (marketLogLoss == null || incumbentLogLoss == null || candidateLogLoss == null || modelLogLoss == null || marketBrier == null || incumbentBrier == null || candidateBrier == null) {
+    return insufficient("Metrik holdout tidak lengkap.");
+  }
+  const gainVsIncumbent = incumbentLogLoss - candidateLogLoss;
+  const gainVsMarket = marketLogLoss - candidateLogLoss;
+  const adoptCandidate = gainVsIncumbent >= MIN_BLEND_ADOPTION_GAIN && gainVsMarket >= 0;
+  const reason = adoptCandidate ? `Kandidat w*=${w.toFixed(2)} mengalahkan incumbent produksi di holdout (+${gainVsIncumbent.toFixed(4)} log-loss) dan tidak kalah dari pasar murni \u2014 layak diadopsi lewat PR.` : `Kandidat w*=${w.toFixed(2)} belum terbukti di holdout (vs incumbent ${gainVsIncumbent >= 0 ? "+" : ""}${gainVsIncumbent.toFixed(4)}, vs pasar ${gainVsMarket >= 0 ? "+" : ""}${gainVsMarket.toFixed(4)} log-loss; margin bukti minimum ${MIN_BLEND_ADOPTION_GAIN}) \u2014 bobot produksi tidak diubah.`;
+  return {
+    status: "evaluated",
+    trainN: train.length,
+    holdoutN: holdout.length,
+    cutoff,
+    fittedWeight: w,
+    holdout: {
+      marketLogLoss,
+      incumbentLogLoss,
+      candidateLogLoss,
+      modelLogLoss,
+      marketBrier,
+      incumbentBrier,
+      candidateBrier
+    },
+    adoption: { adoptCandidate, gainVsIncumbent, gainVsMarket, reason }
+  };
+}
 function fitBlendWeight(samples) {
   const valid = samples.filter(
     (s) => Number.isFinite(s.pModel) && Number.isFinite(s.pMarket) && (s.outcome === 0 || s.outcome === 1)
@@ -56135,11 +56224,15 @@ function fitBlendWeight(samples) {
     curve
   };
 }
-var DEFAULT_MAX_MODEL_WEIGHT, logit, sigmoid, clampP;
+var DEFAULT_MAX_MODEL_WEIGHT, MIN_BLEND_TRAIN_SAMPLES, MIN_BLEND_HOLDOUT_SAMPLES, MIN_BLEND_ADOPTION_GAIN, blendP, logit, sigmoid, clampP;
 var init_blend = __esm({
   "src/lib/quant/blend.ts"() {
     "use strict";
     DEFAULT_MAX_MODEL_WEIGHT = 0.3;
+    MIN_BLEND_TRAIN_SAMPLES = 100;
+    MIN_BLEND_HOLDOUT_SAMPLES = 100;
+    MIN_BLEND_ADOPTION_GAIN = 2e-3;
+    blendP = (w) => (s) => sigmoid(w * logit(clampP(s.pModel)) + (1 - w) * logit(clampP(s.pMarket)));
     logit = (p) => Math.log(p / (1 - p));
     sigmoid = (x) => 1 / (1 + Math.exp(-x));
     clampP = (p) => Math.min(0.995, Math.max(5e-3, p));
@@ -90529,6 +90622,18 @@ function group(rows, keyOf) {
 }
 function buildLedgerReport(rows) {
   const overall = slice("all", rows);
+  const blendHoldout = evaluateBlendHoldout(
+    rows.filter((r) => r.model_version === 2).map((r) => {
+      const bet = toLedgerBet(r);
+      return {
+        pModel: bet.pModel ?? Number.NaN,
+        pMarket: bet.pMarketFair ?? Number.NaN,
+        pFinal: bet.pFinal,
+        outcome: binaryOutcome(bet.outcome) ?? -1,
+        analysedAt: r.analysed_at ?? null
+      };
+    }).filter((s) => s.outcome === 0 || s.outcome === 1)
+  );
   const settled = rows.filter((r) => r.outcome != null && VALID_OUTCOMES.has(r.outcome)).length;
   const withClose = rows.filter((r) => r.odds_close != null || r.close_fair_prob != null).length;
   const clv = overall.summary.clv;
@@ -90560,6 +90665,12 @@ function buildLedgerReport(rows) {
       detail: overall.blendFit == null ? "fitBlendWeight butuh \u2265 30 sampel decisive dengan p_model & p_market." : `w* = ${overall.blendFit.weight.toFixed(2)} dari n=${overall.blendFit.n} (w*=0 \u2192 pasar murni).`
     },
     {
+      id: "blend_holdout_fasec",
+      label: "Fase C: kandidat bobot blend terbukti di holdout kronologis (\u2265100 latih + \u2265100 holdout)",
+      passed: blendHoldout.adoption.adoptCandidate,
+      detail: blendHoldout.status === "insufficient_data" ? blendHoldout.adoption.reason : `w*=${blendHoldout.fittedWeight?.toFixed(2)} dari ${blendHoldout.trainN} latih; holdout ${blendHoldout.holdoutN}: log-loss pasar ${blendHoldout.holdout?.marketLogLoss.toFixed(4)}, incumbent ${blendHoldout.holdout?.incumbentLogLoss.toFixed(4)}, kandidat ${blendHoldout.holdout?.candidateLogLoss.toFixed(4)}. ${blendHoldout.adoption.reason}`
+    },
+    {
       id: "calibration",
       label: "ECE kalibrasi \u2264 0.05",
       passed: overall.ece != null && overall.ece <= 0.05,
@@ -90576,6 +90687,7 @@ function buildLedgerReport(rows) {
     overall,
     byModelVersion: group(rows, (r) => `v${r.model_version}`),
     byFamily: group(rows, (r) => r.family),
+    blendHoldout,
     gates,
     verdict: overall.summary.verdict
   };

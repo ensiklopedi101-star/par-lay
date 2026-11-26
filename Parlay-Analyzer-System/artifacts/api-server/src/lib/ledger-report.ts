@@ -20,7 +20,12 @@
  * Mengklaim model jelek dari 12 sampel sama salahnya dengan mengklaim bagus.
  */
 
-import { fitBlendWeight, type BlendSample } from "./quant/blend";
+import {
+  evaluateBlendHoldout,
+  fitBlendWeight,
+  type BlendHoldoutEvaluation,
+  type BlendSample,
+} from "./quant/blend";
 import {
   binaryOutcome,
   summarizeLedger,
@@ -106,6 +111,14 @@ export interface LedgerReport {
   overall: LedgerSlice;
   byModelVersion: LedgerSlice[];
   byFamily: LedgerSlice[];
+  /**
+   * Fase C — evaluasi holdout kronologis bobot blend, khusus baris v2
+   * (satu-satunya versi yang probabilitasnya dihasilkan pipeline quant
+   * yang bobotnya akan disesuaikan). Inilah hakim tuas blend; `blendFit`
+   * per-slice tetap ditampilkan sebagai konteks tetapi TIDAK dipakai
+   * mengambil keputusan karena mencampur data latih + uji.
+   */
+  blendHoldout: BlendHoldoutEvaluation;
   gates: Phase3Gate[];
   verdict: LedgerSummary["verdict"];
 }
@@ -146,6 +159,21 @@ function group(rows: SelectionLedgerRow[], keyOf: (r: SelectionLedgerRow) => str
 
 export function buildLedgerReport(rows: SelectionLedgerRow[]): LedgerReport {
   const overall = slice("all", rows);
+  const blendHoldout = evaluateBlendHoldout(
+    rows
+      .filter((r) => r.model_version === 2)
+      .map((r) => {
+        const bet = toLedgerBet(r);
+        return {
+          pModel: bet.pModel ?? Number.NaN,
+          pMarket: bet.pMarketFair ?? Number.NaN,
+          pFinal: bet.pFinal,
+          outcome: (binaryOutcome(bet.outcome) ?? -1) as 0 | 1,
+          analysedAt: r.analysed_at ?? null,
+        };
+      })
+      .filter((s) => s.outcome === 0 || s.outcome === 1),
+  );
   const settled = rows.filter((r) => r.outcome != null && VALID_OUTCOMES.has(r.outcome)).length;
   const withClose = rows.filter((r) => r.odds_close != null || r.close_fair_prob != null).length;
 
@@ -185,6 +213,14 @@ export function buildLedgerReport(rows: SelectionLedgerRow[]): LedgerReport {
         : `w* = ${overall.blendFit.weight.toFixed(2)} dari n=${overall.blendFit.n} (w*=0 → pasar murni).`,
     },
     {
+      id: "blend_holdout_fasec",
+      label: "Fase C: kandidat bobot blend terbukti di holdout kronologis (≥100 latih + ≥100 holdout)",
+      passed: blendHoldout.adoption.adoptCandidate,
+      detail: blendHoldout.status === "insufficient_data"
+        ? blendHoldout.adoption.reason
+        : `w*=${blendHoldout.fittedWeight?.toFixed(2)} dari ${blendHoldout.trainN} latih; holdout ${blendHoldout.holdoutN}: log-loss pasar ${blendHoldout.holdout?.marketLogLoss.toFixed(4)}, incumbent ${blendHoldout.holdout?.incumbentLogLoss.toFixed(4)}, kandidat ${blendHoldout.holdout?.candidateLogLoss.toFixed(4)}. ${blendHoldout.adoption.reason}`,
+    },
+    {
       id: "calibration",
       label: "ECE kalibrasi ≤ 0.05",
       passed: overall.ece != null && overall.ece <= 0.05,
@@ -204,6 +240,7 @@ export function buildLedgerReport(rows: SelectionLedgerRow[]): LedgerReport {
     overall,
     byModelVersion: group(rows, (r) => `v${r.model_version}`),
     byFamily: group(rows, (r) => r.family),
+    blendHoldout,
     gates,
     verdict: overall.summary.verdict,
   };

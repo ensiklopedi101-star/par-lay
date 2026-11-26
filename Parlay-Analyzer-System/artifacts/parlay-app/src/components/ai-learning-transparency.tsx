@@ -2,7 +2,7 @@ import { BarChart3, BookOpen, Lightbulb } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useGetLearningSummary } from "@/api/parlay-hooks";
+import { useBlendHoldoutReport, useGetLearningSummary } from "@/api/parlay-hooks";
 
 function formatPercent(value: number | null | undefined) {
   return value == null ? "—" : `${(value * 100).toFixed(1)}%`;
@@ -12,6 +12,37 @@ function outcomeClass(outcome: string) {
   if (outcome === "WIN" || outcome === "HALF_WIN") return "text-emerald-400";
   if (outcome === "LOSS" || outcome === "HALF_LOSS") return "text-red-400";
   return "text-amber-400";
+}
+
+function BlendHoldoutCard() {
+  const { data } = useBlendHoldoutReport();
+  if (!data?.blendHoldout) return null;
+  const b = data.blendHoldout;
+  return (
+    <div className="rounded-lg border border-border/70 bg-background/40 p-4">
+      <div className="flex items-center gap-2">
+        <BarChart3 className="h-4 w-4 text-primary" />
+        <h3 className="text-sm font-semibold">Fase C — Kalibrasi bobot blend model ↔ pasar</h3>
+        <Badge
+          variant="outline"
+          className={b.adoption.adoptCandidate
+            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+            : "border-amber-500/30 bg-amber-500/10 text-amber-400"}
+        >
+          {b.status === "insufficient_data" ? "Data belum cukup" : b.adoption.adoptCandidate ? "Kandidat terbukti" : "Bobot produksi dipertahankan"}
+        </Badge>
+      </div>
+      {b.holdout ? (
+        <div className="mt-3 grid gap-3 text-xs sm:grid-cols-4">
+          <div>w* hasil fit latih<div className="mt-0.5 text-base font-semibold tabular-nums">{b.fittedWeight?.toFixed(2)}</div><div className="text-muted-foreground">{b.trainN} latih · {b.holdoutN} holdout</div></div>
+          <div>Log-loss pasar murni<div className="mt-0.5 text-base font-semibold tabular-nums">{b.holdout.marketLogLoss.toFixed(4)}</div><div className="text-muted-foreground">holdout, w=0</div></div>
+          <div>Log-loss incumbent<div className="mt-0.5 text-base font-semibold tabular-nums">{b.holdout.incumbentLogLoss.toFixed(4)}</div><div className="text-muted-foreground">p_final produksi saat itu</div></div>
+          <div>Log-loss kandidat<div className="mt-0.5 text-base font-semibold tabular-nums">{b.holdout.candidateLogLoss.toFixed(4)}</div><div className="text-muted-foreground">blend pada w*</div></div>
+        </div>
+      ) : null}
+      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{b.adoption.reason}</p>
+    </div>
+  );
 }
 
 export default function AILearningTransparency() {
@@ -184,6 +215,8 @@ export default function AILearningTransparency() {
                   )}
                 </div>
               </div>
+
+              <BlendHoldoutCard />
             </div>
           </>
         )}
