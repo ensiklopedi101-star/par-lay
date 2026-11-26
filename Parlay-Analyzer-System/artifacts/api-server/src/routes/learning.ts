@@ -14,6 +14,7 @@ import {
   promoteLearningPromptProposal,
   rejectLearningPromptProposal,
   rollbackLearningPromptVersion,
+  runAutonomousLearningCycle,
 } from "../services/prompt-learning";
 
 const router: IRouter = Router();
@@ -80,6 +81,30 @@ router.get("/learning/optimizer", requireAdmin, async (_req, res) => {
     logger.error({ error }, "[LEARNING] Failed to load controlled learning state");
     const message = errorMessage(error);
     res.status(message.includes("schema is unavailable") ? 503 : 500).json({ error: message });
+  }
+});
+
+/**
+ * Picu siklus pembelajaran otonom penuh secara manual (admin):
+ * backfill → repair verifikasi settlement → klasifikasi → proposal →
+ * backtest → promosi bergerbang. Idempoten per hari (kunci
+ * daily:Asia/Makassar berbagi dengan cron action=learning), jadi aman
+ * ditekan kapan pun — bila hari ini sudah berjalan, responsnya
+ * status:"skipped" dengan alasannya.
+ *
+ * Mengapa endpoint ini ada (26 Nov 2026): satu-satunya pemicu siklus
+ * sebelumnya adalah cron-job.org dengan CRON_SECRET, dan repair
+ * verifikasi hanya hidup di dalam siklus — ketika cron-job.org tidak
+ * bisa dipakai, tidak ada jalur manual sama sekali untuk menjalankan
+ * repair. Tombol panel memanggil endpoint ini dengan password admin
+ * pemilik sendiri; tidak ada kredensial yang perlu dibagikan ke siapa pun.
+ */
+router.post("/learning/autonomous-cycle", requireAdmin, async (_req, res) => {
+  try {
+    res.json(await runAutonomousLearningCycle());
+  } catch (error) {
+    logger.error({ error }, "[LEARNING] Failed to run autonomous learning cycle manually");
+    res.status(500).json({ error: errorMessage(error) });
   }
 });
 
