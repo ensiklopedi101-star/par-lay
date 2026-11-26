@@ -68,6 +68,9 @@ function isAuthorized(req: any): boolean {
  * GET /api/cron?token=<CRON_SECRET>&action=sync        -> trigger full odds sync
  * GET /api/cron?token=<CRON_SECRET>&action=revalidate  -> refresh active pre-kickoff prediction tags
  * GET /api/cron?token=<CRON_SECRET>&action=reanalyze  -> backfill + revalidate + trigger bounded AI revisions
+ * GET /api/cron?token=<CRON_SECRET>&action=learning   -> siklus pembelajaran
+ *   otonom harian (klasifikasi sebab menang/kalah -> proposal kebijakan ->
+ *   backtest gerbang statistik -> promosi). Idempoten per hari.
  *
  * Keep-alive is recommended for 30-minute pings to keep a Replit workspace alive
  * without burning the Odds-API free-plan quota.
@@ -282,6 +285,37 @@ async function handleCron(req: any, res: any) {
       })
       .catch((err) => {
         logger.error({ err }, "Cron-triggered settlement gagal");
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      });
+    return;
+  }
+
+  if (action === "learning") {
+    /* Siklus pembelajaran otonom harian: backfill evaluasi dari
+     * prediksi yang sudah settle, klasifikasikan sebab menang/kalah
+     * per prediksi (kategori market_selection / probability_calibration
+     * / odds_value / data_quality / league_context / match_variance /
+     * successful_pattern / insufficient_evidence), susun proposal
+     * kebijakan, backtest kronologis ≥100 latih + ≥100 holdout, dan
+     * promosi otomatis hanya bila semua gerbang lolos.
+     *
+     * Celah yang ditutup aksi ini (audit 24 Nov 2026): satu-satunya
+     * pemanggil runAutonomousLearningCycle sebelumnya adalah scheduler
+     * internal node-cron yang nonaktif secara bawaan, sementara P8
+     * menetapkan cron-job.org sebagai satu-satunya pemicu terjadwal —
+     * jadi di produksi siklus ini tidak pernah berjalan sendiri dan
+     * pembelajaran hanya bergerak bila admin menekan tombol manual.
+     * Siklus ini idempoten per hari (kunci daily:Asia/Makassar), jadi
+     * aman dipanggil lebih dari sekali sehari. */
+    (async () => {
+      const { runAutonomousLearningCycle } = await import("../services/prompt-learning");
+      return runAutonomousLearningCycle();
+    })()
+      .then((result) => {
+        res.json({ message: "Siklus pembelajaran selesai", ...result, timestamp: new Date().toISOString() });
+      })
+      .catch((err) => {
+        logger.error({ err }, "Cron-triggered learning cycle gagal");
         res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
       });
     return;

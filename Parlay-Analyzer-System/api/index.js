@@ -57078,6 +57078,22 @@ var init_learning_policy = __esm({
 });
 
 // src/services/prompt-learning.ts
+var prompt_learning_exports = {};
+__export(prompt_learning_exports, {
+  backfillSettledPredictionEvaluations: () => backfillSettledPredictionEvaluations,
+  backtestLearningPromptProposal: () => backtestLearningPromptProposal,
+  classifyPendingLearningEvaluations: () => classifyPendingLearningEvaluations,
+  formatPolicyBacktest: () => formatPolicyBacktest,
+  generateLearningPromptProposal: () => generateLearningPromptProposal,
+  getActiveLearningPromptVersion: () => getActiveLearningPromptVersion,
+  getLearningLoopState: () => getLearningLoopState,
+  promoteLearningPromptProposal: () => promoteLearningPromptProposal,
+  recordSettledPredictionEvaluation: () => recordSettledPredictionEvaluation,
+  rejectLearningPromptProposal: () => rejectLearningPromptProposal,
+  rollbackLearningPromptVersion: () => rollbackLearningPromptVersion,
+  runAutonomousLearningCycle: () => runAutonomousLearningCycle,
+  validateProposalPolicy: () => validateProposalPolicy
+});
 function asRecord(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value;
@@ -57682,6 +57698,110 @@ async function promoteLearningPromptProposal(proposalId) {
   activePromptFailureCache = null;
   return data;
 }
+function makassarDailyRunKey() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Makassar",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(/* @__PURE__ */ new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `daily:${values.year}-${values.month}-${values.day}`;
+}
+async function runAutonomousLearningCycle() {
+  const runKey = makassarDailyRunKey();
+  const { data: claimData, error: claimError } = await supabase.rpc(
+    "claim_ai_learning_automation_run",
+    { p_run_key: runKey }
+  );
+  if (claimError) throw new Error(`Failed to claim daily learning run: ${claimError.message}`);
+  const claim = asRecord(claimData);
+  if (claim.claimed !== true) {
+    return { runKey, status: "skipped", reason: claim.reason ?? "already_claimed" };
+  }
+  const summary = {
+    runKey,
+    startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    confidenceThreshold: AUTO_PROMOTION_CONFIDENCE_THRESHOLD
+  };
+  let status = "skipped";
+  let errorMessage2 = null;
+  try {
+    summary.backfill = await backfillSettledPredictionEvaluations();
+    let batches = 0;
+    let requested = 0;
+    let classified = 0;
+    for (; batches < MAX_AUTO_CLASSIFICATION_BATCHES; batches++) {
+      const result2 = await classifyPendingLearningEvaluations();
+      requested += result2.requested;
+      classified += result2.classified;
+      if (result2.requested === 0 || result2.classified === 0) {
+        batches++;
+        break;
+      }
+    }
+    summary.classification = { batches, requested, classified };
+    if (classified === 0) {
+      summary.reason = "no_new_source_audited_evaluations";
+    } else {
+      const { count, error } = await supabase.from("prediction_learning_evaluations").select("prediction_id", { count: "exact", head: true }).eq("audit_status", "eligible").eq("classification_status", "classified");
+      if (error) throw new Error(`Failed to count audited training data: ${error.message}`);
+      summary.auditedClassifiedCount = count ?? 0;
+      if ((count ?? 0) < MIN_TRAINING_SAMPLES + MIN_VALIDATION_SAMPLES) {
+        summary.reason = "insufficient_audited_history";
+      } else {
+        let proposal = null;
+        try {
+          proposal = await generateLearningPromptProposal();
+        } catch (generationError) {
+          const message = generationError instanceof Error ? generationError.message : String(generationError);
+          if (message.includes("Belum ada perubahan kebijakan") || message.includes("Perlu minimal")) {
+            summary.reason = "no_supported_policy_change";
+          } else {
+            throw generationError;
+          }
+        }
+        if (proposal) {
+          const proposalId = String(proposal.id ?? "");
+          if (!proposalId) throw new Error("Generated learning proposal has no ID");
+          summary.proposal = {
+            id: proposalId,
+            confidence: finiteNumber(proposal.gemini_confidence) ?? 0,
+            confidenceRationale: proposal.confidence_rationale ?? ""
+          };
+          const backtest = await backtestLearningPromptProposal(proposalId);
+          summary.backtest = backtest;
+          if (backtest.eligible === true) {
+            summary.activation = await promoteLearningPromptProposal(proposalId);
+            status = "completed";
+          } else {
+            summary.reason = "objective_or_confidence_gates_not_passed";
+          }
+        }
+      }
+    }
+  } catch (error) {
+    status = "failed";
+    errorMessage2 = error instanceof Error ? error.message : String(error);
+    summary.reason = "automation_error";
+  }
+  const finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+  const { error: finishError } = await supabase.from("ai_learning_automation_runs").update({
+    status,
+    finished_at: finishedAt,
+    summary,
+    error: errorMessage2
+  }).eq("run_key", runKey);
+  if (finishError) {
+    logger.error({ err: finishError, runKey }, "[LEARNING-AUTO] Gagal menyimpan hasil siklus otomatis");
+  }
+  if (status === "failed") {
+    logger.error({ runKey, error: errorMessage2, summary }, "[LEARNING-AUTO] Siklus otomatis gagal");
+  } else {
+    logger.info({ runKey, status, summary }, "[LEARNING-AUTO] Siklus otomatis selesai");
+  }
+  return { runKey, status, summary, error: errorMessage2 };
+}
 async function rollbackLearningPromptVersion(versionId) {
   const { data, error } = await supabase.rpc("rollback_ai_learning_prompt_version", {
     p_target_version_id: versionId
@@ -57762,7 +57882,21 @@ async function getLearningLoopState() {
     events: (events.data ?? []).slice(0, 10)
   };
 }
-var import_node_crypto2, MIN_TRAINING_SAMPLES, MIN_VALIDATION_SAMPLES, MAX_EVALUATIONS_PER_CLASSIFY, MAX_BACKTEST_SAMPLES, AUTO_PROMOTION_CONFIDENCE_THRESHOLD, ACTIVE_PROMPT_CACHE_MS, OUTCOMES, EVALUATION_CATEGORIES, activePromptCache, activePromptFailureCache;
+function validateProposalPolicy(candidateInput, baselineInput) {
+  const baseline = parseLearningPolicy(baselineInput);
+  const candidate = parseLearningPolicy(candidateInput);
+  if (!isPolicyNoWeaker(candidate, baseline)) {
+    return { candidate, valid: false, error: "Candidate may not weaken an active guardrail." };
+  }
+  if (!isPolicyStrictlyTighter(candidate, baseline)) {
+    return { candidate, valid: false, error: "Candidate must add a stricter rule." };
+  }
+  return { candidate, valid: true };
+}
+function formatPolicyBacktest(metrics) {
+  return `${metrics.selected}/${metrics.totalSettled} selections; hit ${metrics.hitRate == null ? "n/a" : `${(metrics.hitRate * 100).toFixed(1)}%`}; ROI ${metrics.roiPerBet == null ? "n/a" : `${(metrics.roiPerBet * 100).toFixed(1)}%`}`;
+}
+var import_node_crypto2, MIN_TRAINING_SAMPLES, MIN_VALIDATION_SAMPLES, MAX_EVALUATIONS_PER_CLASSIFY, MAX_BACKTEST_SAMPLES, AUTO_PROMOTION_CONFIDENCE_THRESHOLD, MAX_AUTO_CLASSIFICATION_BATCHES, ACTIVE_PROMPT_CACHE_MS, OUTCOMES, EVALUATION_CATEGORIES, activePromptCache, activePromptFailureCache;
 var init_prompt_learning = __esm({
   "src/services/prompt-learning.ts"() {
     "use strict";
@@ -57777,6 +57911,7 @@ var init_prompt_learning = __esm({
     MAX_EVALUATIONS_PER_CLASSIFY = 10;
     MAX_BACKTEST_SAMPLES = 500;
     AUTO_PROMOTION_CONFIDENCE_THRESHOLD = 0.9;
+    MAX_AUTO_CLASSIFICATION_BATCHES = 3;
     ACTIVE_PROMPT_CACHE_MS = 6e4;
     OUTCOMES = ["WIN", "LOSS", "HALF_WIN", "HALF_LOSS", "PUSH"];
     EVALUATION_CATEGORIES = [
@@ -88649,6 +88784,18 @@ async function handleCron(req, res) {
       res.json({ message: "Settlement prediksi & tiket selesai", ...result2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     }).catch((err) => {
       logger.error({ err }, "Cron-triggered settlement gagal");
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    });
+    return;
+  }
+  if (action === "learning") {
+    (async () => {
+      const { runAutonomousLearningCycle: runAutonomousLearningCycle2 } = await Promise.resolve().then(() => (init_prompt_learning(), prompt_learning_exports));
+      return runAutonomousLearningCycle2();
+    })().then((result2) => {
+      res.json({ message: "Siklus pembelajaran selesai", ...result2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+    }).catch((err) => {
+      logger.error({ err }, "Cron-triggered learning cycle gagal");
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     });
     return;
