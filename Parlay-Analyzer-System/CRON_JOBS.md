@@ -31,6 +31,7 @@ eksekusi di cron-job.org adalah tempat pertama memeriksa kegagalan.
 | 6 | outcomes | tiap jam, ±5 mnt setelah results | `action=outcomes` (batch: 1000 baris terlama, fixtures satu query, update berkelompok — perbaiki starvation & timeout 17 Nov 2026) | `outcome` terisi pada `prediction_selections` |
 | 7 | notify-parlay (Telegram) | 1–2× sehari, setelah analyze pagi | `action=notify-parlay` | pesan tiket masuk ke Telegram; respons `sent: true`; tiket terkirim otomatis tercatat sebagai snapshot |
 | 8 | **settle** (baru 23 Nov 2026) | tiap jam, setelah results & outcomes | `action=settle` | prediksi ter-settle; hasil per leg parlay tercatat terisi; status tiket `won`/`lost` mengikuti |
+| 9 | **learning** (baru 24 Nov 2026) | 1× sehari, setelah settle malam | `action=learning` | respons `status: completed/skipped`; baris baru terklasifikasi di `prediction_learning_evaluations`; proposal kebijakan ter-backtest (promosi hanya bila gerbang ≥100 latih + ≥100 holdout lolos) |
 
 Job #7 butuh env di Vercel: `TELEGRAM_BOT_TOKEN` (dari BotFather) dan
 `TELEGRAM_CHAT_ID`. Tanpa keduanya respons menjawab `sent: false`

@@ -288,12 +288,12 @@ lima titik di mana kesalahan kecil meracuni data historis.
 
 | # | Risiko/utang | Dampak | Mitigasi terjadwal |
 |---|---|---|---|
-| R1 | Statistik Bundesliga belum lengkap (Bayern/Cologne) | Laga ditolak teknis | Lengkapi ingest 18/18 tim; panel kesehatan statistik sudah menandai |
-| R2 | `odds_close` belum terisi (jendela closing sempit) | CLV belum bisa dihitung penuh | Audit job closing vs jadwal kick-off; perluas jendela tangkap |
+| R1 | Statistik Bundesliga belum lengkap (Bayern/Cologne) | Laga ditolak teknis | **Selesai 23 Nov 2026 (PR #66)**: derivaasi deterministik 18/18; baris FootyStats asli tetap menang lewat merge ingest |
+| R2 | `odds_close` belum terisi (jendela closing sempit) | CLV belum bisa dihitung penuh | **Selesai 23 Nov 2026 (PR #66)**: backfill ≤48 jam pra-kick-off; terverifikasi 938 terisi per 24 Nov |
 | R3 | Satu fungsi Vercel 60 detik | Job besar harus dipecah | Anggaran waktu per aksi + antrean berbasis prioritas kick-off (sudah pola baku) |
 | R4 | Tabel yatim `teams`/`team_aliases` | Kebingungan skema | Satu migrasi pembersihan khusus setelah dipastikan tak ada pembaca |
 | R5 | Scheduler internal masih ada (opt-in) | Dua jalur pemicu bisa aktif ganda | Biarkan nonaktif; dokumentasikan cron-job.org sebagai satu-satunya pemicu |
-| R6 | Sampel live settled belum mencapai gerbang Fase 3 (300) | Klaim kualitas belum boleh dinaikkan | Ritme analyze/settle berjalan; ledger-report memantau jumlah |
+| R6 | Sampel live settled belum mencapai gerbang Fase 3 (300) | Klaim kualitas belum boleh dinaikkan | **Gerbang data terlampaui 24 Nov 2026**: 999 outcome + 938 harga penutup terisi. Yang tersisa adalah pekerjaan kalibrasi Fase C-nya, bukan datanya |
 
 ## 10. Peta jalan
 
@@ -338,6 +338,18 @@ yang dicatat setelah kick-off leg-nya (`lateRecordedTickets`,
 ditampilkan terbuka, tidak dihapus dari basis data). Bukti live
 hanya sah dari tiket yang dicatat sebelum pertandingan dimulai —
 konsekuensi langsung P7.
+
+Kemajuan 24 Nov 2026: ritme harian hidup — tiket bersih tercatat
+otomatis (23 Nov 18:00 & 23:00, 24 Nov 01:33; semua leg kick-off
+setelah waktu pencatatan), loader komposisi disaring di query
+(PR #69, `services/upcoming-selections.ts`), catatan kegagalan
+komposisi kini menyebut angka kolam (`diagnostics`). Ledger
+melompat: 999 outcome dan 938 `odds_close` terisi — gerbang data
+Fase 3 (300 settled) terlampaui. Yang belum terbukti: leg tiket
+pertama yang ter-settle (laga 24–25 Nov belum selesai; skor laga
+23 Nov malam juga belum masuk tabel fixtures — rantai
+results → settle diawasi). Fase B tuntas begitu laporan live
+berisi tiket settled nyata pertama.
 
 **Fase C — Kalibrasi.** Dengan bukti Fase B: sesuaikan bobot blend
 (≤0,30), ambang gerbang varian, dan kebijakan pembelajaran — selalu
