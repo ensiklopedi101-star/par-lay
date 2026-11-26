@@ -191,6 +191,8 @@ export default function LearningLoopControls() {
                   onClick={() => runAction("/learning/autonomous-cycle", "Siklus belajar penuh", undefined, (data) => {
                     const result = (data ?? {}) as {
                       status?: string;
+                      reason?: string;
+                      runKey?: string;
                       summary?: {
                         reason?: string;
                         repair?: { reverified?: number; nowEligible?: number; error?: string };
@@ -198,9 +200,19 @@ export default function LearningLoopControls() {
                         auditedClassifiedCount?: number;
                       };
                     };
+                    /*
+                     * A skipped claim returns { runKey, status, reason } with
+                     * NO summary — the cycle never ran. Never render repair /
+                     * classification zeros for it: that would fabricate a
+                     * result (seen live 26 Nov 2026, when a same-day press
+                     * after the cron run showed fake "Repair: 0" numbers).
+                     */
+                    if (result.status === "skipped" && !result.summary) {
+                      return `Siklus untuk ${result.runKey ?? "hari ini"} sudah ter-klaim (${result.reason ?? "already_claimed"}) — siklus TIDAK berjalan pada tekanan ini, jadi belum ada repair/klasifikasi baru. Tekan lagi setelah pergantian hari Asia/Makassar (00:00 WITA), atau tunggu run cron berikutnya.`;
+                    }
                     const summary = result.summary ?? {};
                     if (result.status === "skipped") {
-                      return `Siklus hari ini sudah berjalan (dilewati: ${summary.reason ?? "already_claimed"}). Repair: ${summary.repair?.error ? `gagal — ${summary.repair.error}` : `${summary.repair?.reverified ?? 0} diverifikasi ulang, ${summary.repair?.nowEligible ?? 0} kini eligible`}. Terklasifikasi siklus ini: ${summary.classification?.classified ?? 0}.`;
+                      return `Siklus selesai tanpa pekerjaan baru (${summary.reason ?? "tidak ada data baru"}). Repair: ${summary.repair?.error ? `gagal — ${summary.repair.error}` : `${summary.repair?.reverified ?? 0} diverifikasi ulang, ${summary.repair?.nowEligible ?? 0} kini eligible`}. Terklasifikasi siklus ini: ${summary.classification?.classified ?? 0}.`;
                     }
                     return `Siklus ${result.status ?? "selesai"}: repair ${summary.repair?.reverified ?? 0} diverifikasi ulang (${summary.repair?.nowEligible ?? 0} eligible), klasifikasi baru ${summary.classification?.classified ?? 0}, total eligible terklasifikasi ${summary.auditedClassifiedCount ?? "—"}${summary.reason ? ` — ${summary.reason}` : ""}.`;
                   })}

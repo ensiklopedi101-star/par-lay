@@ -356,6 +356,22 @@ berisi tiket settled nyata pertama.
 lewat gerbang statistik (≥100 sampel latih + holdout), selalu lewat
 PR dengan backtest pendamping.
 
+Kemajuan 27 Nov 2026 (tuas blend, dikerjakan per-tuas mengikuti
+hakimnya): `evaluateBlendHoldout` kini menjadi bagian permanen
+laporan ledger (`GET /learning/ledger` → `blendHoldout`, gerbang
+`blend_holdout_fasec`, kartu "Fase C" di panel transparansi) — fit
+w* hanya di data latih kronologis, dinilai di holdout melawan pasar
+murni dan `p_final` incumbent, adopsi hanya bila menang ≥0,002
+log-loss dari incumbent dan tidak kalah dari pasar. Pengukuran
+perdana pada 521 sampel decisive v2 (358 latih / 163 holdout):
+fit latih memilih **w\* = 0,00** (pasar murni; log-loss 0,4763 vs
+model murni 0,4909); di holdout kandidat w kecil sedikit lebih baik
+(0,6450 @w=0,30 vs pasar 0,6480, incumbent 0,6491) — selisih di
+dalam noise. Vonis: **bobot produksi (0,30 × reliability) tidak
+diubah**; model Poisson belum terbukti menambah informasi di atas
+pasar. Tuas berikutnya — ambang gerbang varian — menunggu bukti
+tiket (leg settled perdana: 38 W / 24 L / 8 Push per 27 Nov).
+
 Setiap fase tidak mengubah prinsip P1–P8. Bila suatu kebutuhan baru
 bertabrakan dengan prinsip, prinsipnya yang didiskusikan ulang secara
 eksplisit di dokumen ini — bukan dilanggar diam-diam di kode.
