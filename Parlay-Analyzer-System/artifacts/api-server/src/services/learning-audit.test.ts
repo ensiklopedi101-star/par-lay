@@ -57,13 +57,29 @@ test("excludes stale odds and unverified settlement scores", () => {
   const snapshot = input.inputSnapshot as {
     input: { odds: { selectedMarketCapturedAt: string } };
   };
-  snapshot.input.odds.selectedMarketCapturedAt = "2026-10-19T20:00:00.000Z";
+  snapshot.input.odds.selectedMarketCapturedAt = "2026-10-19T10:00:00.000Z";
   input.settlementSource = "fixture_cache";
   input.settlementVerified = false;
 
   const result = assessLearningAudit(input);
   assert.ok(result.reasons.includes("odds_snapshot_stale_at_analysis"));
   assert.ok(result.reasons.includes("settlement_result_not_provider_verified"));
+});
+
+test("accepts odds captured within one analyze cadence of the analysis", () => {
+  const input = completeAudit();
+  const snapshot = input.inputSnapshot as {
+    input: { odds: { selectedMarketCapturedAt: string } };
+  };
+  /* 4.5h gap — routine under the 6h analyze cadence; must stay eligible. */
+  snapshot.input.odds.selectedMarketCapturedAt = "2026-10-19T21:30:00.000Z";
+  assert.deepEqual(assessLearningAudit(input), { eligible: true, reasons: [] });
+});
+
+test("accepts provider verification confirmed after settlement (repair path)", () => {
+  const input = completeAudit();
+  input.settlementVerifiedAt = "2026-11-25T03:00:00.000Z";
+  assert.deepEqual(assessLearningAudit(input), { eligible: true, reasons: [] });
 });
 
 test("excludes missing team-stat quality and freshness records", () => {

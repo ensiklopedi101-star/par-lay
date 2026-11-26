@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { logger } from "../lib/logger";
 import { supabase } from "../lib/supabase-client";
-import { classifyOddsMarket } from "./odds-fetcher";
+import { classifyOddsMarket, refreshFixtureResultsForSettlement } from "./odds-fetcher";
 import { assessLearningAudit } from "./learning-audit.js";
 import {
   BASELINE_LEARNING_POLICY,
@@ -27,6 +27,19 @@ import {
  */
 const MIN_TRAINING_SAMPLES = 100;
 const MIN_VALIDATION_SAMPLES = 100;
+/*
+ * Tiered gates (owner decision, 26 Nov 2026). The 100+100 gate above stays
+ * the PROMOTION gate: crossing it rewrites the live prompt, so it must stay
+ * hard to reach. But using the same threshold merely to GENERATE and
+ * BACKTEST a proposal made the whole loop invisible and untestable for
+ * months (eligible pool was 2 of 106 on 26 Nov 2026, so zero proposals had
+ * ever existed). Proposals may now be drafted and backtested from
+ * 30 training + 20 holdout audited samples; the backtest still reports
+ * `insufficient_data` / not eligible below 100 holdout, and autonomous
+ * promotion still requires the full 100+100 pool plus a passing backtest.
+ */
+const MIN_PROPOSAL_TRAINING_SAMPLES = 30;
+const MIN_PROPOSAL_VALIDATION_SAMPLES = 20;
 const MAX_EVALUATIONS_PER_CLASSIFY = 10;
 const MAX_BACKTEST_SAMPLES = 500;
 const AUTO_PROMOTION_CONFIDENCE_THRESHOLD = 0.9;
@@ -616,9 +629,9 @@ export async function generateLearningPromptProposal(): Promise<Record<string, u
   if (!active.id) throw new Error("No active learning prompt version is available");
   const all = await getClassifiedEvaluations(1000);
   const split = splitChronologicalSamples(all);
-  if (split.training.length < MIN_TRAINING_SAMPLES || split.validation.length < MIN_VALIDATION_SAMPLES || !split.validationStart) {
+  if (split.training.length < MIN_PROPOSAL_TRAINING_SAMPLES || split.validation.length < MIN_PROPOSAL_VALIDATION_SAMPLES || !split.validationStart) {
     throw new Error(
-      `Perlu minimal ${MIN_TRAINING_SAMPLES} data training dan ${MIN_VALIDATION_SAMPLES} data holdout yang sudah diklasifikasi; tersedia ${split.training.length} dan ${split.validation.length}.`,
+      `Perlu minimal ${MIN_PROPOSAL_TRAINING_SAMPLES} data training dan ${MIN_PROPOSAL_VALIDATION_SAMPLES} data holdout yang sudah diklasifikasi untuk menyusun proposal; tersedia ${split.training.length} dan ${split.validation.length}.`,
     );
   }
 
@@ -701,7 +714,7 @@ ${JSON.stringify({
   if (!isPolicyStrictlyTighter(boundedCandidate, baselinePolicy)) {
     throw new Error("Belum ada perubahan kebijakan yang cukup didukung untuk dibuat menjadi kandidat.");
   }
-  if (split.validation.length < MIN_VALIDATION_SAMPLES) {
+  if (split.validation.length < MIN_PROPOSAL_VALIDATION_SAMPLES) {
     throw new Error("Data holdout terlalu sedikit untuk backtest.");
   }
 
@@ -726,6 +739,11 @@ ${JSON.stringify({
     categoryCounts,
     marketMetrics,
     holdoutNotSharedWithModel: true,
+    /* Tiered gates: a proposal drafted below the 100+100 promotion pool is
+     * evidence for review/backtest only — never auto-promotable. */
+    sampleTier: split.training.length >= MIN_TRAINING_SAMPLES && split.validation.length >= MIN_VALIDATION_SAMPLES
+      ? "promotion_grade"
+      : "proposal_grade_below_promotion_pool",
     sourceAudit: {
       trainingSamplesAudited: training.length,
       validationSamplesAudited: split.validation.length,
@@ -879,6 +897,108 @@ function makassarDailyRunKey(): string {
   return `daily:${values.year}-${values.month}-${values.day}`;
 }
 
+/**
+ * Repair path for evaluations excluded ONLY because their settlement was
+ * never provider-verified (owner-approved, 26 Nov 2026).
+ *
+ * Root cause it repairs: cron settlement historically ran with
+ * refreshResults:false, so every cron-settled evaluation was recorded as
+ * manual_score_entry/unverified and the audit gate excluded 100% of new
+ * samples (104 of 106 evaluations excluded on 26 Nov 2026). The recorded
+ * scores themselves usually came from the provider results feed — only
+ * the provenance flag was wrong.
+ *
+ * This function re-confirms each affected fixture against Odds-API
+ * historical. Verification is restored ONLY when the provider returns a
+ * final event whose score matches the recorded score exactly. Outcomes,
+ * scores, and classifications are never modified; the audit is simply
+ * recomputed with the restored provenance. Rows failing any other audit
+ * gate stay excluded with their recomputed reasons.
+ */
+export async function repairExcludedSettlementVerifications(limit = 200): Promise<{
+  scanned: number;
+  reverified: number;
+  nowEligible: number;
+  stillExcluded: number;
+}> {
+  const { data, error } = await supabase
+    .from("prediction_learning_evaluations")
+    .select("prediction_id, fixture_id, analysis_at, settled_at, home_score, away_score, input_snapshot, audit_reasons")
+    .eq("audit_status", "excluded")
+    .contains("audit_reasons", ["settlement_result_not_provider_verified"])
+    .order("settled_at", { ascending: false })
+    .limit(Math.max(1, Math.min(500, Math.floor(limit))));
+  if (error) throw new Error(`Failed to load evaluations for verification repair: ${error.message}`);
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  if (rows.length === 0) return { scanned: 0, reverified: 0, nowEligible: 0, stillExcluded: 0 };
+
+  const fixtureIds = [...new Set(rows.map((row) => Number(row.fixture_id)).filter((id) => Number.isInteger(id)))];
+  const refresh = await refreshFixtureResultsForSettlement(fixtureIds);
+  const providerConfirmed = new Set(refresh.refreshedFixtureIds);
+
+  const { data: fixtures, error: fixtureError } = await supabase
+    .from("fixtures")
+    .select("fixture_id, home_goals, away_goals")
+    .in("fixture_id", fixtureIds);
+  if (fixtureError) throw new Error(`Failed to read repaired fixture scores: ${fixtureError.message}`);
+  const fixtureScores = new Map(
+    ((fixtures ?? []) as Array<Record<string, unknown>>).map((fixture) => [
+      Number(fixture.fixture_id),
+      { home: finiteNumber(fixture.home_goals), away: finiteNumber(fixture.away_goals) },
+    ]),
+  );
+
+  let reverified = 0;
+  let nowEligible = 0;
+  for (const row of rows) {
+    const fixtureId = Number(row.fixture_id);
+    const scores = fixtureScores.get(fixtureId);
+    /* Provider must have re-confirmed THIS fixture on this run, and the
+     * provider score must equal the score the outcome was computed from.
+     * A mismatch means the recorded outcome is itself suspect — leave the
+     * row excluded and untouched rather than laundering it. */
+    if (!providerConfirmed.has(fixtureId) || !scores || scores.home == null || scores.away == null) continue;
+    if (scores.home !== finiteNumber(row.home_score) || scores.away !== finiteNumber(row.away_score)) continue;
+
+    const verifiedAt = new Date().toISOString();
+    const audit = assessLearningAudit({
+      inputSnapshot: row.input_snapshot,
+      analysisAt: typeof row.analysis_at === "string" ? row.analysis_at : null,
+      settledAt: typeof row.settled_at === "string" ? row.settled_at : null,
+      settlementSource: "odds_api_historical",
+      settlementVerified: true,
+      settlementVerifiedAt: verifiedAt,
+    });
+    const { error: updateError } = await supabase
+      .from("prediction_learning_evaluations")
+      .update({
+        settlement_source: "odds_api_historical",
+        settlement_verified: true,
+        settlement_verified_at: verifiedAt,
+        audit_status: audit.eligible ? "eligible" : "excluded",
+        audit_reasons: audit.reasons,
+        updated_at: verifiedAt,
+      })
+      .eq("prediction_id", String(row.prediction_id))
+      .eq("audit_status", "excluded");
+    if (updateError) {
+      logger.error({ err: updateError, predictionId: row.prediction_id }, "[LEARNING-REPAIR] Gagal memulihkan verifikasi evaluasi");
+      continue;
+    }
+    reverified++;
+    if (audit.eligible) nowEligible++;
+  }
+
+  const result = {
+    scanned: rows.length,
+    reverified,
+    nowEligible,
+    stillExcluded: rows.length - nowEligible,
+  };
+  logger.info(result, "[LEARNING-REPAIR] Perbaikan verifikasi settlement selesai");
+  return result;
+}
+
 export async function runAutonomousLearningCycle(): Promise<Record<string, unknown>> {
   const runKey = makassarDailyRunKey();
   const { data: claimData, error: claimError } = await supabase.rpc(
@@ -901,6 +1021,16 @@ export async function runAutonomousLearningCycle(): Promise<Record<string, unkno
 
   try {
     summary.backfill = await backfillSettledPredictionEvaluations();
+    /* Repair before classification so re-verified rows can be classified
+     * and counted in this same cycle. */
+    try {
+      summary.repair = await repairExcludedSettlementVerifications();
+    } catch (repairError) {
+      summary.repair = {
+        error: repairError instanceof Error ? repairError.message : String(repairError),
+      };
+      logger.warn({ err: repairError }, "[LEARNING-AUTO] Perbaikan verifikasi gagal — siklus tetap lanjut");
+    }
 
     let batches = 0;
     let requested = 0;
@@ -927,7 +1057,7 @@ export async function runAutonomousLearningCycle(): Promise<Record<string, unkno
       if (error) throw new Error(`Failed to count audited training data: ${error.message}`);
       summary.auditedClassifiedCount = count ?? 0;
 
-      if ((count ?? 0) < MIN_TRAINING_SAMPLES + MIN_VALIDATION_SAMPLES) {
+      if ((count ?? 0) < MIN_PROPOSAL_TRAINING_SAMPLES + MIN_PROPOSAL_VALIDATION_SAMPLES) {
         summary.reason = "insufficient_audited_history";
       } else {
         let proposal: Record<string, unknown> | null = null;
@@ -952,7 +1082,17 @@ export async function runAutonomousLearningCycle(): Promise<Record<string, unkno
           };
           const backtest = await backtestLearningPromptProposal(proposalId);
           summary.backtest = backtest;
-          if (backtest.eligible === true) {
+          /*
+           * Tiered gates: a proposal may be drafted/backtested from the
+           * smaller proposal pool, but AUTONOMOUS PROMOTION still requires
+           * the full promotion pool (100+100) plus a passing backtest.
+           * Below that, the proposal stays a draft for admin review.
+           */
+          const promotionPoolReady = (count ?? 0) >= MIN_TRAINING_SAMPLES + MIN_VALIDATION_SAMPLES;
+          summary.promotionPoolReady = promotionPoolReady;
+          if (!promotionPoolReady) {
+            summary.reason = "proposal_drafted_below_promotion_pool";
+          } else if (backtest.eligible === true) {
             summary.activation = await promoteLearningPromptProposal(proposalId);
             status = "completed";
           } else {

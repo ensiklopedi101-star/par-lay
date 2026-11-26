@@ -277,7 +277,20 @@ async function handleCron(req: any, res: any) {
         return { settled: 0, lessons: 0, skipped: 0, fixtures: 0 };
       }
       const { runSettlement } = await import("../services/settlement");
-      const result = await runSettlement({ fixtureIds, refreshResults: false });
+      /*
+       * refreshResults TIDAK lagi dimatikan (perbaikan 26 Nov 2026):
+       * dengan refreshResults:false setiap settlement cron tercatat
+       * sebagai manual_score_entry / tidak terverifikasi provider, dan
+       * gerbang audit pembelajaran (learning-audit.ts) meng-exclude
+       * 100% evaluasi baru — sistem tidak pernah belajar dari hasil
+       * yang ia settle sendiri. Refresh di sini berkelompok per liga
+       * (satu panggilan historis per liga untuk fixture yang sudah
+       * final ini), dan fixtureIds sudah dibatasi ≤200 laga 5 hari
+       * terakhir, jadi biaya kuotanya terukur. Fixture yang tidak
+       * dikonfirmasi provider pada putaran ini tetap jujur tercatat
+       * fixture_cache dan excluded dari pembelajaran.
+       */
+      const result = await runSettlement({ fixtureIds, refreshResults: true });
       return { ...result, fixtures: fixtureIds.length };
     })()
       .then((result) => {
